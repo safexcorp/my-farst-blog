@@ -34,7 +34,7 @@ class Notifications(models.Model):
 
 class Customer(models.Model):
     name_of_company = models.CharField(max_length=255, verbose_name='Название компании', default='Без названия')
-    iin = models.CharField(max_length=12, blank=True, null=True, verbose_name='ИИН')
+    iin = models.CharField(max_length=12, blank=True, null=True, verbose_name='ИНН')
     revenue_for_last_year = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, verbose_name='Выручка за последний год', help_text='Миллиард рублей')
     length_of_electrical_network_km = models.DecimalField(max_digits=8, decimal_places=2, blank=True, null=True, verbose_name='Длина сетей, км')
     quantity_of_technical_transformer_pcs = models.PositiveIntegerField(blank=True, null=True, verbose_name='Количество ТП, шт')
@@ -64,23 +64,24 @@ class Decision_maker(models.Model):
         TECHNICAL_SPECIALIST = 2, 'технический специалист'
         OWNER = 3, 'собственник'
 
-    customer = models.OneToOneField(Customer, on_delete=models.CASCADE, related_name='лпр', null=False,
-    blank=False, verbose_name='Заказчик')
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE,  blank=True, null=True,related_name='decision_makers', verbose_name='Заказчик')
     full_name = models.CharField(max_length=255, verbose_name='ФИО')
     city_of_location = models.CharField(max_length=100, blank=True, null=True,verbose_name='Город местонахождения')
     function = models.IntegerField(choices=TypeOfFunction.choices, default=TypeOfFunction.DIRECTOR, blank=True, null=True, verbose_name='Роль')
     phone_number = models.CharField(max_length=20, blank=True, null=True, verbose_name='Телефон')
+    extension = models.CharField(max_length=10, blank=True, null=True, verbose_name='Добавочный номер')
     email = models.EmailField(max_length=54, blank=True, null=True, verbose_name='Почта')
     telegram = models.CharField(max_length=50, blank=True, null=True, verbose_name='Телеграм')
     description_and_impression = models.TextField(blank=True, null=True, verbose_name='Описание и впечатления')
 
     def __str__(self):
-        return f"{self.full_name} ({self.customer})"
+        ext = f" доб.{self.extension}" if self.extension else ""
+        return f"{self.full_name} ({self.customer}) {self.phone_number}{ext}"
 
     class Meta:
         verbose_name = 'ЛПР'
         verbose_name_plural = 'ЛПР'
-        ordering = ['full_name']
+        ordering = ['full_name', 'customer']
 
 
 class Product(models.Model):
@@ -278,7 +279,7 @@ class MeetingFile(models.Model):
         ordering = ['-uploaded_at']
 
 
-# Заявки техподдержки
+# Обращения техподдержки
 class SupportTicket(models.Model):
     STATUS_NEW = 'new'
     STATUS_IN_PROGRESS = 'in_progress'
@@ -334,17 +335,17 @@ class SupportTicket(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"Заявка #{self.id} - {self.problem}"
+        return f"Обращение #{self.id} - {self.problem}"
 
     class Meta:
-        verbose_name = 'Заявка'
-        verbose_name_plural = 'Заявки'
+        verbose_name = 'Обращение'
+        verbose_name_plural = 'Обращения'
         ordering = ['-created_date']
 
 
 # Комментарии к заявкам
 class TicketComment(models.Model):
-    ticket = models.ForeignKey(SupportTicket, on_delete=models.CASCADE, related_name='comments', verbose_name='Заявка')
+    ticket = models.ForeignKey(SupportTicket, on_delete=models.CASCADE, related_name='comments', verbose_name='Обращение')
     author = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='Автор')
     text = models.TextField(verbose_name='Комментарий')
     created_date = models.DateTimeField(default=timezone.now, verbose_name='Дата создания')
@@ -355,44 +356,7 @@ class TicketComment(models.Model):
         return f"Комментарий к #{self.ticket.id} от {self.author.username}"
 
     class Meta:
-        verbose_name = 'Комментарий заявки'
-        verbose_name_plural = 'Комментарии заявок'
+        verbose_name = 'Комментарий обращения'
+        verbose_name_plural = 'Комментарии обращений'
         ordering = ['created_date']
 
-
-# Прикрепленные файлы к заявкам
-class KnowledgeBaseArticle(models.Model):
-    STATUS_DRAFT = 'draft'
-    STATUS_PUBLISHED = 'published'
-    STATUS_ARCHIVED = 'archived'
-
-    STATUS_CHOICES = [
-        (STATUS_DRAFT, 'Черновик'),
-        (STATUS_PUBLISHED, 'Опубликовано'),
-        (STATUS_ARCHIVED, 'Архив'),
-    ]
-
-    CATEGORY_CHOICES = SupportTicket.CATEGORY_CHOICES
-
-    title = models.CharField(max_length=200, verbose_name='Заголовок')
-    category = models.CharField(
-        max_length=20,
-        choices=CATEGORY_CHOICES,
-        verbose_name='Категория',
-        default='question'
-    )
-    content = models.TextField(verbose_name='Содержание')
-    created_date = models.DateTimeField(default=timezone.now, verbose_name='Дата создания')
-    updated_date = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
-    author = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='Автор')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT, verbose_name='Статус')
-    file = models.FileField(upload_to='knowledge_base/%Y/%m/%d/', blank=True, null=True,
-                            verbose_name='Файл', validators=[validate_file_size])
-
-    def __str__(self):
-        return self.title
-
-    class Meta:
-        verbose_name = 'Статья базы знаний'
-        verbose_name_plural = 'База знаний'
-        ordering = ['-updated_date']

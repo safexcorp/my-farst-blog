@@ -15,10 +15,10 @@ from django.forms import ValidationError
 from django.contrib.contenttypes.admin import GenericTabularInline
 from django.contrib.contenttypes.forms import BaseGenericInlineFormSet
 
-from crm.models import Notifications, Customer, Decision_maker, Deal, Product, Deal_stage, Call, Letter, Company_branch, Meeting, MeetingFile, SupportTicket, TicketComment, KnowledgeBaseArticle
-from crm.forms import TicketCommentForm, KnowledgeBaseArticleForm, SupportTicketForm
-from shared_repository.models import SharedRepository
+from crm.models import Notifications, Customer, Decision_maker, Deal, Product, Deal_stage, Call, Letter, Company_branch, Meeting, MeetingFile, SupportTicket, TicketComment
+from crm.forms import TicketCommentForm, SupportTicketForm
 from enterprise_asset_management.models import WorkEquipment, WorkEquipmentFile, TransportVehicle, ProductionArea, ProductionAreaFile, TransportVehicleFile, TransportRepair, TransportRepairFile
+from shared_repository.models import SharedRepository, IndependentDocumentAcceptSignature
 
 from .admin_forms import RescheduleAdminForm
 from .forms import WorkAssignmentForm
@@ -535,6 +535,30 @@ class CallAdmin(admin.ModelAdmin):
     # для экономии запросов в changelist
     list_select_related = ('customer', 'decision_maker')
 
+    def display_customer(self, obj):
+        """Заказчик с твоим форматированием"""
+        if obj.customer and obj.customer.name_of_company:
+            return format_html(
+                '<div style="min-width: 150px; max-width: 600px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
+                obj.customer.name_of_company
+            )
+        return "—"
+
+    def display_decision_maker(self, obj):
+        """ЛПР с твоим форматированием"""
+        if obj.decision_maker and obj.decision_maker.full_name:
+            return format_html(
+                '<div style="min-width: 150px; max-width: 600px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
+                obj.decision_maker.full_name
+            )
+        return "—"
+
+    display_decision_maker.short_description = 'ЛПР'
+    display_decision_maker.admin_order_field = 'decision_maker__full_name'
+
+    display_customer.short_description = 'Заказчик'
+    display_customer.admin_order_field = 'customer__name_of_company'
+
     def _get_attr_chain(self, obj, dotted):
         """Достаёт значение по цепочке 'customer__name_of_company'."""
         cur = obj
@@ -641,6 +665,30 @@ class MeetingAdmin(admin.ModelAdmin):
             'fields': ('status', 'goal_description', 'result_description')
         }),
     )
+
+    def display_customer(self, obj):
+        """Заказчик с твоим форматированием"""
+        if obj.customer and obj.customer.name_of_company:
+            return format_html(
+                '<div style="min-width: 150px; max-width: 600px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
+                obj.customer.name_of_company
+            )
+        return "—"
+
+    display_customer.short_description = 'Заказчик'
+    display_customer.admin_order_field = 'customer__name_of_company'
+
+    def display_decision_maker(self, obj):
+        """ЛПР с твоим форматированием"""
+        if obj.decision_maker and obj.decision_maker.full_name:
+            return format_html(
+                '<div style="min-width: 150px; max-width: 600px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
+                obj.decision_maker.full_name
+            )
+        return "—"
+
+    display_decision_maker.short_description = 'ЛПР'
+    display_decision_maker.admin_order_field = 'decision_maker__full_name'
 
     def save_model(self, request, obj, form, change):
         # Автоматически подставляем ЛПР заказчика, если не выбран
@@ -758,65 +806,6 @@ class SupportTicketAdmin(admin.ModelAdmin):
         return super().get_queryset(request).select_related(
             'customer', 'product', 'created_by', 'assigned_to'
         )
-
-
-# База знаний
-@admin.register(KnowledgeBaseArticle)
-class KnowledgeBaseArticleAdmin(admin.ModelAdmin):
-    form = KnowledgeBaseArticleForm
-    list_display = [
-        'title', 'get_category_display', 'created_date', 'updated_date',
-        'author', 'status_badge', 'custom_actions'
-    ]
-    list_filter = ['status', 'category', 'created_date', 'author']
-    search_fields = ['title', 'content', 'author__username']
-    readonly_fields = ['created_date', 'updated_date', 'author']
-    list_per_page = 25
-
-    fieldsets = (
-        ('Основная информация', {
-            'fields': ('title', 'category', 'status')
-        }),
-        ('Содержание', {
-            'fields': ('content', 'file')
-        }),
-        ('Системная информация', {
-            'fields': ('author', 'created_date', 'updated_date'),
-            'classes': ('collapse',)
-        }),
-    )
-
-    def status_badge(self, obj):
-        status_colors = {
-            'draft': 'gray',
-            'published': 'green',
-            'archived': 'red'
-        }
-        color = status_colors.get(obj.status, 'gray')
-        return format_html(
-            '<span style="background-color: {}; color: white; padding: 2px 6px; border-radius: 3px;">{}</span>',
-            color, obj.get_status_display()
-        )
-
-    status_badge.short_description = 'Статус'
-
-    def custom_actions(self, obj):
-        view_url = reverse('admin:crm_knowledgebasearticle_change', args=[obj.id])
-        return format_html(
-            '<a href="{}">👁️ Просмотр</a>',
-            view_url
-        )
-
-    custom_actions.short_description = 'Действия'
-
-    def save_model(self, request, obj, form, change):
-        if not obj.pk:
-            obj.author = request.user
-        super().save_model(request, obj, form, change)
-
-    def get_queryset(self, request):
-        return super().get_queryset(request).select_related('author')
-
 
 # Комментарии (отдельная регистрация для полного управления)
 @admin.register(TicketComment)
@@ -1673,20 +1662,36 @@ class CheckDocumentWorkflowAdmin(admin.ModelAdmin):
 
 #admin.site.register(SharedRepository, SoftwareProductAdmin)
 
+class IndependentDocumentAcceptSignatureInline(admin.TabularInline):
+    """Inline для множественных подписей ознакомления"""
+    model = IndependentDocumentAcceptSignature
+    extra = 1
+    fields = ['signature_file', 'uploaded_by', 'uploaded_at']
+    readonly_fields = ['uploaded_at']
+
 @admin.register(SharedRepository)
 class SharedRepositoryAdmin(admin.ModelAdmin):
+
     list_display = [
-        'id_display',
-        'document_title_display',
-        'version_display',
-        'author_display',
-        'current_responsible_display',
-        'date_of_creation_display',
-        'date_of_change_display',
-        'uploaded_file_display',
+        #'display_id',
+        #'display_category',
+        'display_document_title',
+        'display_approval',
+        'display_date_approval',
+        #'display_signature_accept',
+        'display_accept',
+        'display_author',
+        'display_date_of_change',
+        #'display_current_responsible',
+        'display_version',
+        'display_uploaded_file',
+        'display_document_purpose',
+        'display_note',
     ]
 
     list_filter = [
+        'category',
+        'approval',
         'author',
         'current_responsible',
         'date_of_creation',
@@ -1695,25 +1700,44 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     search_fields = [
         'document_title',
         'document_purpose',
+        'note',
         'id',
     ]
 
     readonly_fields = [
-        'id',
         'date_of_creation',
         'date_of_change',
-        'uploaded_file_info',
+        #'display_file_info',
+        #'display_accept_info',
+       # 'display_signature_accept_info',
     ]
+
+    inlines = [IndependentDocumentAcceptSignatureInline]
 
     fieldsets = (
         ('Основная информация', {
             'fields': (
-                'id',
+                #'id',
+                'category',
                 'document_title',
                 'version',
                 'uploaded_file',
-                'uploaded_file_info',
+                #'display_file_info',
                 'document_purpose',
+                'note',
+            )
+        }),
+        ('Утверждение', {
+            'fields': (
+                'approval',
+                'signature_approval',
+                'date_approval',
+            )
+        }),
+        ('Ознакомление', {
+            'fields': (
+                'accept',
+                #'signature_accept',
             )
         }),
         ('Пользователи системы', {
@@ -1731,92 +1755,118 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         }),
     )
 
-    # Кастомные отображения для соответствия ТЗ
+    # --- Кастомные отображения для соответствия ТЗ ---
 
-    def id_display(self, obj):
-        """Отображение id как в ТЗ: 'id: хххххххх'"""
-        return format_html(
-            '<strong>id:</strong> {}',
-            obj.id
-        )
+    def display_id(self, obj):
+        return obj.id
 
-    id_display.short_description = 'Уникальный идентификатор'
-    id_display.admin_order_field = 'id'
+    display_id.short_description = 'ID'
+    display_id.admin_order_field = 'id'
 
-    def document_title_display(self, obj):
-        """Отображение названия документа как в ТЗ: 'document title: Название'"""
-        return format_html(
-            '<strong>document title:</strong> {}',
-            obj.document_title
-        )
+    def display_category(self, obj):
+        """Отображение категории """
+        return obj.get_category_display()
 
-    document_title_display.short_description = 'Название документа'
-    document_title_display.admin_order_field = 'document_title'
+    display_category.short_description = 'Категория'
+    display_category.admin_order_field = 'category'
 
-    def version_display(self, obj):
-        """Отображение версии как в ТЗ: 'version: 1*'"""
-        return format_html(
-            '<strong>version:</strong> {}',
-            obj.version
-        )
+    def display_document_title(self, obj):
+        """Отображение названия документа """
+        return obj.document_title
 
-    version_display.short_description = 'Версия'
-    version_display.admin_order_field = 'version'
+    display_document_title.short_description = 'Название документа'
+    display_document_title.admin_order_field = 'document_title'
 
-    def author_display(self, obj):
-        """Отображение автора как в ТЗ: 'author: NeradovskayaIV'"""
-        return format_html(
-            '<strong>author:</strong> {}',
-            obj.author.username
-        )
+    def display_approval(self, obj):
+        """Отображение утвердившего """
+        if obj.approval:
+            return obj.approval.username
+        return "—"
 
-    author_display.short_description = 'Создатель (автор)'
-    author_display.admin_order_field = 'author__username'
+    display_approval.short_description = 'Утвердил'
+    display_approval.admin_order_field = 'approval__username'
 
-    def current_responsible_display(self, obj):
-        """Отображение ответственного как в ТЗ: 'current_responsible: NeradovskayaIV'"""
-        return format_html(
-            '<strong>current_responsible:</strong> {}',
-            obj.current_responsible.username
-        )
+    def display_date_approval(self, obj):
+        """Отображение даты утверждения """
+        if obj.date_approval:
+            return obj.date_approval.strftime('%Y-%m-%d')
+        return "—"
 
-    current_responsible_display.short_description = 'Текущий ответственный'
-    current_responsible_display.admin_order_field = 'current_responsible__username'
+    display_date_approval.short_description = 'Дата утверждения'
+    display_date_approval.admin_order_field = 'date_approval'
 
-    def date_of_creation_display(self, obj):
-        """Отображение даты создания как в ТЗ: 'date_of_creation: 2025-04-03 14:52:13'"""
-        return format_html(
-            '<strong>date_of_creation:</strong> {}',
-            obj.date_of_creation.strftime('%Y-%m-%d %H:%M:%S')
-        )
+    def display_accept(self, obj):
+        if obj.accept:
+            return obj.get_accept_display()
+        return "—"
+    display_accept.short_description = 'Ознакомление'
+    display_accept.admin_order_field = 'accept'
 
-    date_of_creation_display.short_description = 'Дата и время создания'
-    date_of_creation_display.admin_order_field = 'date_of_creation'
 
-    def date_of_change_display(self, obj):
-        """Отображение даты изменения как в ТЗ: 'date_of_change: 2025-04-04 11:53:15'"""
-        return format_html(
-            '<strong>date_of_change:</strong> {}',
-            obj.date_of_change.strftime('%Y-%m-%d %H:%M:%S')
-        )
+    def display_author(self, obj):
+        return obj.author.username
 
-    date_of_change_display.short_description = 'Дата и время последнего изменения'
-    date_of_change_display.admin_order_field = 'date_of_change'
+    display_author.short_description = 'Автор'
+    display_author.admin_order_field = 'author__username'
 
-    def uploaded_file_display(self, obj):
-        """Отображение файла как в ТЗ: 'uploaded_file: имя файла'"""
+    def display_date_of_change(self, obj):
+        """Отображение даты изменения """
+        return obj.date_of_change.strftime('%Y-%m-%d %H:%M:%S')
+
+    display_date_of_change.short_description = 'Дата изменения'
+    display_date_of_change.admin_order_field = 'date_of_change'
+
+    def display_current_responsible(self, obj):
+        """Отображение ответственного """
+        return obj.current_responsible.username
+
+    display_current_responsible.short_description = 'Ответственный'
+    display_current_responsible.admin_order_field = 'current_responsible__username'
+
+    def display_version(self, obj):
+        """Отображение версии """
+        return obj.version
+
+    display_version.short_description = 'Версия'
+    display_version.admin_order_field = 'version'
+
+    def display_uploaded_file(self, obj):
+        """Отображение файла только ссылка"""
         if obj.uploaded_file:
-            filename = obj.uploaded_file.name.split('/')[-1]  # Только имя файла
+            filename = obj.uploaded_file.name.split('/')[-1]
             return format_html(
-                '<strong>uploaded_file:</strong> <a href="{}" target="_blank">{}</a>',
+                '<a href="{}" target="_blank" title="{}">{}</a>',
                 obj.uploaded_file.url,
-                filename
+                filename,
+                filename[:30] + '...' if len(filename) > 30 else filename
             )
-        return format_html(
-            '<strong>uploaded_file:</strong> Нет файла'
-        )
+        return "—"
 
-    uploaded_file_display.short_description = 'Загружаемый файл'
+    display_uploaded_file.short_description = 'Файл'
+
+    def display_document_purpose(self, obj):
+        """Отображение назначения документа"""
+        if obj.document_purpose:
+            # Показываем текст полностью с переносом
+            return format_html(
+                '<div style="min-width: 150px; max-width: 600px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
+                obj.document_purpose
+            )
+        return "—"
+
+    display_document_purpose.short_description = 'Назначение'
+
+    def display_note(self, obj):
+        """Отображение примечания"""
+        if obj.note:
+            return format_html(
+                '<div style="min-width: 150px; max-width: 600px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
+                obj.note
+            )
+        return "—"
+
+    display_note.short_description = 'Примечание'
+    display_note.admin_order_field = 'note'
 
     def uploaded_file_info(self, obj):
         """Информация о файле для детального просмотра"""
@@ -1853,35 +1903,34 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         form = super().get_form(request, obj, **kwargs)
 
         # Устанавливаем help_text для полей как в ТЗ
-        if 'id' in form.base_fields:
-            form.base_fields['id'].help_text = 'Уникальное поле'
+        help_texts = {
+            'id': 'Уникальное поле',
+            'category': 'Значение по умолчанию "ОД"',
+            'document_title': 'Уникальное поле. Все текстовые символы - 100 символов max',
+            'approval': 'Имя пользователя системы (ссылка на User)',
+            'signature_approval': 'Возможность подгрузить только один файл ЭЦП',
+            'date_approval': 'Текст, до 20 символов. Значение по умолчанию "---"',
+            'accept': 'ЭЦП',
+            'author': 'Имя пользователя системы (ссылка на User)',
+            'date_of_creation': 'Формат: YYYY-MM-DD HH:MI:SS',
+            'last_editor': 'Имя пользователя системы (ссылка на User)',
+            'date_of_change': 'Формат: YYYY-MM-DD HH:MI:SS',
+            'current_responsible': 'Имя пользователя системы (ссылка на User)',
+            'version': 'Цифры, 3 символа max. Значение по умолчанию: 1',
+            'uploaded_file': 'Подгружаем только один файл',
+            'document_purpose': 'Все текстовые символы - 5000 символов max',
+            'note': 'Дополнительные заметки и комментарии',
+        }
 
-        if 'document_title' in form.base_fields:
-            form.base_fields['document_title'].help_text = 'Уникальное поле. Все текстовые символы - 100 символов max'
-
-        if 'author' in form.base_fields:
-            form.base_fields['author'].help_text = 'Имя пользователя системы (ссылка на User)'
-
-        if 'date_of_creation' in form.base_fields:
-            form.base_fields['date_of_creation'].help_text = 'Формат: YYYY-MM-DD HH:MI:SS'
-
-        if 'last_editor' in form.base_fields:
-            form.base_fields['last_editor'].help_text = 'Имя пользователя системы (ссылка на User)'
-
-        if 'date_of_change' in form.base_fields:
-            form.base_fields['date_of_change'].help_text = 'Формат: YYYY-MM-DD HH:MI:SS'
-
-        if 'current_responsible' in form.base_fields:
-            form.base_fields['current_responsible'].help_text = 'Имя пользователя системы (ссылка на User)'
-
-        if 'version' in form.base_fields:
-            form.base_fields['version'].help_text = 'Цифры, 3 символа max. Значение по умолчанию: 1'
-
-        if 'uploaded_file' in form.base_fields:
-            form.base_fields[
-                'uploaded_file'].help_text = 'Текст, строго в соответствии с данными в колонке "Визуализация"'
-
-        if 'document_purpose' in form.base_fields:
-            form.base_fields['document_purpose'].help_text = 'Все текстовые символы - 5000 символов max'
+        for field_name, help_text in help_texts.items():
+            if field_name in form.base_fields:
+                form.base_fields[field_name].help_text = help_text
 
         return form
+
+#@admin.register(IndependentDocumentAcceptSignature)
+#class IndependentDocumentAcceptSignatureAdmin(admin.ModelAdmin):
+  #  """Админка для подписей ознакомления"""
+   # list_display = ['document', 'signature_file', 'uploaded_by', 'uploaded_at']
+    #list_filter = ['uploaded_at', 'uploaded_by']
+    #search_fields = ['document__document_title']

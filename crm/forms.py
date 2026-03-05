@@ -1,5 +1,5 @@
 from django import forms
-from .models import TicketComment, KnowledgeBaseArticle, SupportTicket
+from .models import TicketComment, SupportTicket
 
 class TicketCommentForm(forms.ModelForm):
     class Meta:
@@ -13,17 +13,6 @@ class TicketCommentForm(forms.ModelForm):
             }),
         }
 
-class KnowledgeBaseArticleForm(forms.ModelForm):
-    class Meta:
-        model = KnowledgeBaseArticle
-        fields = ['title', 'category', 'content', 'status', 'file']
-        widgets = {
-            'content': forms.Textarea(attrs={
-                'rows': 15,
-                'class': 'vLargeTextField'
-            }),
-            'title': forms.TextInput(attrs={'size': 60}),
-        }
 
 class SupportTicketForm(forms.ModelForm):
     class Meta:
