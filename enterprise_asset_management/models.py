@@ -172,6 +172,7 @@ class TransportVehicle(models.Model):
         on_delete=models.PROTECT,
         related_name="transport_vehicle_author",
         verbose_name="Создатель (автор)",
+        default=1,
     )
 
     date_of_creation = models.DateTimeField(
@@ -184,6 +185,7 @@ class TransportVehicle(models.Model):
         on_delete=models.PROTECT,
         related_name="transport_vehicle_last_editor",
         verbose_name="Последний редактор",
+        default=1,
     )
 
     date_of_change = models.DateTimeField(
@@ -196,6 +198,7 @@ class TransportVehicle(models.Model):
         on_delete=models.PROTECT,
         related_name="transport_vehicle_current_responsible",
         verbose_name="Текущий ответственный",
+        default=1,
     )
 
     version = models.CharField(
