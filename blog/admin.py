@@ -3,6 +3,7 @@ from django.contrib import admin, messages
 from django.shortcuts import redirect, render
 from django.urls import path, reverse
 from django.utils import timezone
+from datetime import timedelta
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 import re
@@ -16,8 +17,7 @@ from django.contrib.contenttypes.forms import BaseGenericInlineFormSet
 
 from crm.models import Notifications, Customer, Decision_maker, Deal, Product, Deal_stage, Call, Letter, Company_branch, Meeting, MeetingFile, SupportTicket, TicketComment
 from crm.forms import TicketCommentForm, SupportTicketForm
-from shared_repository.models import SharedRepository
-from enterprise_asset_management.models import WorkEquipment, WorkEquipmentFile, TransportVehicle, Infrastructure
+from enterprise_asset_management.models import WorkEquipment, WorkEquipmentFile, TransportVehicle, ProductionArea, ProductionAreaFile, TransportVehicleFile, TransportRepair, TransportRepairFile
 from shared_repository.models import SharedRepository, IndependentDocumentAcceptSignature
 
 from .admin_forms import RescheduleAdminForm
@@ -840,10 +840,22 @@ class WorkEquipmentFileInline(admin.TabularInline):
     model = WorkEquipmentFile
     extra = 1
 
+class TransportVehicleFileInline(admin.TabularInline):
+    model = TransportVehicleFile
+    extra = 1
+
+class ProductionAreaFileInline(admin.TabularInline):
+    model = ProductionAreaFile
+    extra = 1
+
+class TransportRepairFileInline(admin.TabularInline):
+    model = TransportRepairFile
+    extra = 1
+
 # Рабочее оборудование
 @admin.register(WorkEquipment)
 class WorkEquipmentAdmin(admin.ModelAdmin):
-    list_display = ("name_type","serial_number_link","measuring_device_display","next_calibration_date_display","calibration_warning","workstation")
+    list_display = ("name_type", "serial_number_link", "measuring_device_display", "next_calibration_date_display", "calibration_warning", "calibration_date_warning", "workstation", "status")
     list_filter = ("measuring_device",)
     search_fields = ("name_type", "serial_number", "workstation")
     readonly_fields = ("date_of_creation", "date_of_change")
@@ -866,37 +878,42 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
     next_calibration_date_display.short_description = "Дата плановой поверки"
     next_calibration_date_display.admin_order_field = "next_calibration_date"
 
-    fieldsets = (
-        (None, {
-            "fields": (
-                "name_type",
-                "serial_number",
-                "measuring_device",
-                "next_calibration_date",
-                "workstation",
-                "replacement_allowed",
+    def get_fieldsets(self, request, obj=None):
+        main_fields = (
+            "name_type",
+            "serial_number",
+            "measuring_device",
+            "next_calibration_date",
+            "calibration_required",
+            "planned_calibration_date",
+            "workstation",
+            "replacement_allowed",
+            "status",
+        )
+        if obj is None:
+            return (
+                (None, {"fields": main_fields}),
+                ("Ответственные", {"fields": ("current_responsible", "note")}),
+                ("Версия", {"fields": ("version",)}),
+                ("Системная информация", {"fields": ("date_of_creation", "date_of_change")}),
             )
-        }),
-        ("Ответственные", {
-            "fields": (
-                "author",
-                "last_editor",
-                "current_responsible",
-                "note",
-            )
-        }),
-        ("Версия", {
-            "fields": (
-                "version",
-            )
-        }),
-        ("Системная информация", {
-            "fields": (
-                "date_of_creation",
-                "date_of_change",
-            )
-        }),
-    )
+        return (
+            (None, {"fields": main_fields}),
+            ("Ответственные", {"fields": ("author", "last_editor", "current_responsible", "note")}),
+            ("Версия", {"fields": ("version",)}),
+            ("Системная информация", {"fields": ("date_of_creation", "date_of_change")}),
+        )
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is None:
+            return self.readonly_fields
+        return ("author", "last_editor") + tuple(self.readonly_fields)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
 
 # Кастомные колонки
     def serial_number_link(self, obj):
@@ -928,18 +945,249 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
 
     calibration_warning.short_description = "Срок поверки истекает"
 
+    def calibration_date_warning(self, obj):
+        if not obj.calibration_required or not obj.planned_calibration_date:
+            return "—"
+        today = timezone.now().date()
+        days_left = (obj.planned_calibration_date - today).days
+        if days_left <= 45:
+            return mark_safe(
+                '<span style="color: #f0ad4e; font-weight: bold;">⚠️</span>'
+            )
+        return "—"
+
+    calibration_date_warning.short_description = "Срок калибровки истекает"
+
 # Транспорт
 @admin.register(TransportVehicle)
 class TransportVehicleAdmin(admin.ModelAdmin):
-    list_display = ("id", "name")
-    search_fields = ("name",)
 
-# Инфраструктура
-@admin.register(Infrastructure)
-class InfrastructureAdmin(admin.ModelAdmin):
-    list_display = ("id", "name")
-    search_fields = ("name",)
+    list_display = (
+        "make_model",
+        "registration_plate",
+        "insurance",
+        "next_insurance_date",
+        "inspection",
+        "next_inspection_date",
+        "repairs_link",
+    )
 
+    search_fields = (
+        "make_model",
+        "registration_plate",
+    )
+
+    readonly_fields = (
+        "date_of_creation",
+        "date_of_change",
+    )
+
+    inlines = [TransportVehicleFileInline]
+
+    fieldsets = (
+        ("Основная информация", {
+            "fields": (
+                "make_model",
+                "registration_plate",
+            )
+        }),
+        ("Страхование и техосмотр", {
+            "fields": (
+                "insurance",
+                "next_insurance_date",
+                "inspection",
+                "next_inspection_date",
+            )
+        }),
+        ("Ответственные", {
+            "fields": (
+                "author",
+                "last_editor",
+                "current_responsible",
+                "note",
+            )
+        }),
+        ("Версия", {
+            "fields": ("version",)
+        }),
+        ("Системная информация", {
+            "fields": (
+                "date_of_creation",
+                "date_of_change",
+            )
+        }),
+    )
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+
+    def repairs_link(self, obj):
+        url = reverse(
+            "admin:enterprise_asset_management_transportrepair_changelist"
+        ) + f"?transport_vehicle__id__exact={obj.pk}"
+
+        return format_html(
+            '<a href="{}">{} ({})</a>',
+            url,
+            "Ремонты",
+            obj.repairs.count()
+        )
+
+    repairs_link.short_description = "Ремонты"
+
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.prefetch_related("repairs")
+
+#ремонтТС
+@admin.register(TransportRepair)
+class TransportRepairAdmin(admin.ModelAdmin):
+
+    list_display = (
+        "transport_vehicle",
+        "repair_date",
+        "author",
+        "date_of_creation",
+    )
+
+    list_filter = (
+        "repair_date",
+        "transport_vehicle",
+    )
+
+    search_fields = (
+        "transport_vehicle__make_model",
+        "transport_vehicle__registration_plate",
+        "description",
+    )
+
+    readonly_fields = (
+        "date_of_creation",
+    )
+
+    inlines = [TransportRepairFileInline]
+
+    fieldsets = (
+        ("Основная информация", {
+            "fields": (
+                "transport_vehicle",
+                "repair_date",
+                "description",
+            )
+        }),
+        ("Системная информация", {
+            "fields": (
+                "author",
+                "date_of_creation",
+            )
+        }),
+    )
+
+    def has_module_permission(self, request):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        super().save_model(request, obj, form, change)
+
+# ПроизводственныеПлощадки
+@admin.register(ProductionArea)
+class ProductionAreaAdmin(admin.ModelAdmin):
+
+    list_display = (
+        "number_name",
+        "object",
+        "location",
+        "working_conditions",
+        "restrictions",
+        "contract_status_display",
+    )
+
+    list_display_links = ("number_name",)
+
+    list_filter = (
+        "object",
+        "location",
+        "working_conditions",
+        "restrictions",
+    )
+
+    search_fields = ("number_name",)
+
+    inlines = [ProductionAreaFileInline]
+
+    fieldsets = (
+        ("Основная информация", {
+            "fields": (
+                "object",
+                "location",
+                "number_name",
+                "area",
+                "purpose",
+                "workstations",
+                "working_conditions",
+                "restrictions",
+                "contract_date",
+                "note",
+            )
+        }),
+        ("Ответственные лица", {
+            "fields": (
+                "current_responsible",
+            )
+        }),
+        ("Системная информация", {
+            "fields": (
+                "author",
+                "last_editor",
+                "date_of_creation",
+                "date_of_change",
+            )
+        }),
+    )
+
+    readonly_fields = (
+        "author",
+        "last_editor",
+        "date_of_creation",
+        "date_of_change",
+        "version",
+    )
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+    def contract_status_display(self, obj):
+        if obj.restrictions == "none" or not obj.contract_date:
+            return "—"
+
+        today = timezone.now().date()
+        warning_date = obj.contract_date - timedelta(days=45)
+
+        # Просрочено
+        if obj.contract_date < today:
+            return format_html(
+                '<span style="color:red; font-weight:bold;">✖</span>'
+            )
+
+        # Меньше 45 дней
+        if today >= warning_date:
+            return format_html(
+                '<span style="color:#f0ad4e; font-weight:bold;">⚠</span>'
+            )
+
+        return "—"
+
+    contract_status_display.short_description = "Срок договора"
 
 class WorkAssignmentInline(admin.TabularInline):
     model = WorkAssignment
