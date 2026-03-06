@@ -127,12 +127,14 @@ class TransportVehicle(models.Model):
     Транспортные средства
     """
 
-    make_model = models.CharField("Марка, модель", max_length=100)
+    make_model = models.CharField("Марка, модель", max_length=100, default="")
 
     registration_plate = models.CharField(
         "Регистрационный знак",
         max_length=20,
         unique=True,
+        blank=True,
+        null=True,
     )
 
     insurance = models.BooleanField(
