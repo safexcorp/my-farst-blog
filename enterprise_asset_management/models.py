@@ -19,7 +19,13 @@ class WorkEquipment(models.Model):
     """
 
     name_type = models.CharField("Наименование, тип", max_length=100)
-    serial_number = models.CharField("Заводской номер (s/n)", max_length=12, blank=True, null=True,unique=True)
+    serial_number = models.CharField(
+        "Заводской / инвентарный номер",
+        max_length=12,
+        blank=True,
+        null=True,
+        unique=True,
+    )
     measuring_device = models.BooleanField("Средство измерений", default=False)
     next_calibration_date = models.DateField("Дата плановой поверки", blank=True, null=True)
     calibration_required = models.BooleanField("Требуется калибровка", default=False)
@@ -45,6 +51,15 @@ class WorkEquipment(models.Model):
     replacement_allowed = models.CharField(
         "Допустимая замена",
         max_length=200,
+        blank=True,
+        null=True,
+    )
+
+    replacement_equipment = models.ForeignKey(
+        "WorkEquipment",
+        verbose_name="Допустимая замена (наименование, тип)",
+        on_delete=models.SET_NULL,
+        related_name="allowed_replacement_for",
         blank=True,
         null=True,
     )
@@ -325,6 +340,18 @@ class TransportRepairFile(models.Model):
 from django.contrib.auth import get_user_model
 User = get_user_model()
 
+# Справочник мест для производственных площадок
+class ProductionAreaLocation(models.Model):
+    name = models.CharField("Место нахождения", max_length=100, unique=True)
+
+    class Meta:
+        verbose_name = "Место нахождения"
+        verbose_name_plural = "Места нахождения"
+        ordering = ("name",)
+
+    def __str__(self):
+        return self.name
+
 #ПроизводственныеПлощадки
 class ProductionArea(models.Model):
 
@@ -368,9 +395,19 @@ class ProductionArea(models.Model):
         default="techno_park",
     )
 
+    location_ref = models.ForeignKey(
+        ProductionAreaLocation,
+        verbose_name="Место нахождения",
+        on_delete=models.SET_NULL,
+        related_name="production_areas",
+        blank=True,
+        null=True,
+    )
+
     number_name = models.CharField(
         "Номер (наименование)",
         max_length=20,
+        unique=True,
     )
 
     area = models.DecimalField(
