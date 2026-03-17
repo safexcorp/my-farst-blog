@@ -52,8 +52,8 @@ class Customer(models.Model):
         return self.name_of_company
 
     class Meta:
-        verbose_name = 'Заказчик'
-        verbose_name_plural = 'Заказчики'
+        verbose_name = 'Контрагент'
+        verbose_name_plural = 'Контрагенты'
         ordering = ['name_of_company']
 
 
@@ -64,7 +64,7 @@ class Decision_maker(models.Model):
         TECHNICAL_SPECIALIST = 2, 'технический специалист'
         OWNER = 3, 'собственник'
 
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE,  blank=True, null=True,related_name='decision_makers', verbose_name='Заказчик')
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE,  blank=True, null=True,related_name='decision_makers', verbose_name='Контрагент')
     full_name = models.CharField(max_length=255, verbose_name='ФИО')
     city_of_location = models.CharField(max_length=100, blank=True, null=True,verbose_name='Город местонахождения')
     function = models.IntegerField(choices=TypeOfFunction.choices, default=TypeOfFunction.DIRECTOR, blank=True, null=True, verbose_name='Роль')
@@ -113,7 +113,7 @@ class Deal(models.Model):
         ('послегарантийная_работа', 'Послегарантийная работа'),
     ]
 
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='сделки', blank=True, null=True, verbose_name='Заказчик')
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='сделки', blank=True, null=True, verbose_name='Контрагент')
     start_date = models.DateField(blank=True, null=True, verbose_name='Дата начала')
     date_of_last_change = models.DateTimeField(auto_now=True, blank=True, null=True, verbose_name='Дата последнего изменения')
     date_of_next_activity = models.DateField(blank=True, null=True, verbose_name='Дата следующей активности')
@@ -155,7 +155,7 @@ class Deal_stage(models.Model):
         ordering = ['start_date_step']
 
 class Call(models.Model):
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, blank=True, null=True, verbose_name='Заказчик')
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, blank=True, null=True, verbose_name='Контрагент')
     decision_maker = models.ForeignKey(Decision_maker, on_delete=models.CASCADE, blank=True, null=True, verbose_name='ЛПР')
     responsible = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Ответственный')
     planned_date = models.DateField(blank=True, null=True, verbose_name='Плановая дата')
@@ -172,24 +172,268 @@ class Call(models.Model):
         ordering = ['-planned_date']
 
 
-class Letter(models.Model):
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, blank=True, null=True, verbose_name='Заказчик')
-    decision_maker = models.ForeignKey(Decision_maker, on_delete=models.CASCADE, blank=True, null=True, verbose_name='ЛПР')
-    responsible = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Ответственный')
-    planned_date = models.DateField(blank=True, null=True, verbose_name='Плановая дата')
-    letter_file = models.FileField(upload_to='letters/', blank=True, null=True, verbose_name='Тело письма')
-    incoming_number = models.CharField(max_length=50, blank=True, null=True, verbose_name='Входящий номер заказчика')
-    incoming_date = models.DateField(blank=True, null=True, verbose_name='Входящая дата заказчика')
-    responsible_person_from_customer = models.CharField(max_length=100, blank=True, null=True, verbose_name='Ответственный от заказчика')
-    deal = models.ForeignKey(Deal, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Сделка')
+RECEIPT_METHOD_CHOICES = [
+    ('registered_mail', 'Эл. почта'),
+    ('courier', 'Курьерская доставка'),
+    ('mail', 'Почта'),
+    ('personal', 'Личная передача'),
+    ('portal', 'Портал Госуслуг'),
+    ('', '---'),
+]
 
-    def __str__(self):
-        return f"Письмо №{self.incoming_number} от {self.customer.name_of_company}"
+SEND_METHOD_CHOICES = [
+    ('email', 'Эл. почта'),
+    ('fax', 'Факс-документ'),
+    ('personal', 'Личная передача'),
+    ('mail', 'Почта'),
+    ('express', 'Курьер-документ'),
+    ('', '---'),
+]
+
+RECEIPT_VERIFICATION_CHOICES = [
+    ("auto_email", "Автоподтверждение в почте"),
+    ("call", "Подтверждено звонком"),
+    ("message", "Подтверждено сообщением"),
+    ("", "—"),
+]
+
+
+class IncomingLetter(models.Model):
+    """Входящее письмо."""
+    registration_number = models.CharField(
+        'Внутренний регистрационный номер',
+        max_length=20,
+        unique=True,
+        blank=True,
+        editable=False,
+    )
+    sender_identification = models.CharField(
+        'Исходящий номер отправителя',
+        max_length=50,
+        unique=True,
+    )
+    sender = models.ForeignKey(
+        Customer,
+        on_delete=models.CASCADE,
+        related_name='incoming_letters',
+        verbose_name='Отправитель (название организации)',
+    )
+    sender_signature = models.ForeignKey(
+        Decision_maker,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='incoming_letters_signed',
+        verbose_name='Подписант (должность, ФИО)',
+    )
+    letter_date = models.DateField('Дата письма')
+    date_of_receipt = models.DateTimeField('Дата получения')
+    urgent = models.BooleanField('Срочно', default=False)
+    receipt_method = models.CharField(
+        'Способ получения',
+        max_length=20,
+        choices=RECEIPT_METHOD_CHOICES,
+        default='registered_mail',
+        blank=True,
+    )
+    subject = models.CharField('Тема', max_length=200)
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='incoming_letter_author',
+        verbose_name='Создатель (автор)',
+        default=1,
+    )
+    date_of_creation = models.DateTimeField('Дата и время создания', default=timezone.now)
+    last_editor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='incoming_letter_last_editor',
+        verbose_name='Последний редактор',
+        default=1,
+    )
+    date_of_change = models.DateTimeField('Дата и время последнего изменения', auto_now=True)
+    current_responsible = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='incoming_letter_responsible',
+        verbose_name='Текущий ответственный',
+        default=1,
+    )
+    version = models.CharField('Версия', max_length=3, default='1', blank=True)
+    document_uploaded_file = models.FileField(
+        'Документ (загружаемый файл)',
+        upload_to='crm/incoming_letters/%Y/%m/',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+    )
+    comment = models.CharField('Комментарий', max_length=1000, blank=True)
 
     class Meta:
-        verbose_name = 'Письмо'
-        verbose_name_plural = 'Письма'
-        ordering = ['-planned_date']
+        verbose_name = 'Входящее письмо'
+        verbose_name_plural = 'Письма — Входящие'
+        ordering = ['-date_of_receipt']
+
+    def save(self, *args, **kwargs):
+        if not self.registration_number:
+            from django.db.models import Max
+            from datetime import date
+            today = date.today()
+            prefix = f"ВХ-{today:%y-%m}-"
+            last = IncomingLetter.objects.filter(
+                registration_number__startswith=prefix
+            ).aggregate(Max('registration_number'))['registration_number__max']
+            if last:
+                try:
+                    num = int(last.split('-')[-1]) + 1
+                except (ValueError, IndexError):
+                    num = 1
+            else:
+                num = 1
+            self.registration_number = f"{prefix}{num:02d}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        sender_number = self.sender_identification or "—"
+        internal_number = self.registration_number or "—"
+        return f"{sender_number} · {internal_number} · {self.sender}"
+
+
+class OutgoingLetter(models.Model):
+    """Исходящее письмо."""
+    registration_number = models.CharField(
+        'Регистрационный номер',
+        max_length=20,
+        unique=True,
+        blank=True,
+        editable=False,
+    )
+    recipient = models.ForeignKey(
+        Customer,
+        on_delete=models.CASCADE,
+        related_name='outgoing_letters',
+        verbose_name='Получатель (название организации)',
+    )
+    person_recipient = models.ForeignKey(
+        Decision_maker,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='outgoing_letters_addressed',
+        verbose_name='Кому адресовано (должность, ФИО)',
+    )
+    letter_date = models.DateField('Дата письма')
+    date_of_send = models.DateTimeField('Дата отправки', null=True, blank=True)
+    urgent = models.BooleanField('Срочно', default=False)
+    subject = models.CharField('Тема', max_length=200)
+    sender_identification = models.CharField(
+        'Идентификация отправителя (на бланке)',
+        max_length=50,
+        blank=True,
+    )
+    reply_to = models.ForeignKey(
+        "IncomingLetter",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replies",
+        verbose_name="Ответ на № (исх. номер отправителя)",
+    )
+    sender_signature = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='outgoing_letter_signed',
+        verbose_name='Подписант (должность, ФИО)',
+        default=1,
+    )
+    executor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='outgoing_letter_executor',
+        verbose_name='Исполнитель',
+        default=1,
+    )
+    send_method = models.CharField(
+        'Способ отправки',
+        max_length=20,
+        choices=SEND_METHOD_CHOICES,
+        default='email',
+        blank=True,
+    )
+    receipt_verification = models.CharField(
+        "Отметка о получении",
+        max_length=20,
+        choices=RECEIPT_VERIFICATION_CHOICES,
+        blank=True,
+        default="",
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='outgoing_letter_author',
+        verbose_name='Создатель (автор)',
+        default=1,
+    )
+    date_of_creation = models.DateTimeField('Дата и время создания', default=timezone.now)
+    last_editor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='outgoing_letter_last_editor',
+        verbose_name='Последний редактор',
+        default=1,
+    )
+    date_of_change = models.DateTimeField('Дата и время последнего изменения', auto_now=True)
+    current_responsible = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='outgoing_letter_responsible',
+        verbose_name='Текущий ответственный',
+        default=1,
+    )
+    version = models.CharField('Версия', max_length=3, default='1', blank=True)
+    document_uploaded_file = models.FileField(
+        'Письмо (загружаемый файл)',
+        upload_to='crm/outgoing_letters/%Y/%m/',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+    )
+    app_uploaded_file = models.FileField(
+        'Приложение (загружаемый файл)',
+        upload_to='crm/outgoing_letters_app/%Y/%m/',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+    )
+    comment = models.CharField('Комментарий', max_length=1000, blank=True)
+
+    class Meta:
+        verbose_name = 'Исходящее письмо'
+        verbose_name_plural = 'Письма — Исходящие'
+        ordering = ['-letter_date', '-date_of_send']
+
+    def save(self, *args, **kwargs):
+        if not self.registration_number:
+            from django.db.models import Max
+            from datetime import date
+            today = date.today()
+            prefix = f"ИСХ-{today:%y-%m}-"
+            last = OutgoingLetter.objects.filter(
+                registration_number__startswith=prefix
+            ).aggregate(Max('registration_number'))['registration_number__max']
+            if last:
+                try:
+                    num = int(last.split('-')[-1]) + 1
+                except (ValueError, IndexError):
+                    num = 1
+            else:
+                num = 1
+            self.registration_number = f"{prefix}{num:02d}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.registration_number or '—'} — {self.recipient}"
 
 
 class Company_branch(models.Model):
@@ -198,7 +442,7 @@ class Company_branch(models.Model):
     length_of_electrical_network_km = models.DecimalField(max_digits=8, decimal_places=2, blank=True, null=True, verbose_name='Длина сетей, км')
     quantity_of_technical_transformer_pcs = models.PositiveIntegerField(blank=True, null=True, verbose_name='Количество ТП, шт')
     address = models.TextField(blank=True, null=True, verbose_name='Адрес')
-    customer = models.ForeignKey('Customer', on_delete=models.CASCADE, related_name='branches', blank=True, null=True, verbose_name='Родительский заказчик')
+    customer = models.ForeignKey('Customer', on_delete=models.CASCADE, related_name='branches', blank=True, null=True, verbose_name='Родительский контрагент')
 
     def __str__(self):
         return self.name_of_company
@@ -216,7 +460,7 @@ class Meeting(models.Model):
         HELD = 'проведена', 'Проведена'
         CANCELED = 'отменена', 'Отменена'
 
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, verbose_name='Заказчик', null=True, blank=True)
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, verbose_name='Контрагент', null=True, blank=True)
     decision_maker = models.ForeignKey(
         Decision_maker, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='ЛПР'
     )
@@ -237,13 +481,13 @@ class Meeting(models.Model):
     result_description = models.TextField(max_length=3500, verbose_name='Описание результата', blank=True, null=True)
 
     def save(self, *args, **kwargs):
-        # Автоподстановка ЛПР по заказчику
+        # Автоподстановка ЛПР по контрагенту
         if self.customer and not self.decision_maker:
             self.decision_maker = getattr(self.customer, 'decision_maker', None)
         super().save(*args, **kwargs)
 
     def __str__(self):
-        customer_name = str(self.customer) if self.customer else "Неизвестный заказчик"
+        customer_name = str(self.customer) if self.customer else "Неизвестный контрагент"
 
         if self.meeting_date and self.meeting_time:
             date_time_str = f"{self.meeting_date:%d.%m.%Y} {self.meeting_time}"
@@ -302,7 +546,7 @@ class SupportTicket(models.Model):
 
     # Основные поля
     created_date = models.DateTimeField(default=timezone.now, verbose_name='Дата поступления')
-    customer = models.ForeignKey('Customer', on_delete=models.CASCADE, verbose_name='Заказчик')
+    customer = models.ForeignKey('Customer', on_delete=models.CASCADE, verbose_name='Контрагент')
     product = models.ForeignKey('Product', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Продукт')
 
 

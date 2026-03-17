@@ -15,9 +15,34 @@ from django.forms import ValidationError
 from django.contrib.contenttypes.admin import GenericTabularInline
 from django.contrib.contenttypes.forms import BaseGenericInlineFormSet
 
-from crm.models import Notifications, Customer, Decision_maker, Deal, Product, Deal_stage, Call, Letter, Company_branch, Meeting, MeetingFile, SupportTicket, TicketComment
+from crm.models import (
+    Notifications,
+    Customer,
+    Decision_maker,
+    Deal,
+    Product,
+    Deal_stage,
+    Call,
+    Company_branch,
+    Meeting,
+    MeetingFile,
+    SupportTicket,
+    TicketComment,
+    IncomingLetter,
+    OutgoingLetter,
+)
 from crm.forms import TicketCommentForm, SupportTicketForm
-from enterprise_asset_management.models import WorkEquipment, WorkEquipmentFile, TransportVehicle, ProductionArea, ProductionAreaFile, TransportVehicleFile, TransportRepair, TransportRepairFile
+from enterprise_asset_management.models import (
+    WorkEquipment,
+    WorkEquipmentFile,
+    TransportVehicle,
+    ProductionArea,
+    ProductionAreaFile,
+    TransportVehicleFile,
+    TransportRepair,
+    TransportRepairFile,
+    ProductionAreaLocation,
+)
 from shared_repository.models import SharedRepository, IndependentDocumentAcceptSignature
 
 from .admin_forms import RescheduleAdminForm
@@ -613,12 +638,300 @@ class CallAdmin(admin.ModelAdmin):
         return queryset.filter(id__in=set(matched_ids)), True
 
 
-@admin.register(Letter)
-class LetterAdmin(admin.ModelAdmin):
-    list_display = ('incoming_number', 'customer', 'planned_date', 'responsible', 'deal')
-    search_fields = ('incoming_number', 'responsible_person_from_customer')
-    list_filter = ('planned_date',)
-    date_hierarchy = 'planned_date'
+@admin.register(IncomingLetter)
+class IncomingLetterAdmin(admin.ModelAdmin):
+    class Form(forms.ModelForm):
+        date_of_receipt_date = forms.DateField(label="Дата получения")
+        date_of_receipt_time = forms.TimeField(label="Время получения", required=False)
+
+        class Meta:
+            model = IncomingLetter
+            fields = "__all__"
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            from django.contrib.admin.widgets import AdminDateWidget, AdminTimeWidget
+            self.fields["date_of_receipt_date"].widget = AdminDateWidget()
+            self.fields["date_of_receipt_time"].widget = AdminTimeWidget()
+            if self.instance and self.instance.pk and self.instance.date_of_receipt:
+                self.fields["date_of_receipt_date"].initial = self.instance.date_of_receipt.date()
+                self.fields["date_of_receipt_time"].initial = self.instance.date_of_receipt.time().replace(second=0, microsecond=0)
+
+        def clean(self):
+            cleaned = super().clean()
+            urgent = cleaned.get("urgent")
+            d = cleaned.get("date_of_receipt_date")
+            t = cleaned.get("date_of_receipt_time")
+
+            if not d:
+                raise forms.ValidationError({"date_of_receipt_date": "Обязательное поле."})
+
+            if urgent and not t:
+                raise forms.ValidationError({"date_of_receipt_time": "Укажите время при метке «Срочно»."})
+
+            from datetime import time, datetime
+            dt = datetime.combine(d, t or time(0, 0))
+            cleaned["date_of_receipt"] = timezone.make_aware(dt, timezone.get_current_timezone())
+            return cleaned
+
+        def save(self, commit=True):
+            obj = super().save(commit=False)
+            obj.date_of_receipt = self.cleaned_data["date_of_receipt"]
+            if commit:
+                obj.save()
+                self.save_m2m()
+            return obj
+
+    form = Form
+
+    list_display = (
+        'registration_number',
+        'sender_identification',
+        'sender',
+        'letter_date_display',
+        'date_of_receipt_display',
+        'urgent_warning',
+        'receipt_method',
+        'subject',
+        'replies_link',
+        'current_responsible',
+    )
+    list_display_links = ('sender_identification',)
+    list_filter = ('receipt_method', 'letter_date')
+    search_fields = ('sender_identification', 'subject', 'sender__name_of_company')
+    date_hierarchy = 'date_of_receipt'
+    readonly_fields = ('date_of_creation', 'date_of_change', 'registration_number')
+    autocomplete_fields = ('sender', 'sender_signature')
+
+    fieldsets = (
+        (None, {
+            'fields': (
+                'registration_number',
+                'sender_identification',
+                'sender',
+                'sender_signature',
+                'letter_date',
+                'date_of_receipt_date',
+                'urgent',
+                'date_of_receipt_time',
+                'receipt_method',
+                'subject',
+            )
+        }),
+        ('Документ', {'fields': ('document_uploaded_file', 'comment')}),
+        ('Ответственные', {'fields': ('current_responsible',)}),
+        ('Версия', {'fields': ('version',)}),
+        ('Системная информация', {
+            'fields': ('date_of_creation', 'date_of_change')
+        }),
+    )
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = super().get_fieldsets(request, obj)
+        if obj is not None:
+            return (
+                fieldsets[0],
+                fieldsets[1],
+                fieldsets[2],
+                fieldsets[3],
+                ('Системная информация', {
+                    'fields': ('author', 'last_editor', 'date_of_creation', 'date_of_change')
+                }),
+            )
+        return fieldsets
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is None:
+            return self.readonly_fields
+        return ('author', 'last_editor') + tuple(self.readonly_fields)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+    @admin.display(description="Связанные исходящие")
+    def replies_link(self, obj):
+        count = getattr(obj, "replies", None).count() if obj.pk else 0
+        if not count:
+            return "—"
+        url = reverse("admin:crm_outgoingletter_changelist") + f"?reply_to__id__exact={obj.pk}"
+        return format_html('<a href="{}">Ответы ({})</a>', url, count)
+
+    @admin.display(description="Дата получения", ordering="date_of_receipt")
+    def date_of_receipt_display(self, obj):
+        if not obj.date_of_receipt:
+            return "—"
+        if not obj.urgent:
+            return obj.date_of_receipt.strftime("%d.%m.%Y")
+        return obj.date_of_receipt.strftime("%d.%m.%Y %H:%M")
+
+    @admin.display(description="Срочно")
+    def urgent_warning(self, obj):
+        if not obj.urgent:
+            return "—"
+        return mark_safe('<span style="color: #f0ad4e; font-weight: bold;">⚠️</span>')
+
+    @admin.display(description="Дата письма", ordering="letter_date")
+    def letter_date_display(self, obj):
+        if not obj.letter_date:
+            return "—"
+        return obj.letter_date.strftime("%d.%m.%Y")
+
+
+@admin.register(OutgoingLetter)
+class OutgoingLetterAdmin(admin.ModelAdmin):
+    class Form(forms.ModelForm):
+        date_of_send_date = forms.DateField(label="Дата отправки")
+        date_of_send_time = forms.TimeField(label="Время отправки", required=False)
+
+        class Meta:
+            model = OutgoingLetter
+            fields = "__all__"
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            from django.contrib.admin.widgets import AdminDateWidget, AdminTimeWidget
+            self.fields["date_of_send_date"].widget = AdminDateWidget()
+            self.fields["date_of_send_time"].widget = AdminTimeWidget()
+
+            if self.instance and self.instance.pk and self.instance.date_of_send:
+                self.fields["date_of_send_date"].initial = self.instance.date_of_send.date()
+                self.fields["date_of_send_time"].initial = self.instance.date_of_send.time().replace(
+                    second=0, microsecond=0
+                )
+            else:
+                self.fields["date_of_send_date"].initial = timezone.localdate()
+
+        def clean(self):
+            cleaned = super().clean()
+            urgent = cleaned.get("urgent")
+            d = cleaned.get("date_of_send_date")
+            t = cleaned.get("date_of_send_time")
+
+            if not d:
+                raise forms.ValidationError({"date_of_send_date": "Обязательное поле."})
+
+            if urgent and not t:
+                raise forms.ValidationError({"date_of_send_time": "Укажите время при метке «Срочно»."})
+
+            from datetime import time, datetime
+            dt = datetime.combine(d, t or time(0, 0))
+            cleaned["date_of_send"] = timezone.make_aware(dt, timezone.get_current_timezone())
+            return cleaned
+
+        def save(self, commit=True):
+            obj = super().save(commit=False)
+            obj.date_of_send = self.cleaned_data["date_of_send"]
+            if commit:
+                obj.save()
+                self.save_m2m()
+            return obj
+
+    form = Form
+
+    list_display = (
+        'registration_number',
+        'reply_to_link',
+        'recipient',
+        'letter_date_display',
+        'date_of_send_display',
+        'urgent_warning',
+        'subject',
+        'executor',
+        'send_method',
+        'current_responsible',
+    )
+    list_display_links = ('registration_number',)
+    list_filter = ('send_method', 'letter_date')
+    search_fields = ('registration_number', 'subject', 'recipient__name_of_company')
+    date_hierarchy = 'letter_date'
+    readonly_fields = ('date_of_creation', 'date_of_change', 'registration_number')
+    autocomplete_fields = ('recipient', 'person_recipient', 'reply_to')
+
+    fieldsets = (
+        (None, {
+            'fields': (
+                'registration_number',
+                'reply_to',
+                'recipient',
+                'person_recipient',
+                'letter_date',
+                'date_of_send_date',
+                'urgent',
+                'date_of_send_time',
+                'subject',
+                'sender_signature',
+                'executor',
+                'send_method',
+                'receipt_verification',
+            )
+        }),
+        ('Документы', {'fields': ('document_uploaded_file', 'app_uploaded_file', 'comment')}),
+        ('Ответственные', {'fields': ('current_responsible',)}),
+        ('Версия', {'fields': ('version',)}),
+        ('Системная информация', {
+            'fields': ('date_of_creation', 'date_of_change')
+        }),
+    )
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = super().get_fieldsets(request, obj)
+        if obj is not None:
+            return (
+                fieldsets[0],
+                fieldsets[1],
+                fieldsets[2],
+                fieldsets[3],
+                ('Системная информация', {
+                    'fields': ('author', 'last_editor', 'date_of_creation', 'date_of_change')
+                }),
+            )
+        return fieldsets
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is None:
+            return self.readonly_fields
+        return ('author', 'last_editor') + tuple(self.readonly_fields)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related("reply_to")
+
+    @admin.display(description="В ответ на")
+    def reply_to_link(self, obj):
+        if not obj.reply_to_id:
+            return "—"
+        url = reverse("admin:crm_incomingletter_change", args=[obj.reply_to_id])
+        label = obj.reply_to.sender_identification if obj.reply_to else str(obj.reply_to_id)
+        return format_html('<a href="{}">{}</a>', url, label)
+
+    @admin.display(description="Дата письма", ordering="letter_date")
+    def letter_date_display(self, obj):
+        if not obj.letter_date:
+            return "—"
+        return obj.letter_date.strftime("%d.%m.%Y")
+
+    @admin.display(description="Дата отправки", ordering="date_of_send")
+    def date_of_send_display(self, obj):
+        if not obj.date_of_send:
+            return "—"
+        if not obj.urgent:
+            return obj.date_of_send.strftime("%d.%m.%Y")
+        return obj.date_of_send.strftime("%d.%m.%Y %H:%M")
+
+    @admin.display(description="Срочно")
+    def urgent_warning(self, obj):
+        if not obj.urgent:
+            return "—"
+        return mark_safe('<span style="color: #f0ad4e; font-weight: bold;">⚠️</span>')
 
 
 @admin.register(Company_branch)
@@ -887,21 +1200,21 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
             "calibration_required",
             "planned_calibration_date",
             "workstation",
-            "replacement_allowed",
+            "replacement_equipment",
             "status",
         )
         if obj is None:
             return (
                 (None, {"fields": main_fields}),
-                ("Ответственные", {"fields": ("current_responsible", "note")}),
+                ("Ответственные", {"fields": ("current_responsible",)}),
                 ("Версия", {"fields": ("version",)}),
-                ("Системная информация", {"fields": ("date_of_creation", "date_of_change")}),
+                ("Системная информация", {"fields": ("date_of_creation", "date_of_change", "note")}),
             )
         return (
             (None, {"fields": main_fields}),
-            ("Ответственные", {"fields": ("author", "last_editor", "current_responsible", "note")}),
+            ("Ответственные", {"fields": ("author", "last_editor", "current_responsible")}),
             ("Версия", {"fields": ("version",)}),
-            ("Системная информация", {"fields": ("date_of_creation", "date_of_change")}),
+            ("Системная информация", {"fields": ("date_of_creation", "date_of_change", "note")}),
         )
 
     def get_readonly_fields(self, request, obj=None):
@@ -926,7 +1239,7 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
         )
         return format_html('<a href="{}">{}</a>', url, obj.serial_number)
 
-    serial_number_link.short_description = "Заводской номер (s/n)"
+    serial_number_link.short_description = "Заводской / инвентарный номер"
     serial_number_link.admin_order_field = "serial_number"
 
     def calibration_warning(self, obj):
@@ -965,10 +1278,10 @@ class TransportVehicleAdmin(admin.ModelAdmin):
     list_display = (
         "make_model",
         "registration_plate",
-        "insurance",
         "next_insurance_date",
-        "inspection",
+        "insurance_expiry_warning",
         "next_inspection_date",
+        "inspection_expiry_warning",
         "repairs_link",
     )
 
@@ -1039,6 +1352,26 @@ class TransportVehicleAdmin(admin.ModelAdmin):
 
     repairs_link.short_description = "Ремонты"
 
+    @admin.display(description="Срок страховки истекает")
+    def insurance_expiry_warning(self, obj):
+        if not obj.insurance or not obj.next_insurance_date:
+            return "—"
+        today = timezone.now().date()
+        days_left = (obj.next_insurance_date - today).days
+        if days_left <= 15:
+            return mark_safe('<span style="color: #f0ad4e; font-weight: bold;">⚠️</span>')
+        return "—"
+
+    @admin.display(description="Срок техосмотра истекает")
+    def inspection_expiry_warning(self, obj):
+        if not obj.inspection or not obj.next_inspection_date:
+            return "—"
+        today = timezone.now().date()
+        days_left = (obj.next_inspection_date - today).days
+        if days_left <= 15:
+            return mark_safe('<span style="color: #f0ad4e; font-weight: bold;">⚠️</span>')
+        return "—"
+
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -1051,6 +1384,7 @@ class TransportRepairAdmin(admin.ModelAdmin):
     list_display = (
         "transport_vehicle",
         "repair_date",
+        "description",
         "author",
         "date_of_creation",
     )
@@ -1097,23 +1431,34 @@ class TransportRepairAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 # ПроизводственныеПлощадки
+@admin.register(ProductionAreaLocation)
+class ProductionAreaLocationAdmin(admin.ModelAdmin):
+    search_fields = ("name",)
+    list_display = ("name",)
+
+    def has_module_permission(self, request):
+        return False
+
+
 @admin.register(ProductionArea)
 class ProductionAreaAdmin(admin.ModelAdmin):
 
     list_display = (
         "number_name",
         "object",
-        "location",
+        "location_ref",
         "working_conditions",
         "restrictions",
+        "contract_date_display",
         "contract_status_display",
+        "purpose_display",
     )
 
     list_display_links = ("number_name",)
 
     list_filter = (
         "object",
-        "location",
+        "location_ref",
         "working_conditions",
         "restrictions",
     )
@@ -1126,7 +1471,7 @@ class ProductionAreaAdmin(admin.ModelAdmin):
         ("Основная информация", {
             "fields": (
                 "object",
-                "location",
+                "location_ref",
                 "number_name",
                 "area",
                 "purpose",
@@ -1160,10 +1505,21 @@ class ProductionAreaAdmin(admin.ModelAdmin):
         "version",
     )
 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "location_ref":
+            kwargs["queryset"] = ProductionAreaLocation.objects.order_by("name")
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
     def save_model(self, request, obj, form, change):
         if not change:
             obj.author = request.user
         obj.last_editor = request.user
+
+        if not obj.location_ref:
+            obj.location_ref, _ = ProductionAreaLocation.objects.get_or_create(
+                name="Технопарк Университетский"
+            )
+
         super().save_model(request, obj, form, change)
 
     def contract_status_display(self, obj):
@@ -1187,7 +1543,15 @@ class ProductionAreaAdmin(admin.ModelAdmin):
 
         return "—"
 
-    contract_status_display.short_description = "Срок договора"
+    contract_status_display.short_description = "Срок договора истекает"
+
+    @admin.display(description="Дата действия договора")
+    def contract_date_display(self, obj):
+        return obj.contract_date or "—"
+
+    @admin.display(description="Назначение")
+    def purpose_display(self, obj):
+        return obj.purpose or "—"
 
 class WorkAssignmentInline(admin.TabularInline):
     model = WorkAssignment
