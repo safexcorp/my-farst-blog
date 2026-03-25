@@ -56,6 +56,13 @@ class Customer(models.Model):
         verbose_name_plural = 'Контрагенты'
         ordering = ['name_of_company']
 
+    def support_tickets_link(self):
+        """Возвращает ссылку на обращения контрагента для отображения в админке"""
+        if hasattr(self, 'support_tickets'):
+            return self.support_tickets.count()
+        return 0
+
+    support_tickets_link.short_description = 'Обращения'
 
 class Decision_maker(models.Model):
     class TypeOfFunction(models.IntegerChoices):
@@ -531,7 +538,7 @@ class SupportTicket(models.Model):
     STATUS_RESOLVED = 'resolved'
 
     STATUS_CHOICES = [
-        (STATUS_NEW, 'Новая'),
+        (STATUS_NEW, 'Новое'),
         (STATUS_IN_PROGRESS, 'В работе'),
         (STATUS_WAITING, 'Ожидает ответа заказчика'),
         (STATUS_RESOLVED, 'Решена/Закрыта'),
@@ -546,7 +553,7 @@ class SupportTicket(models.Model):
 
     # Основные поля
     created_date = models.DateTimeField(default=timezone.now, verbose_name='Дата поступления')
-    customer = models.ForeignKey('Customer', on_delete=models.CASCADE, verbose_name='Контрагент')
+    customer = models.ForeignKey('Customer', on_delete=models.CASCADE, verbose_name='Контрагент', related_name='support_tickets')
     product = models.ForeignKey('Product', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Продукт')
 
 
