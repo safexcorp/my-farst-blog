@@ -44,7 +44,7 @@ from enterprise_asset_management.models import (
     TransportRepairFile,
     ProductionAreaLocation,
 )
-from shared_repository.models import SharedRepository, IndependentDocumentAcceptSignature
+from shared_repository.models import SharedRepository, IndependentDocumentAcceptSignature, KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature
 
 from .admin_forms import RescheduleAdminForm
 from .forms import WorkAssignmentForm, UniversalRKDForm
@@ -830,11 +830,32 @@ def normalize_search(text: str) -> list[str]:
 
 
 class CustomerAdmin(admin.ModelAdmin):
-    list_display = ('name_of_company', 'revenue_for_last_year', 'length_of_electrical_network_km')
+    list_display = ('name_of_company', 'revenue_for_last_year', 'length_of_electrical_network_km', 'support_tickets_link')
     # Объедини фильтры в один список
     list_filter = ('name_of_company', 'revenue_for_last_year')
     list_filter = (RevenueRangeFilter,)
     search_fields = ('name_of_company__icontains', 'address__icontains')  # Поиск по этим полям
+
+    def support_tickets_link(self, obj):
+        """Отображение ссылки на обращения контрагента"""
+        count = obj.support_tickets.count()
+        if count:
+            url = reverse('admin:crm_supportticket_changelist') + f'?customer__id__exact={obj.pk}'
+            return format_html(
+                '<a href="{}" style="font-weight: bold; background: #79aec8; color: white; padding: 4px 8px; border-radius: 3px; text-decoration: none;">📞 Обращения ({})</a>',
+                url, count
+            )
+        return format_html('<span style="color: gray;">📞 Обращения (0)</span>')
+    support_tickets_link.short_description = 'Обращения'
+    support_tickets_link.admin_order_field = 'name_of_company'
+
+class SupportTicketInline(admin.TabularInline):
+    model = SupportTicket
+    extra = 0
+    fields = ('problem', 'status', 'created_date')
+    readonly_fields = ('created_date',)
+
+inlines = [SupportTicketInline]
 
 class Decision_makerAdmin(admin.ModelAdmin):
     list_display = ('full_name', 'city_of_location', 'function', 'customer')
@@ -1352,11 +1373,11 @@ class MeetingAdmin(admin.ModelAdmin):
         # Здесь FK, так что False, но вернём True «на всякий случай», это безопасно.
         return qs, True
 
-@admin.register(MeetingFile)
-class MeetingFileAdmin(admin.ModelAdmin):
-    list_display = ['meeting', 'file', 'description', 'uploaded_at']
-    list_filter = ['uploaded_at', 'meeting']
-    search_fields = ['meeting__customer__name_of_company', 'description']
+#@admin.register(MeetingFile)
+#class MeetingFileAdmin(admin.ModelAdmin):
+ #   list_display = ['meeting', 'file', 'description', 'uploaded_at']
+  #  list_filter = ['uploaded_at', 'meeting']
+   # search_fields = ['meeting__customer__name_of_company', 'description']
 
 
 
@@ -2404,6 +2425,8 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     readonly_fields = [
         'date_of_creation',
         'date_of_change',
+        'last_editor',
+        'author',
         #'display_file_info',
         #'display_accept_info',
        # 'display_signature_accept_info',
@@ -2631,3 +2654,483 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
    # list_display = ['document', 'signature_file', 'uploaded_by', 'uploaded_at']
     #list_filter = ['uploaded_at', 'uploaded_by']
     #search_fields = ['document__document_title']
+
+
+class KnowledgeBaseFileInline(admin.TabularInline):
+    """Inline для множественных файлов"""
+    model = KnowledgeBaseFile
+    extra = 1
+    fields = ['file', 'description', 'uploaded_by', 'uploaded_at']
+    readonly_fields = ['uploaded_at']
+
+
+@admin.register(KnowledgeBase)
+class KnowledgeBaseAdmin(admin.ModelAdmin):
+    list_display = [
+        'title_short',
+        'display_knowledge_group',
+        'display_knowledge_apply',
+        'display_author',
+        #'display_files_count',
+        'display_consumer_info',
+        #'display_consumer_ticket_link',
+        'display_document_contents_short',
+        #'version',
+        #'date_of_creation_short',
+    ]
+
+    list_filter = [
+        'knowledge_group',
+        'date_of_creation',
+        'author',
+        'consumer_customer',
+    ]
+
+    search_fields = [
+        'title',
+        'document_contents',
+        'note',
+    ]
+
+    readonly_fields = [
+        'date_of_creation',
+        'date_of_change',
+        'display_files_list',
+        'last_editor',
+        'author',
+    ]
+
+    filter_horizontal = ['knowledge_apply']  # Удобный виджет для ManyToMany
+
+    inlines = [KnowledgeBaseFileInline]
+
+    fieldsets = (
+        ('Основная информация', {
+            'fields': (
+                'category',
+                'title',
+                'knowledge_group',
+            )
+        }),
+        ('Связи', {
+            'fields': (
+                #'consumer',
+                'consumer_customer',
+                'consumer_ticket',
+                'knowledge_apply',
+            )
+        }),
+        ('Содержание', {
+            'fields': (
+                'document_contents',
+                'note',
+            )
+        }),
+        ('Пользователи системы', {
+            'fields': (
+                'author',
+                'last_editor',
+                'current_responsible',
+            )
+        }),
+        ('Версия и даты', {
+            'fields': (
+                'version',
+                'date_of_creation',
+                'date_of_change',
+            )
+        }),
+    )
+
+    def title_short(self, obj):
+        """Краткое отображение названия"""
+        if obj.title:
+            return obj.title[:50] + '...' if len(obj.title) > 50 else obj.title
+        return "—"
+
+    title_short.short_description = 'Название'
+    title_short.admin_order_field = 'title'
+
+    def display_knowledge_group(self, obj):
+        """Отображение группы знаний"""
+        if obj.knowledge_group:
+            return obj.get_knowledge_group_display()
+        return "—"
+
+    display_knowledge_group.short_description = 'Группа знаний'
+
+    def display_knowledge_apply(self, obj):
+        """Отображение применения знаний (список пользователей)"""
+        users = obj.knowledge_apply.all()
+        if users.exists():
+            return ", ".join([user.username for user in users[:3]]) + ("..." if users.count() > 3 else "")
+        return "—"
+
+    display_knowledge_apply.short_description = 'Применение знаний/ практик'
+
+    def display_author(self, obj):
+        """Отображение автора"""
+        if obj.author:
+            return obj.author.username
+        return "—"
+
+    display_author.short_description = 'Автор'
+
+    def display_consumer_info(self, obj):
+        """Отображение информации о потребителе со ссылкой на его обращения"""
+        # Показываем только если выбрана соответствующая группа знаний
+        if obj.knowledge_group != 'lesson_consumer':
+            return "—"
+
+        # Информация о контрагенте
+        if obj.consumer_customer:
+            customer_url = reverse('admin:crm_customer_change', args=[obj.consumer_customer.pk])
+            tickets_count = obj.consumer_customer.support_tickets.count()
+
+            # Формируем HTML с контрагентом и ссылкой на обращения
+            return format_html(
+                '<div>'
+                '<strong> </strong> <a href="{}" style="font-weight: bold;">{}</a><br>'
+                '<a href="{}?customer__id__exact={}" style="font-size: 11px; color: #79aec8;">📞 Обращения ({})</a>'
+                '</div>',
+                customer_url,
+                obj.consumer_customer.name_of_company,
+                reverse('admin:crm_supportticket_changelist'),
+                obj.consumer_customer.pk,
+                tickets_count
+            )
+        else:
+            return '<div><strong>Контрагент:</strong> <span style="color: red;">Не указан!</span></div>'
+
+    display_consumer_info.short_description = 'Потребитель (контрагент)'
+
+    def display_files_count(self, obj):
+        """Количество файлов"""
+        count = obj.attached_files.count()
+        return f"{count} файл(ов)" if count > 0 else "—"
+
+    display_files_count.short_description = 'Файлы'
+
+    def display_document_contents_short(self, obj):
+        """Краткое отображение содержания документа (последний столбец)"""
+        if obj.document_contents:
+            return format_html(
+                '<div style="min-width: 250px; max-width: 400px; white-space: normal; word-wrap: break-word;">{}</div>',
+                obj.document_contents[:100] + '...' if len(obj.document_contents) > 100 else obj.document_contents
+            )
+        return "—"
+
+    display_document_contents_short.short_description = 'Содержание документа'
+
+    def date_of_creation_short(self, obj):
+        """Краткое отображение даты"""
+        return obj.date_of_creation.strftime('%d.%m.%Y')
+
+    date_of_creation_short.short_description = 'Дата'
+    date_of_creation_short.admin_order_field = 'date_of_creation'
+
+    def display_files_list(self, obj):
+        """Список файлов для детального просмотра"""
+        files = obj.attached_files.all()
+        if not files.exists():
+            return "Нет загруженных файлов"
+
+        html = '<ul style="list-style-type: none; padding-left: 0;">'
+        for file in files:
+            filename = file.file.name.split('/')[-1]
+            html += f'<li style="margin-bottom: 5px;">📄 <a href="{file.file.url}" target="_blank">{filename}</a>'
+            if file.description:
+                html += f' <span style="color: #666;">- {file.description}</span>'
+            if file.uploaded_by:
+                html += f' <span style="color: #999; font-size: 0.9em;">(загрузил: {file.uploaded_by.username})</span>'
+            html += '</li>'
+        html += '</ul>'
+        return format_html(html)
+
+    display_files_list.short_description = 'Загруженные файлы'
+
+    def save_model(self, request, obj, form, change):
+        """Автоматическая установка пользователей при сохранении"""
+        if not change:  # Создание
+            obj.author = request.user
+            obj.last_editor = request.user
+            if not obj.current_responsible:
+                obj.current_responsible = request.user
+        else:  # Редактирование
+            # Обновляем только последнего редактора, автор не меняется
+            obj.last_editor = request.user
+
+        # Если группа знаний не lesson_consumer, очищаем поля потребителя и обращения
+        if obj.knowledge_group != 'lesson_consumer':
+            obj.consumer_customer = None
+            obj.consumer_ticket = None
+
+        super().save_model(request, obj, form, change)
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Кастомизация формы для динамической валидации"""
+        form = super().get_form(request, obj, **kwargs)
+
+        # Добавляем классы для полей
+        if 'consumer_customer' in form.base_fields:
+            form.base_fields['consumer_customer'].required = False
+        if 'consumer_ticket' in form.base_fields:
+            form.base_fields['consumer_ticket'].required = False
+
+        return form
+
+
+#@admin.register(KnowledgeBaseFile)
+#class KnowledgeBaseFileAdmin(admin.ModelAdmin):
+ #   list_display = ['knowledge_base', 'file', 'description', 'uploaded_by', 'uploaded_at']
+  #  list_filter = ['uploaded_at', 'uploaded_by']
+   # search_fields = ['knowledge_base__title', 'description']
+    #readonly_fields = ['uploaded_at']
+
+
+class QMSDocumentAcceptSignatureInline(admin.TabularInline):
+    """Inline для множественных подписей ознакомления"""
+    model = QMSDocumentAcceptSignature
+    extra = 1
+    fields = ['signature_file', 'uploaded_by', 'uploaded_at']
+    readonly_fields = ['uploaded_at']
+
+
+@admin.register(QMSDocument)
+class QMSDocumentAdmin(admin.ModelAdmin):
+    list_display = [
+        'display_category',
+        'display_document_title',
+        'change_number',
+        'display_approval',
+        'display_date_approval',
+        'display_accept',
+        'display_version',
+        'display_uploaded_file',
+        'display_review_date',
+        'display_review_status',
+    ]
+
+    list_filter = [
+        'category',
+        'date_approval',
+        'review_date',
+        'author',
+    ]
+
+    search_fields = [
+        'document_title',
+        'document_purpose',
+        'note',
+        'id',
+    ]
+
+    readonly_fields = [
+        'date_of_creation',
+        'date_of_change',
+        'display_files_list',
+        'last_editor',
+        'author',
+    ]
+
+    inlines = [QMSDocumentAcceptSignatureInline]
+
+    fieldsets = (
+        ('Основная информация', {
+            'fields': (
+                'category',
+                'document_title',
+                'change_number',
+                'version',
+            )
+        }),
+        ('Утверждение', {
+            'fields': (
+                'approval',
+                'approval_signature',
+                'date_approval',
+            )
+        }),
+        ('Ознакомление', {
+            'fields': (
+                'accept',
+            )
+        }),
+        ('Документ', {
+            'fields': (
+                'uploaded_file',
+                'document_purpose',
+                'related_documents',
+            )
+        }),
+        ('Дата планового пересмотра', {
+            'fields': (
+                'review_date',
+            )
+        }),
+        ('Пользователи системы', {
+            'fields': (
+                'author',
+                'last_editor',
+                'current_responsible',
+            )
+        }),
+        ('Дополнительно', {
+            'fields': (
+                'note',
+            )
+        }),
+        ('Системные даты', {
+            'fields': (
+                'date_of_creation',
+                'date_of_change',
+                'display_files_list',
+            )
+        }),
+    )
+
+    def display_category(self, obj):
+        """Отображение категории"""
+        return obj.get_category_display() if obj.category else "—"
+
+    display_category.short_description = 'Категория'
+    display_category.admin_order_field = 'category'
+
+    def display_document_title(self, obj):
+        """Отображение названия документа с вашим любимым форматированием"""
+        if obj.document_title:
+            return format_html(
+                '<div style="min-width: 200px; max-width: 400px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
+                obj.document_title
+            )
+        return "—"
+
+    display_document_title.short_description = 'Название документа'
+    display_document_title.admin_order_field = 'document_title'
+
+    def display_approval(self, obj):
+        """Отображение утвердившего"""
+        if obj.approval:
+            return obj.approval.username
+        return "—"
+
+    display_approval.short_description = 'Утвердил'
+    display_approval.admin_order_field = 'approval__username'
+
+    def display_date_approval(self, obj):
+        """Отображение даты утверждения"""
+        if obj.date_approval:
+            return obj.date_approval.strftime('%d.%m.%Y')
+        return "—"
+
+    display_date_approval.short_description = 'Дата утв.'
+
+    def display_accept(self, obj):
+        """Отображение ознакомления"""
+        if obj.accept:
+            return obj.get_accept_display()
+        return "—"
+
+    display_accept.short_description = 'Ознакомление'
+
+    def display_version(self, obj):
+        """Отображение версии"""
+        return obj.version
+
+    display_version.short_description = 'Версия'
+
+    def display_uploaded_file(self, obj):
+        """Отображение файла с иконкой"""
+        if obj.uploaded_file:
+            filename = obj.uploaded_file.name.split('/')[-1]
+            return format_html(
+                '<a href="{}" target="_blank" title="{}">📄 {}</a>',
+                obj.uploaded_file.url,
+                filename,
+                filename[:20] + '...' if len(filename) > 20 else filename
+            )
+        return "—"
+
+    display_uploaded_file.short_description = 'Файл'
+
+    def display_review_date(self, obj):
+        """Отображение даты планового пересмотра"""
+        if obj.review_date:
+            return obj.review_date.strftime('%d.%m.%Y')
+        return "—"
+    display_review_date.short_description = 'Дата планового пересмотра'
+    display_review_date.admin_order_field = 'review_date'
+
+    def display_review_status(self, obj):
+        """Отображение статуса Срока пересмотра истекает с предупреждением"""
+        if not obj.review_date:
+            return "—"
+
+        if obj.is_review_overdue():
+            return format_html(
+                '<span style="color: red; font-weight: bold; white-space: nowrap;">⚠️ ПРОСРОЧЕН!</span>'
+            )
+        elif obj.is_review_approaching():
+            days_left = (obj.review_date - timezone.now().date()).days
+            return format_html(
+                '<span style="color: orange; white-space: nowrap;">⚠️ Истекает через {} дн.</span>',
+                days_left
+            )
+        return "—"
+    display_review_status.short_description = 'Срок пересмотра истекает'
+
+    def display_files_list(self, obj):
+        """Список всех файлов для детального просмотра"""
+        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0;">'
+
+        # Основной файл
+        html += '<h4>Основной документ:</h4>'
+        if obj.uploaded_file:
+            filename = obj.uploaded_file.name.split('/')[-1]
+            html += f'<p>📄 <a href="{obj.uploaded_file.url}" target="_blank">{filename}</a></p>'
+        else:
+            html += '<p>Не загружен</p>'
+
+        # Подпись утверждения
+        html += '<h4>Подпись утверждения:</h4>'
+        if obj.approval_signature:
+            filename = obj.approval_signature.name.split('/')[-1]
+            html += f'<p>🖊️ <a href="{obj.approval_signature.url}" target="_blank">{filename}</a></p>'
+        else:
+            html += '<p>Не загружена</p>'
+
+        # Подписи ознакомления
+        signatures = obj.accept_signatures.all()
+        if signatures.exists():
+            html += '<h4>Подписи ознакомления:</h4><ul>'
+            for sig in signatures:
+                filename = sig.signature_file.name.split('/')[-1]
+                html += f'<li>🖊️ <a href="{sig.signature_file.url}" target="_blank">{filename}</a>'
+                if sig.uploaded_by:
+                    html += f' <span style="color: #666;">(загрузил: {sig.uploaded_by.username})</span>'
+                html += '</li>'
+            html += '</ul>'
+
+        html += '</div>'
+        return format_html(html)
+    display_files_list.short_description = 'Файлы документа'
+
+    def save_model(self, request, obj, form, change):
+        """Автоматическая установка пользователей при сохранении"""
+        if not change:  # Создание
+            obj.author = request.user
+            obj.last_editor = request.user
+            if not obj.current_responsible:
+                obj.current_responsible = request.user
+        else:  # Редактирование
+            obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+
+#@admin.register(QMSDocumentAcceptSignature)
+#class QMSDocumentAcceptSignatureAdmin(admin.ModelAdmin):
+ #   list_display = ['document', 'signature_file', 'uploaded_by', 'uploaded_at']
+  #  list_filter = ['uploaded_at', 'uploaded_by']
+   # search_fields = ['document__document_title']
+    #readonly_fields = ['uploaded_at']
+
