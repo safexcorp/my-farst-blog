@@ -4,8 +4,16 @@ from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Max
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+
+from .helpers import (
+    SPECIFICATION_SECTION_CHOICES,
+    allowed_categories_for_section,
+    section_has_category_choices,
+    specification_section_sort_index,
+)
 
 User = settings.AUTH_USER_MODEL
 User = get_user_model()
@@ -131,6 +139,38 @@ class Post(models.Model):
     patenting = models.ManyToManyField(Patenting, blank=True, verbose_name="Патентование")
     conformity_assessment = models.OneToOneField(ConformityAssessment, on_delete=models.SET_NULL, null=True, blank=True,
                                                  verbose_name="Подтверждение соответствия")
+
+    modification_code = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name="Код модификации изделия",
+    )
+    validity_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Срок действия",
+    )
+    develop_org = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        verbose_name="Организация-разработчик",
+    )
+    technical_specifications_ref = models.CharField(
+        max_length=500,
+        blank=True,
+        verbose_name="Технические условия (обозначение / ссылка)",
+    )
+    operating_manual_ref = models.CharField(
+        max_length=500,
+        blank=True,
+        verbose_name="Руководство по эксплуатации (обозначение / ссылка)",
+    )
+    product_passport_ref = models.CharField(
+        max_length=500,
+        blank=True,
+        verbose_name="Паспорт изделия (обозначение / ссылка)",
+    )
 
     class Meta:
         verbose_name = "Разработка"
@@ -1551,3 +1591,359 @@ class Attachment(models.Model):
     content_object = GenericForeignKey("content_type", "object_id")
 
     file = models.FileField(upload_to="attachments/")
+
+
+class RKDDeveloper(models.Model):
+    name = models.CharField(max_length=200, unique=True, verbose_name="Название")
+
+    class Meta:
+        verbose_name = "Организация-разработчик (РКД)"
+        verbose_name_plural = "Организации-разработчики (РКД)"
+
+    def __str__(self):
+        return self.name
+
+
+class UniversalRKD(models.Model):
+    STATUS_CHOICES = [
+        ("Зарегистрирован", "Зарегистрирован"),
+        ("В разработке", "В разработке"),
+        ("На проверке", "На проверке"),
+        ("На утверждении", "На утверждении"),
+        ("Выпущен", "Выпущен"),
+        ("Заменен", "Заменен"),
+        ("Аннулирован", "Аннулирован"),
+        ("В архиве", "В архиве"),
+    ]
+
+    INFO_FORMAT_CHOICES = [
+        ("ДЭ", "ДЭ"),
+        ("ДБ", "ДБ"),
+    ]
+
+    SHEET_SIZE_CHOICES = [
+        ("А0", "А0"),
+        ("А5", "А5"),
+        ("А4", "А4"),
+        ("БЧ", "БЧ"),
+        ("А3", "А3"),
+        ("А2", "А2"),
+        ("2D", "2D"),
+        ("3D", "3D"),
+    ]
+
+    LITERA_CHOICES = [
+        ("o_minus", "О-"),
+        ("o", "О"),
+        ("o1", "О₁"),
+        ("o2", "О₂"),
+        ("o3", "О₃"),
+        ("a", "А"),
+        ("i", "И"),
+        ("b", "Б"),
+    ]
+
+    TRL_CHOICES = [
+        ("7-", "7-"),
+        ("7", "7"),
+        ("8-", "8-"),
+        ("8", "8"),
+        ("9-", "9-"),
+        ("9", "9"),
+    ]
+
+    LANGUAGE_CHOICES = [
+        ("rus", "rus"),
+        ("eng", "eng"),
+        ("tur", "tur"),
+        ("chi", "chi"),
+    ]
+
+    post = models.ForeignKey(
+        "Post",
+        on_delete=models.CASCADE,
+        related_name="universal_rkd_entries",
+        null=True,
+        blank=True,
+        verbose_name="Разработка (модификация)",
+    )
+    specification_section = models.CharField(
+        max_length=32,
+        choices=SPECIFICATION_SECTION_CHOICES,
+        verbose_name="Раздел спецификации",
+    )
+    section_sort_index = models.PositiveSmallIntegerField(
+        editable=False,
+        default=0,
+        verbose_name="Порядок раздела (служебное)",
+    )
+    category = models.CharField(
+        max_length=10,
+        blank=True,
+        default="",
+        verbose_name="Категория (код вида документа)",
+    )
+    order_in_section = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Порядок в разделе",
+        help_text="Для ручной сортировки позиций внутри одного раздела и одной разработки.",
+    )
+
+    name = models.CharField(max_length=100, verbose_name="Наименование")
+    desig_document = models.CharField(max_length=50, verbose_name="Обозначение документа")
+    primary_use = models.CharField(max_length=100, blank=True, default="", verbose_name="Первичное применение")
+
+    change_number = models.CharField(max_length=8, verbose_name="Номер изменения")
+    litera = models.CharField(
+        max_length=16,
+        choices=LITERA_CHOICES,
+        default="o",
+        verbose_name="Стадия разработки (литера)",
+    )
+    trl = models.CharField(
+        max_length=3,
+        choices=TRL_CHOICES,
+        default="7",
+        verbose_name="Уровень готовности технологий (TRL)",
+    )
+
+    author = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="universal_rkd_created",
+        verbose_name="Автор",
+    )
+    date_of_creation = models.DateTimeField(default=timezone.now, verbose_name="Дата и время создания")
+    last_editor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="universal_rkd_edited",
+        verbose_name="Последний редактор",
+    )
+    version = models.CharField(max_length=3, default="1", verbose_name="Версия")
+    date_of_change = models.DateTimeField(auto_now=True, verbose_name="Дата и время последнего изменения")
+    current_responsible = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="universal_rkd_responsible",
+        verbose_name="Текущий ответственный",
+    )
+
+    sheet_size = models.CharField(
+        max_length=5,
+        choices=SHEET_SIZE_CHOICES,
+        default="А4",
+        verbose_name="Формат (листа)",
+    )
+    position = models.CharField(
+        max_length=5,
+        blank=True,
+        default="",
+        verbose_name="Позиция",
+    )
+    info_format = models.CharField(
+        max_length=2,
+        choices=INFO_FORMAT_CHOICES,
+        default="ДЭ",
+        verbose_name="Вид носителя информации",
+    )
+    validity_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Дата планового пересмотра",
+    )
+    language = models.CharField(
+        max_length=3,
+        choices=LANGUAGE_CHOICES,
+        default="rus",
+        verbose_name="Язык",
+    )
+    internal_recipients = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name="universal_rkd_internal_recipient",
+        verbose_name="Внутренние получатели",
+    )
+    external_recipients = models.ManyToManyField(
+        "crm.Customer",
+        blank=True,
+        related_name="universal_rkd_external_recipient",
+        verbose_name="Внешние получатели",
+    )
+    related_documents = models.TextField(max_length=1000, blank=True, default="", verbose_name="Связанные сопроводительные документы")
+    develop_org = models.ForeignKey(
+        RKDDeveloper,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        verbose_name="Организация-разработчик",
+    )
+
+    status = models.CharField(
+        max_length=32,
+        choices=STATUS_CHOICES,
+        default="Зарегистрирован",
+        verbose_name="Статус (состояние)",
+    )
+    document_uploaded_file = models.FileField(
+        upload_to="blog/universal_rkd/documents/%Y/%m/",
+        blank=True,
+        null=True,
+        verbose_name="Документ (загружаемый файл)",
+    )
+    approval_document = models.FileField(
+        upload_to="blog/universal_rkd/approval/%Y/%m/",
+        blank=True,
+        null=True,
+        verbose_name="Лист утверждения",
+    )
+    attestation_document = models.FileField(
+        upload_to="blog/universal_rkd/attestation/%Y/%m/",
+        blank=True,
+        null=True,
+        verbose_name="Удостоверяющий лист",
+    )
+
+    checked_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="universal_rkd_checked",
+        verbose_name="Проверил / согласовал",
+    )
+    signature_checked = models.FileField(
+        upload_to="blog/universal_rkd/signatures/checked/%Y/%m/",
+        blank=True,
+        null=True,
+        verbose_name="Подпись проверки (файл)",
+    )
+    approved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="universal_rkd_approved",
+        verbose_name="Утвердил",
+    )
+    signature_approved = models.FileField(
+        upload_to="blog/universal_rkd/signatures/approved/%Y/%m/",
+        blank=True,
+        null=True,
+        verbose_name="Подпись утверждения (файл)",
+    )
+
+    quantity = models.CharField(max_length=10, blank=True, default="", verbose_name="Количество")
+    note = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        verbose_name="Примечание",
+        help_text="Заполняет разработчик документа.",
+    )
+    weight = models.CharField(max_length=10, blank=True, default="", verbose_name="Масса")
+    comment = models.TextField(max_length=1000, blank=True, default="", verbose_name="Комментарий")
+
+    class Meta:
+        verbose_name = "РКД"
+        verbose_name_plural = "РКД"
+        ordering = ("post_id", "section_sort_index", "order_in_section", "pk")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("post", "desig_document"),
+                name="blog_universalrkd_unique_desig_per_post",
+            ),
+            models.UniqueConstraint(
+                fields=("post", "name"),
+                name="blog_universalrkd_unique_name_per_post",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.desig_document} — {self.name}"
+
+    def clean(self):
+        super().clean()
+        if not (self.name or "").strip():
+            raise ValidationError({"name": "Укажите наименование."})
+        if not (self.desig_document or "").strip():
+            raise ValidationError({"desig_document": "Укажите обозначение документа."})
+        if self.post_id:
+            nm = (self.name or "").strip()
+            qs_name = UniversalRKD.objects.filter(post_id=self.post_id, name=nm)
+            if self.pk:
+                qs_name = qs_name.exclude(pk=self.pk)
+            if qs_name.exists():
+                raise ValidationError(
+                    {
+                        "name": "В этой разработке уже есть позиция журнала с таким наименованием."
+                    }
+                )
+            dg = (self.desig_document or "").strip()
+            qs_des = UniversalRKD.objects.filter(post_id=self.post_id, desig_document=dg)
+            if self.pk:
+                qs_des = qs_des.exclude(pk=self.pk)
+            if qs_des.exists():
+                raise ValidationError(
+                    {
+                        "desig_document": "В этой разработке уже есть позиция с таким обозначением документа."
+                    }
+                )
+        section = self.specification_section or ""
+        allowed = allowed_categories_for_section(section)
+        if not section_has_category_choices(section):
+            self.category = ""
+        else:
+            if not (self.category or "").strip():
+                raise ValidationError(
+                    {"category": "Укажите категорию (код вида документа)."}
+                )
+            if self.category not in allowed:
+                raise ValidationError(
+                    {
+                        "category": (
+                            f"Код «{self.category}» недопустим для раздела "
+                            f"«{self.get_specification_section_display()}»."
+                        )
+                    }
+                )
+        if self.status and self.status != "Зарегистрирован" and not self.document_uploaded_file:
+            raise ValidationError(
+                {"document_uploaded_file": "Загрузите документ для статуса, отличного от «Зарегистрирован»."}
+            )
+        if self.status == "Выпущен":
+            if not self.checked_by:
+                raise ValidationError({"checked_by": "Для статуса «Выпущен» укажите проверившего."})
+            if not self.signature_checked:
+                raise ValidationError({"signature_checked": "Для статуса «Выпущен» приложите подпись проверки."})
+        if self.validity_date and (not self.signature_checked or not self.signature_approved):
+            raise ValidationError(
+                {
+                    "validity_date": (
+                        "Дату планового пересмотра можно указать только при наличии подписей проверки и утверждения."
+                    ),
+                }
+            )
+
+    def save(self, *args, **kwargs):
+        if self.post_id:
+            post = self.post
+            if not (self.desig_document or "").strip() and post.desig_document_post:
+                self.desig_document = (post.desig_document_post or "")[:50]
+            if not (self.name or "").strip() and post.name:
+                self.name = post.name[:100]
+        self.section_sort_index = specification_section_sort_index(self.specification_section)
+        if self.pk is None and self.order_in_section == 0:
+            agg = UniversalRKD.objects.filter(
+                post_id=self.post_id,
+                specification_section=self.specification_section,
+            ).aggregate(m=Max("order_in_section"))
+            max_o = agg["m"] or 0
+            self.order_in_section = max_o + 1
+        super().save(*args, **kwargs)

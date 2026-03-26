@@ -1,10 +1,11 @@
 from django import forms
 from django.contrib import admin, messages
+from django.contrib.admin.utils import unquote
 from django.shortcuts import redirect, render
 from django.urls import path, reverse
 from django.utils import timezone
 from datetime import timedelta
-from django.utils.html import format_html
+from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 import re
 from django.db.models import Q, F, Value, TextField, DateField, BooleanField, Case, When
@@ -46,7 +47,7 @@ from enterprise_asset_management.models import (
 from shared_repository.models import SharedRepository, IndependentDocumentAcceptSignature
 
 from .admin_forms import RescheduleAdminForm
-from .forms import WorkAssignmentForm
+from .forms import WorkAssignmentForm, UniversalRKDForm
 from .helpers import (
     first_incomplete_step_code,
     next_step_code_after,
@@ -54,6 +55,7 @@ from .helpers import (
     wf_step_is_signed,
     wf_step_responsible,
     wf_step_set_comment,
+    RKD_CATEGORY_BY_SECTION,
 )
 from .models import (
     AddReportTechnicalProposal,
@@ -82,8 +84,42 @@ from .models import (
     WorkAssignment,
     WorkAssignmentDeadlineChange,
     Attachment,
+    UniversalRKD,
+    RKDDeveloper,
 )
 from .services import WorkAssignmentService
+
+
+def _inject_rkd_category_json(extra_context):
+    extra_context = extra_context or {}
+    extra_context["rkd_category_by_section_dict"] = {
+        k: list(v) for k, v in RKD_CATEGORY_BY_SECTION.items()
+    }
+    return extra_context
+
+
+def _admin_warning_triangle_html(*, title: str, color: str = "#f0ad4e") -> str:
+    """Как в журнале СИЗ / поверки: жёлтый треугольник с подсказкой."""
+    t = escape(title)
+    return (
+        f'<span title="{t}" style="display:inline-flex;align-items:center;">'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" '
+        f'viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="vertical-align: -2px;">'
+        f'<path d="M1 21h22L12 2 1 21z" fill="{color}"></path>'
+        f'<rect x="11" y="9" width="2" height="6" fill="#111"></rect>'
+        f'<rect x="11" y="17" width="2" height="2" fill="#111"></rect>'
+        f"</svg>"
+        f"</span>"
+    )
+
+
+def _universal_rkd_planned_review_show_warning(validity_date) -> bool:
+    """Предупреждение, если до даты пересмотра осталось не более 60 дней или срок уже прошёл."""
+    if not validity_date:
+        return False
+    today = timezone.now().date()
+    return (validity_date - today).days <= 60
+
 
 class RequiredFileGenericFormSet(BaseGenericInlineFormSet):
     parent_status_field = "status"
@@ -146,15 +182,80 @@ class RevisionTaskInline(admin.TabularInline):
 
 class WorkAssignmentInline(admin.TabularInline):
     model = WorkAssignment
-    extra = 1
+    extra = 0
+    fields = (
+        "name",
+        "category",
+        "executor",
+        "author",
+        "date_of_creation",
+        "last_editor",
+        "current_responsible",
+        "version",
+        "task",
+        "target_deadline",
+        "result",
+    )
+    show_change_link = True
+
+    def get_extra_buttons(self, obj):
+        if obj and obj.id:
+            url = reverse("admin:blog_workassignment_add") + f"?post={obj.id}"
+            return format_html(
+                '<a class="button" href="{}">➕ Добавить рабочее задание</a>', url
+            )
+        return ""
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = super().get_fieldsets(request, obj)
+        if obj and obj.id:
+            return [
+                (
+                    f"Рабочие задания {self.get_extra_buttons(obj)}",
+                    {"fields": self.fields},
+                )
+            ]
+        return fieldsets
+
+
+class UniversalRKDInline(admin.TabularInline):
+    model = UniversalRKD
+    form = UniversalRKDForm
+    extra = 0
+    show_change_link = True
+    fields = (
+        "specification_section",
+        "category",
+        "desig_document",
+        "name",
+        "status",
+    )
 
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
-    list_display = ('name', 'desig_document_post', 'author', 'date_of_creation', 'date_of_change')
-    search_fields = ('name',)
+    change_form_template = "admin/blog/universal_rkd_category_change_form.html"
+    list_display = (
+        'name',
+        'desig_document_post',
+        'modification_code',
+        'author',
+        'date_of_creation',
+        'date_of_change',
+    )
+    search_fields = ('name', 'modification_code')
     readonly_fields = ('date_of_change',)
-    inlines = [ListTechnicalProposalInline, TaskForDesignWorkInline, RevisionTaskInline, WorkAssignmentInline]
+    inlines = [
+        # ListTechnicalProposalInline,  # ВТП — в форме «Разработка» не показываем
+        TaskForDesignWorkInline,
+        RevisionTaskInline,
+        WorkAssignmentInline,
+        UniversalRKDInline,
+    ]
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        extra_context = _inject_rkd_category_json(extra_context)
+        return super().changeform_view(request, object_id, form_url, extra_context)
 
     def save_formset(self, request, form, formset, change):
         instances = formset.save(commit=False)
@@ -187,6 +288,228 @@ try:
 except admin.sites.NotRegistered:
     pass
 admin.site.register(Post, PostAdmin)
+
+
+@admin.register(RKDDeveloper)
+class RKDDeveloperAdmin(admin.ModelAdmin):
+    search_fields = ("name",)
+
+
+@admin.register(UniversalRKD)
+class UniversalRKDAdmin(admin.ModelAdmin):
+    change_form_template = "admin/blog/universal_rkd_category_change_form.html"
+    change_list_template = "admin/blog/universalrkd/change_list.html"
+    form = UniversalRKDForm
+    list_display = (
+        "rkd_post_column",
+        "rkd_specification_section",
+        "rkd_sheet_format",
+        "position",
+        "desig_document",
+        "name",
+        "rkd_documents_column",
+        "quantity",
+        "rkd_planned_review_warning",
+        "note",
+    )
+    list_display_links = ("name",)
+    list_filter = ("specification_section", "status", "post")
+    search_fields = ("name", "desig_document", "category", "post__name")
+
+    @admin.display(description="Разработка (модификация)", ordering="post")
+    def rkd_post_column(self, obj):
+        return obj.post or "—"
+
+    @admin.display(description="Раздел спецификации", ordering="section_sort_index")
+    def rkd_specification_section(self, obj):
+        return obj.get_specification_section_display()
+
+    @admin.display(description="Формат (листа)", ordering="sheet_size")
+    def rkd_sheet_format(self, obj):
+        return obj.get_sheet_size_display()
+
+    @admin.display(description="Документ")
+    def rkd_documents_column(self, obj):
+        parts = []
+        if obj.document_uploaded_file:
+            parts.append(
+                format_html(
+                    '<a href="{}" target="_blank" rel="noopener noreferrer">Документ</a>',
+                    obj.document_uploaded_file.url,
+                )
+            )
+        if obj.approval_document:
+            parts.append(
+                format_html(
+                    '<a href="{}" target="_blank" rel="noopener noreferrer">Лист утверждения</a>',
+                    obj.approval_document.url,
+                )
+            )
+        if obj.attestation_document:
+            parts.append(
+                format_html(
+                    '<a href="{}" target="_blank" rel="noopener noreferrer">Удостоверяющий лист</a>',
+                    obj.attestation_document.url,
+                )
+            )
+        if not parts:
+            return "—"
+        return mark_safe("<br>".join(str(p) for p in parts))
+
+    @admin.display(
+        description="Срок пересмотра истекает",
+        ordering="validity_date",
+    )
+    def rkd_planned_review_warning(self, obj):
+        if not _universal_rkd_planned_review_show_warning(obj.validity_date):
+            return "—"
+        return mark_safe(
+            _admin_warning_triangle_html(
+                title="Плановый пересмотр: осталось не более 60 дней или срок прошёл",
+            )
+        )
+
+    @admin.display(description="Напоминание о пересмотре (до 60 дн.)")
+    def rkd_planned_review_warning_display(self, obj):
+        if not obj or not getattr(obj, "validity_date", None):
+            return "—"
+        if not _universal_rkd_planned_review_show_warning(obj.validity_date):
+            return "—"
+        return mark_safe(
+            _admin_warning_triangle_html(
+                title="Плановый пересмотр: осталось не более 60 дней или срок прошёл",
+            )
+        )
+
+    autocomplete_fields = (
+        "post",
+        "author",
+        "last_editor",
+        "current_responsible",
+        "checked_by",
+        "approved_by",
+        "develop_org",
+        "internal_recipients",
+        "external_recipients",
+    )
+    readonly_fields = (
+        "date_of_creation",
+        "date_of_change",
+        "rkd_planned_review_warning_display",
+    )
+
+    fieldsets = (
+        (
+            "Разработка и классификация",
+            {
+                "fields": (
+                    "post",
+                    "specification_section",
+                    "category",
+                    "name",
+                    "desig_document",
+                    "primary_use",
+                    "change_number",
+                    "litera",
+                    "trl",
+                )
+            },
+        ),
+        (
+            "Содержание и статус",
+            {
+                "fields": (
+                    "sheet_size",
+                    "position",
+                    "info_format",
+                    "validity_date",
+                    "rkd_planned_review_warning_display",
+                    "language",
+                    "internal_recipients",
+                    "external_recipients",
+                    "status",
+                    "related_documents",
+                    "develop_org",
+                    "document_uploaded_file",
+                    "approval_document",
+                    "attestation_document",
+                )
+            },
+        ),
+        (
+            "Согласование",
+            {
+                "fields": (
+                    "checked_by",
+                    "signature_checked",
+                    "approved_by",
+                    "signature_approved",
+                )
+            },
+        ),
+        (
+            "Дополнительно",
+            {
+                "fields": (
+                    "quantity",
+                    "note",
+                    "weight",
+                    "comment",
+                )
+            },
+        ),
+        (
+            "Ответственные",
+            {
+                "fields": (
+                    "author",
+                    "current_responsible",
+                    "last_editor",
+                    "version",
+                    "date_of_creation",
+                    "date_of_change",
+                )
+            },
+        ),
+    )
+
+    def get_ordering(self, request):
+        if request.GET.get("post__id__exact"):
+            return ("section_sort_index", "order_in_section", "pk")
+        return ("post_id", "section_sort_index", "order_in_section", "pk")
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = dict(extra_context or {})
+        post_id = request.GET.get("post__id__exact")
+        if post_id:
+            extra_context["rkd_breadcrumb_post"] = Post.objects.filter(pk=post_id).first()
+        return super().changelist_view(request, extra_context)
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        extra_context = dict(extra_context or {})
+        extra_context = _inject_rkd_category_json(extra_context)
+        if object_id:
+            obj = self.get_object(request, unquote(object_id))
+            if obj is not None:
+                if obj.post_id:
+                    extra_context["rkd_breadcrumb_post"] = obj.post
+                extra_context["rkd_breadcrumb_record_title"] = str(obj)
+        else:
+            post_q = request.GET.get("post")
+            if post_q:
+                extra_context["rkd_breadcrumb_post"] = Post.objects.filter(pk=post_q).first()
+        return super().changeform_view(request, object_id, form_url, extra_context)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related("post", "develop_org")
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
 
 @admin.register(ListTechnicalProposal)
 class ListTechnicalProposalAdmin(admin.ModelAdmin):
@@ -685,16 +1008,16 @@ class IncomingLetterAdmin(admin.ModelAdmin):
     form = Form
 
     list_display = (
-        'registration_number',
-        'sender_identification',
-        'sender',
         'letter_date_display',
         'date_of_receipt_display',
+        'sender_identification',
+        'sender',
         'urgent_warning',
         'receipt_method',
         'subject',
         'replies_link',
         'current_responsible',
+        'registration_number',
     )
     list_display_links = ('sender_identification',)
     list_filter = ('receipt_method', 'letter_date')
@@ -1229,6 +1552,18 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 # Кастомные колонки
+    def _warning_triangle_svg(self, *, title: str, color: str) -> str:
+        return (
+            f'<span title="{title}" style="display:inline-flex;align-items:center;">'
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" '
+            f'viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="vertical-align: -2px;">'
+            f'<path d="M1 21h22L12 2 1 21z" fill="{color}"></path>'
+            f'<rect x="11" y="9" width="2" height="6" fill="#111"></rect>'
+            f'<rect x="11" y="17" width="2" height="2" fill="#111"></rect>'
+            f"</svg>"
+            f"</span>"
+        )
+
     def serial_number_link(self, obj):
         if not obj.serial_number:
             return "—"
@@ -1250,9 +1585,8 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
         days_left = (obj.next_calibration_date - today).days
 
         if days_left <= 45:
-            return mark_safe(
-                '<span style="color: #f0ad4e; font-weight: bold;">⚠️</span>'
-            )
+            color = "#9aa0a6" if obj.status == "in_stock" else "#f0ad4e"
+            return mark_safe(self._warning_triangle_svg(title="Срок поверки истекает", color=color))
 
         return "—"
 
@@ -1264,9 +1598,8 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
         today = timezone.now().date()
         days_left = (obj.planned_calibration_date - today).days
         if days_left <= 45:
-            return mark_safe(
-                '<span style="color: #f0ad4e; font-weight: bold;">⚠️</span>'
-            )
+            color = "#9aa0a6" if obj.status == "in_stock" else "#f0ad4e"
+            return mark_safe(self._warning_triangle_svg(title="Срок калибровки истекает", color=color))
         return "—"
 
     calibration_date_warning.short_description = "Срок калибровки истекает"
@@ -1553,25 +1886,6 @@ class ProductionAreaAdmin(admin.ModelAdmin):
     def purpose_display(self, obj):
         return obj.purpose or "—"
 
-class WorkAssignmentInline(admin.TabularInline):
-    model = WorkAssignment
-    extra = 0
-    fields = ('name', 'deadline', 'result')
-    readonly_fields = ('name',)
-
-    def get_extra_buttons(self, obj):
-        if obj and obj.id:
-            url = reverse('admin:blog_workassignment_add') + f'?technical_assignment={obj.id}'
-            return format_html('<a class="button" href="{}">➕ Добавить рабочее задание</a>', url)
-        return ''
-
-    def get_fieldsets(self, request, obj=None):
-        """Добавляем кнопку прямо в заголовок инлайна"""
-        fieldsets = super().get_fieldsets(request, obj)
-        if obj and obj.id:
-            return [(f"Рабочие задания {self.get_extra_buttons(obj)}", {'fields': self.fields})]
-        return fieldsets
-
 @admin.register(TaskForDesignWork)
 class TaskForDesignWorkAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'author', 'date_of_creation', 'status', 'version', 'post', 'open_task_link', 'add_task_link')
@@ -1676,6 +1990,25 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                        'deadline_version','reschedule_count')
         }),
     )
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        form = super().get_form(request, obj=obj, change=change, **kwargs)
+        for name in (
+            "target_deadline",
+            "hard_deadline",
+            "time_window_start",
+            "time_window_end",
+        ):
+            if name in form.base_fields:
+                form.base_fields[name].disabled = True
+        return form
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        post_id = request.GET.get("post")
+        if post_id:
+            initial["post"] = post_id
+        return initial
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)

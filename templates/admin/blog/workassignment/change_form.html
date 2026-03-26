@@ -13,33 +13,67 @@
   {{ block.super }}
   <script>
     document.addEventListener("DOMContentLoaded", function () {
+      var form =
+        document.querySelector("#workassignment_form") ||
+        document.querySelector("#content-main form");
+      var dirty = false;
+      if (form) {
+        form.addEventListener("input", function () {
+          dirty = true;
+        });
+        form.addEventListener("change", function () {
+          dirty = true;
+        });
+      }
+
+      document.addEventListener(
+        "click",
+        function (e) {
+          var a = e.target.closest("a[href*='reschedule']");
+          if (!a || !form) return;
+          if (!dirty) return;
+          e.preventDefault();
+          e.stopPropagation();
+          window.scrollTo({ top: 0, behavior: "smooth" });
+          var old = document.getElementById("reschedule-save-first-msg");
+          if (old) old.remove();
+          var ul = document.createElement("ul");
+          ul.className = "messagelist";
+          ul.id = "reschedule-save-first-msg";
+          ul.innerHTML =
+            '<li class="warning">Сначала сохраните изменения («Сохранить» или «Сохранить и продолжить редактирование»), затем снова нажмите «Перенести срок».</li>';
+          var content = document.getElementById("content");
+          if (content) {
+            content.insertBefore(ul, content.firstChild);
+          }
+        },
+        true
+      );
+
       var link = document.getElementById("reschedule-link");
       if (!link) return;
 
-      // Найдём строку поля (замени target_deadline при необходимости)
-      var row = document.querySelector(".form-row.field-target_deadline")
-             || document.querySelector(".fieldBox.field-target_deadline");
+      var row =
+        document.querySelector(".form-row.field-target_deadline") ||
+        document.querySelector(".fieldBox.field-target_deadline");
       if (!row) return;
 
       var target = row.querySelector("input, select, textarea") || row;
 
-      // Делаем «кнопку» из ссылки
       var moved = link.cloneNode(true);
-      moved.classList.add("button","default");
+      moved.removeAttribute("id");
+      moved.classList.add("button", "default");
       moved.style.marginLeft = ".5rem";
 
-      // Обёртка: поле слева, кнопка справа
       var wrap = document.createElement("div");
       wrap.style.display = "flex";
       wrap.style.alignItems = "center";
       wrap.style.gap = ".5rem";
 
-      // Вставляем перед полем и кладём внутрь: СНАЧАЛА поле, ПОТОМ кнопку
       target.parentElement.insertBefore(wrap, target);
       wrap.appendChild(target);
       wrap.appendChild(moved);
 
-      // Убираем оригинал из object tools
       var li = link.closest("li");
       if (li) li.remove();
     });

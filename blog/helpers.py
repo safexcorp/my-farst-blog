@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 from django.contrib.auth import get_user_model
 
@@ -82,4 +83,75 @@ def next_step_code_after(route, current_code: str) -> Optional[str]:
     except ValueError:
         return None
     return ordered_codes[i + 1] if i + 1 < len(ordered_codes) else None
+
+
+# РКД: разделы спецификации, коды вида документа; словарь для JS (категория от раздела).
+
+SPECIFICATION_SECTION_ORDER: tuple[str, ...] = (
+    "documentation",
+    "complexes",
+    "assembly_units",
+    "parts",
+    "standard_products",
+    "other_products",
+    "materials",
+    "kits",
+    "other_kits",
+)
+
+SPECIFICATION_SECTION_CHOICES: tuple[tuple[str, str], ...] = (
+    ("documentation", "Документация"),
+    ("complexes", "Комплексы"),
+    ("assembly_units", "Сборочные единицы"),
+    ("parts", "Детали"),
+    ("standard_products", "Стандартные изделия"),
+    ("other_products", "Прочие изделия"),
+    ("materials", "Материалы"),
+    ("kits", "Комплекты"),
+    ("other_kits", "Прочие комплекты"),
+)
+
+_CATEGORY_DOCUMENTATION: tuple[str, ...] = (
+    "СП",
+    "СБ",
+    "ЭМИ",
+    "ГЧ",
+    "Э3",
+    "ПЭ3",
+    "ТУ",
+    "РЭ",
+    "ПС",
+    "ПМ",
+    "УЧ",
+    "ПК",
+    "ВМ",
+    "ВП",
+    "ИС",
+    "РР",
+    "РК",
+)
+
+RKD_CATEGORY_BY_SECTION: dict[str, tuple[str, ...]] = {
+    "documentation": _CATEGORY_DOCUMENTATION,
+}
+
+
+def rkd_category_by_section_json() -> str:
+    """JSON для JS в админке (зависимый select «Категория»)."""
+    return json.dumps({k: list(v) for k, v in RKD_CATEGORY_BY_SECTION.items()}, ensure_ascii=False)
+
+
+def specification_section_sort_index(code: str) -> int:
+    try:
+        return SPECIFICATION_SECTION_ORDER.index(code)
+    except ValueError:
+        return len(SPECIFICATION_SECTION_ORDER)
+
+
+def allowed_categories_for_section(section: str) -> frozenset[str]:
+    return frozenset(RKD_CATEGORY_BY_SECTION.get(section, ()))
+
+
+def section_has_category_choices(section: str) -> bool:
+    return bool(RKD_CATEGORY_BY_SECTION.get(section, ()))
 
