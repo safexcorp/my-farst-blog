@@ -1,6 +1,11 @@
+from typing import Optional
 from django import forms
+from django.contrib.admin.widgets import AdminDateWidget
 from django.utils import timezone
-from .models import WorkAssignment
+from .models import WorkAssignment, UniversalRKD
+from .helpers import RKD_CATEGORY_BY_SECTION, section_has_category_choices
+
+_CATEGORY_PLACEHOLDER = [("", "---------")]
 
 
 class WorkAssignmentForm(forms.ModelForm):
@@ -50,4 +55,59 @@ class WorkAssignmentForm(forms.ModelForm):
         if target_deadline and today >= target_deadline and not control_date:
             self.add_error('control_date', 'После наступления целевого срока необходимо указать дату контроля.')
 
+        return cleaned
+
+
+class UniversalRKDForm(forms.ModelForm):
+    _cat = UniversalRKD._meta.get_field("category")
+    category = forms.ChoiceField(
+        label=_cat.verbose_name,
+        required=False,
+        choices=_CATEGORY_PLACEHOLDER,
+    )
+
+    class Meta:
+        model = UniversalRKD
+        fields = "__all__"
+        exclude = ("order_in_section",)
+        widgets = {
+            "validity_date": AdminDateWidget(),
+        }
+
+    def _current_specification_section(self) -> Optional[str]:
+        if self.is_bound:
+            key = self.add_prefix("specification_section")
+            raw = self.data.get(key)
+            if raw is None:
+                for k in self.data.keys():
+                    if k == "specification_section" or k.endswith("-specification_section"):
+                        raw = self.data.get(k)
+                        break
+            if raw is not None:
+                s = (raw or "").strip()
+                return s or None
+        initial = getattr(self, "initial", None) or {}
+        v = initial.get("specification_section")
+        if v not in (None, ""):
+            return str(v).strip()
+        if getattr(self.instance, "pk", None):
+            v = getattr(self.instance, "specification_section", None)
+            if v not in (None, ""):
+                return str(v).strip()
+        return None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        section = self._current_specification_section()
+        cats = RKD_CATEGORY_BY_SECTION.get(section or "", ()) or ()
+        if cats:
+            self.fields["category"].choices = _CATEGORY_PLACEHOLDER + [(c, c) for c in cats]
+        else:
+            self.fields["category"].choices = list(_CATEGORY_PLACEHOLDER)
+
+    def clean(self):
+        cleaned = super().clean()
+        section = cleaned.get("specification_section") or ""
+        if not section_has_category_choices(section):
+            cleaned["category"] = ""
         return cleaned

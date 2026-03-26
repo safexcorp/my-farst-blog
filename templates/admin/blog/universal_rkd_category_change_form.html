@@ -1,0 +1,20 @@
+{% extends "admin/change_form.html" %}
+{% load i18n admin_urls static %}
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+&rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+&rsaquo; {% if has_view_permission %}<a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>{% else %}{{ opts.verbose_name_plural|capfirst }}{% endif %}
+{% if rkd_breadcrumb_post %}
+&rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}?post__id__exact={{ rkd_breadcrumb_post.pk }}">{{ rkd_breadcrumb_post.name }}</a>
+{% endif %}
+&rsaquo; {% if add %}{% blocktranslate with name=opts.verbose_name %}Add {{ name }}{% endblocktranslate %}{% else %}{% if rkd_breadcrumb_record_title %}{{ rkd_breadcrumb_record_title }}{% else %}{{ original|truncatewords:"18" }}{% endif %}{% endif %}
+</div>
+{% endblock %}
+{% block extrahead %}
+{{ block.super }}
+{% if rkd_category_by_section_dict %}
+{{ rkd_category_by_section_dict|json_script:"rkd-category-by-section" }}
+{% endif %}
+<script src="{% static 'blog/js/universal_rkd_category.js' %}"></script>
+{% endblock %}

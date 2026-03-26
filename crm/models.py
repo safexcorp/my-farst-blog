@@ -12,6 +12,29 @@ def validate_file_size(value):
         raise ValidationError('Размер одного файла не должен превышать 20 МБ')
 
 
+def _next_registration_dated_prefix_monthly_suffix(
+    model_cls, ref_date, kind: str, exclude_pk=None
+) -> str:
+    prefix = f"{kind}-{ref_date:%y-%m}-"
+    qs = model_cls.objects.filter(registration_number__startswith=prefix).exclude(
+        registration_number=""
+    )
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    max_n = 0
+    plen = len(prefix)
+    for rn in qs.values_list("registration_number", flat=True):
+        if not rn or len(rn) <= plen:
+            continue
+        tail = rn[plen:]
+        try:
+            max_n = max(max_n, int(tail))
+        except ValueError:
+            continue
+    num = max_n + 1
+    return f"{prefix}{num:02d}"
+
+
 class Notifications(models.Model):
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, verbose_name='Автор')
     title = models.CharField(max_length=200, blank=True, null=True, verbose_name='Заголовок')
@@ -284,21 +307,10 @@ class IncomingLetter(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.registration_number:
-            from django.db.models import Max
-            from datetime import date
-            today = date.today()
-            prefix = f"ВХ-{today:%y-%m}-"
-            last = IncomingLetter.objects.filter(
-                registration_number__startswith=prefix
-            ).aggregate(Max('registration_number'))['registration_number__max']
-            if last:
-                try:
-                    num = int(last.split('-')[-1]) + 1
-                except (ValueError, IndexError):
-                    num = 1
-            else:
-                num = 1
-            self.registration_number = f"{prefix}{num:02d}"
+            ref_date = self.date_of_receipt.date() if self.date_of_receipt else timezone.localdate()
+            self.registration_number = _next_registration_dated_prefix_monthly_suffix(
+                IncomingLetter, ref_date, "ВХ", exclude_pk=self.pk
+            )
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -422,21 +434,10 @@ class OutgoingLetter(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.registration_number:
-            from django.db.models import Max
-            from datetime import date
-            today = date.today()
-            prefix = f"ИСХ-{today:%y-%m}-"
-            last = OutgoingLetter.objects.filter(
-                registration_number__startswith=prefix
-            ).aggregate(Max('registration_number'))['registration_number__max']
-            if last:
-                try:
-                    num = int(last.split('-')[-1]) + 1
-                except (ValueError, IndexError):
-                    num = 1
-            else:
-                num = 1
-            self.registration_number = f"{prefix}{num:02d}"
+            ref_date = self.letter_date if self.letter_date else timezone.localdate()
+            self.registration_number = _next_registration_dated_prefix_monthly_suffix(
+                OutgoingLetter, ref_date, "ИСХ", exclude_pk=self.pk
+            )
         super().save(*args, **kwargs)
 
     def __str__(self):
