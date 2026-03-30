@@ -726,3 +726,411 @@ class QMSDocumentAcceptSignature(models.Model):
 
     def __str__(self):
         return f"Подпись для {self.document.document_title}"
+
+
+class AdministrativeOrder(models.Model):
+    """Модель Приказы"""
+
+    # Предприятие
+    ENTERPRISE_CHOICES = [
+        ('OOO_SISTEMA', 'ООО "СИСТЕМА"'),
+        ('OOO_KOMPLEKS', 'ООО "КОМПЛЕКС"'),
+    ]
+
+    # Область применения
+    SCOPE_CHOICES = [
+        ('main', 'Основная деятельность'),
+        ('administrative', 'Административно-хозяйственная деятельность'),
+    ]
+
+    # Статус
+    STATUS_CHOICES = [
+        ('active', 'Действует'),
+        ('archived', 'Архив'),
+    ]
+
+    # Ознакомление
+    ACCEPT_CHOICES = [
+        ('---', '---'),
+        ('ЭЦП', 'ЭЦП'),
+    ]
+
+    # Основные поля
+    id = models.AutoField(primary_key=True, verbose_name='Уникальный идентификатор')
+    enterprise = models.CharField(
+        max_length=20,
+        verbose_name='Предприятие',
+        choices=ENTERPRISE_CHOICES,
+        default='OOO_SISTEMA',
+        help_text='Выбор из предопределенного списка'
+    )
+    registration_number = models.CharField(
+        max_length=20,
+        verbose_name='Регистрационный номер',
+        unique=True,
+        blank=True,
+        help_text='Формируем порядковый номер в рамках текущего года и индекс предприятия (С или К), (Пример:1-2026/С)'
+    )
+    order_date = models.DateField(
+        verbose_name='Дата приказа',
+        help_text='YYYY-MM-DD'
+    )
+    approval = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name='approved_orders',
+        verbose_name='Утвердил',
+        blank=True,
+        null=True,
+        help_text='Выбор из списка пользователей'
+    )
+    signature_approval = models.FileField(
+        upload_to='administrative_orders/signatures/approval/%Y/%m/%d/',
+        verbose_name='Подпись (загружаемый файл)',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+        help_text='Файл ЭЦП утверждения (только один файл)'
+    )
+    subject = models.CharField(
+        max_length=200,
+        verbose_name='Тема',
+        help_text='Заполняется по данным из текста документа, 200 символов мах'
+    )
+    accept = models.CharField(
+        max_length=10,
+        verbose_name='Ознакомление',
+        choices=ACCEPT_CHOICES,
+        default='---',
+        blank=True,
+        null=True
+    )
+    scope = models.CharField(
+        max_length=20,
+        verbose_name='Область применения',
+        choices=SCOPE_CHOICES,
+        default='main',
+        help_text='Основная деятельность или Административно-хозяйственная деятельность'
+    )
+    status = models.CharField(
+        max_length=10,
+        verbose_name='Статус',
+        choices=STATUS_CHOICES,
+        default='active'
+    )
+    validity_date = models.DateField(
+        verbose_name='Срок пересмотра',
+        blank=True,
+        null=True,
+        help_text='Обязательно, если статус "Действует". За 30 дней появится предупреждение'
+    )
+    note = models.TextField(
+        max_length=2000,
+        verbose_name='Примечание',
+        blank=True,
+        null=True
+    )
+
+    # Файлы
+    uploaded_file = models.FileField(
+        upload_to='administrative_orders/documents/%Y/%m/%d/',
+        verbose_name='Загружаемый файл',
+        validators=[validate_file_size],
+        help_text='Основной файл приказа (только один файл)'
+    )
+    app_uploaded_file = models.FileField(
+        upload_to='administrative_orders/applications/%Y/%m/%d/',
+        verbose_name='Приложение (загружаемый файл / файлы)',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+        help_text='Файлы приложения'
+    )
+
+    # Системные поля
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='authored_orders',
+        verbose_name='Создатель (автор)'
+    )
+    date_of_creation = models.DateTimeField(
+        verbose_name='Дата и время создания',
+        default=timezone.now
+    )
+    last_editor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='edited_orders',
+        verbose_name='Последний редактор'
+    )
+    date_of_change = models.DateTimeField(
+        verbose_name='Дата и время последнего изменения',
+        auto_now=True
+    )
+    current_responsible = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='responsible_orders',
+        verbose_name='Текущий ответственный'
+    )
+    version = models.CharField(
+        max_length=3,
+        verbose_name='Версия',
+        default='1'
+    )
+
+    class Meta:
+        verbose_name = 'Приказ'
+        verbose_name_plural = 'Приказы'
+        ordering = ['-order_date']
+
+    def __str__(self):
+        return f"{self.registration_number} - {self.subject[:50]}"
+
+    def clean(self):
+        """Валидация модели"""
+        # Проверка даты пересмотра
+        if self.validity_date:
+            from django.utils import timezone
+            today = timezone.now().date()
+
+            # Нельзя ставить прошедшую дату
+            if self.validity_date < today:
+                raise ValidationError({
+                    'validity_date': 'Дата пересмотра не может быть раньше сегодняшнего дня!'
+                })
+
+            if self.validity_date:
+                # Нельзя ставить прошедшую дату
+                if self.validity_date < today:
+                    raise ValidationError({
+                        'validity_date': 'Дата пересмотра не может быть раньше сегодняшнего дня!'
+                    })
+
+                # Дата пересмотра должна быть позже даты приказа
+                if self.order_date and self.validity_date <= self.order_date:
+                    raise ValidationError({
+                        'validity_date': 'Дата пересмотра должна быть позже даты приказа!'
+                    })
+
+            # Если статус "Действует", дата пересмотра обязательна
+            if self.status == 'active' and not self.validity_date:
+                raise ValidationError({
+                    'validity_date': 'Для документа со статусом "Действует" обязательно указать дату пересмотра!'
+                })
+
+    def save(self, *args, **kwargs):
+        """Автоматическое формирование регистрационного номера"""
+        if not self.registration_number:
+            from datetime import date
+            today = date.today()
+            year = today.year
+
+            # Определяем индекс предприятия
+            enterprise_index = 'С' if self.enterprise == 'OOO_SISTEMA' else 'К'
+
+            # Получаем последний номер в текущем году
+            last_order = AdministrativeOrder.objects.filter(
+                registration_number__endswith=f"-{year}/{enterprise_index}"
+            ).order_by('-id').first()
+
+            if last_order and last_order.registration_number:
+                try:
+                    last_num = int(last_order.registration_number.split('-')[0])
+                    new_num = last_num + 1
+                except (ValueError, IndexError):
+                    new_num = 1
+            else:
+                new_num = 1
+
+            self.registration_number = f"{new_num}-{year}/{enterprise_index}"
+
+        super().save(*args, **kwargs)
+
+    def is_validity_approaching(self):
+        """Проверка приближения срока пересмотра (30 дней)"""
+        if not self.validity_date or self.status != 'active':
+            return False
+        from django.utils import timezone
+        days_until = (self.validity_date - timezone.now().date()).days
+        return 0 <= days_until <= 30
+
+
+class AdministrativeOrderAcceptSignature(models.Model):
+    """Множественные подписи ознакомления для приказов"""
+    order = models.ForeignKey(
+        AdministrativeOrder,
+        on_delete=models.CASCADE,
+        related_name='accept_signatures',
+        verbose_name='Приказ'
+    )
+    signature_file = models.FileField(
+        upload_to='administrative_orders/signatures/accept/%Y/%m/%d/',
+        verbose_name='Файл подписи ознакомления',
+        validators=[validate_file_size],
+        help_text='Файл ЭЦП ознакомления'
+    )
+    uploaded_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='Дата загрузки'
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        verbose_name='Загрузил'
+    )
+
+    class Meta:
+        verbose_name = 'Подпись ознакомления'
+        verbose_name_plural = 'Подписи ознакомления (приказы)'
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"Подпись для {self.order.registration_number}"
+
+
+class DocumentTemplate(models.Model):
+    """Модель Шаблоны документов"""
+
+    id = models.AutoField(primary_key=True, verbose_name='Уникальный идентификатор')
+    document_template = models.CharField(
+        max_length=100,
+        verbose_name='Шаблон документа (наименование)',
+        unique=True,
+        help_text='Все текстовые символы - 100 символов max'
+    )
+
+    # Файлы
+    uploaded_file = models.FileField(
+        upload_to='templates/documents/%Y/%m/%d/',
+        verbose_name='Загружаемый файл',
+        validators=[validate_file_size],
+        help_text='Основной файл шаблона (только один файл)'
+    )
+    app_uploaded_file = models.FileField(
+        upload_to='templates/applications/%Y/%m/%d/',
+        verbose_name='Шаблон',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+        help_text='Файл шаблона'
+    )
+
+    # Дополнительные поля
+    validity_date = models.DateField(
+        verbose_name='Срок пересмотра',
+        blank=True,
+        null=True,
+        help_text='За 30 дней до даты появится предупреждение'
+    )
+    document_purpose = models.TextField(
+        max_length=5000,
+        verbose_name='Назначение документа',
+        blank=True,
+        null=True,
+        help_text='Для чего, для кого предназначен документ'
+    )
+    note = models.TextField(
+        max_length=2000,
+        verbose_name='Примечание',
+        blank=True,
+        null=True
+    )
+
+    # Системные поля
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='authored_templates',
+        verbose_name='Создатель (автор)'
+    )
+    date_of_creation = models.DateTimeField(
+        verbose_name='Дата и время создания',
+        default=timezone.now
+    )
+    last_editor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='edited_templates',
+        verbose_name='Последний редактор'
+    )
+    date_of_change = models.DateTimeField(
+        verbose_name='Дата и время последнего изменения',
+        auto_now=True
+    )
+    current_responsible = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='responsible_templates',
+        verbose_name='Текущий ответственный'
+    )
+    version = models.CharField(
+        max_length=3,
+        verbose_name='Версия',
+        default='1'
+    )
+
+    class Meta:
+        verbose_name = 'Шаблон'
+        verbose_name_plural = 'Шаблоны'
+        ordering = ['-date_of_creation']
+
+    def __str__(self):
+        return f"{self.document_template} (v{self.version})"
+
+    def clean(self):
+        """Валидация модели"""
+        # Проверка даты пересмотра
+        if self.validity_date:
+            from django.utils import timezone
+            today = timezone.now().date()
+
+            # Нельзя ставить прошедшую дату
+            if self.validity_date < today:
+                raise ValidationError({
+                    'validity_date': 'Дата пересмотра не может быть раньше сегодняшнего дня!'
+                })
+
+    def is_validity_approaching(self):
+        """Проверка приближения срока пересмотра (30 дней)"""
+        if not self.validity_date:
+            return False
+        from django.utils import timezone
+        days_until = (self.validity_date - timezone.now().date()).days
+        return 0 <= days_until <= 30
+
+
+class DocumentTemplateAcceptSignature(models.Model):
+    """Множественные Приложения (загружаемый файл / файлы"""
+    template = models.ForeignKey(
+        DocumentTemplate,
+        on_delete=models.CASCADE,
+        related_name='accept_signatures',
+        verbose_name='Приложение (загружаемый файл / файлы'
+    )
+    signature_file = models.FileField(
+        upload_to='templates/signatures/accept/%Y/%m/%d/',
+        verbose_name='Приложение (загружаемый файл / файлы)',
+        validators=[validate_file_size],
+        help_text='Приложение (загружаемый файл / файлы)'
+    )
+    uploaded_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='Дата загрузки'
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        verbose_name='Загрузил'
+    )
+
+    class Meta:
+        verbose_name = 'Файлы'
+        verbose_name_plural = 'Приложение (загружаемый файл / файлы)'
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"Файлы для {self.template.document_template}"
