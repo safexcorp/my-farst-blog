@@ -44,7 +44,9 @@ from enterprise_asset_management.models import (
     TransportRepairFile,
     ProductionAreaLocation,
 )
-from shared_repository.models import SharedRepository, IndependentDocumentAcceptSignature, KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature
+from shared_repository.models import (SharedRepository, IndependentDocumentAcceptSignature,
+KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature, AdministrativeOrder,
+AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature)
 
 from .admin_forms import RescheduleAdminForm
 from .forms import WorkAssignmentForm, UniversalRKDForm
@@ -2899,16 +2901,16 @@ class QMSDocumentAcceptSignatureInline(admin.TabularInline):
 @admin.register(QMSDocument)
 class QMSDocumentAdmin(admin.ModelAdmin):
     list_display = [
-        'display_category',
         'display_document_title',
+        'display_category',
         'change_number',
         'display_approval',
         'display_date_approval',
         'display_accept',
-        'display_version',
         'display_uploaded_file',
         'display_review_date',
         'display_review_status',
+        'document_purpose'
     ]
 
     list_filter = [
@@ -2988,6 +2990,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
             )
         }),
     )
+
 
     def display_category(self, obj):
         """Отображение категории"""
@@ -3134,3 +3137,429 @@ class QMSDocumentAdmin(admin.ModelAdmin):
    # search_fields = ['document__document_title']
     #readonly_fields = ['uploaded_at']
 
+      #Приказы
+class AdministrativeOrderAcceptSignatureInline(admin.TabularInline):
+    """Inline для множественных подписей ознакомления приказов"""
+    model = AdministrativeOrderAcceptSignature
+    extra = 1
+    fields = ['signature_file', 'uploaded_by', 'uploaded_at']
+    readonly_fields = ['uploaded_at']
+
+
+@admin.register(AdministrativeOrder)
+class AdministrativeOrderAdmin(admin.ModelAdmin):
+    list_display = [
+        'registration_number',
+        'enterprise_display',
+        'order_date',
+        'subject_short',
+        'approval_display',
+        'scope_display',
+        'status_display',
+        'validity_date_warning',
+        'uploaded_file'
+    ]
+
+    list_filter = [
+        'enterprise',
+        'scope',
+        'status',
+        'order_date',
+        'author',
+    ]
+
+    search_fields = [
+        'registration_number',
+        'subject',
+        'note',
+    ]
+
+    readonly_fields = [
+        'id',
+        #'registration_number',
+        'author',
+        'date_of_creation',
+        'last_editor',
+        'date_of_change',
+    ]
+
+    inlines = [AdministrativeOrderAcceptSignatureInline]
+
+    fieldsets = (
+        ('Основная информация', {
+            'fields': (
+                'enterprise',
+                'registration_number',
+                'order_date',
+                'subject',
+                'scope',
+                'status',
+            )
+        }),
+        ('Утверждение и ознакомление', {
+            'fields': (
+                'approval',
+                'signature_approval',
+                'accept',
+            )
+        }),
+        ('Сроки', {
+            'fields': (
+                'validity_date',
+            )
+        }),
+        ('Файлы', {
+            'fields': (
+                'uploaded_file',
+                'app_uploaded_file',
+            )
+        }),
+        ('Примечание', {
+            'fields': (
+                'note',
+            )
+        }),
+        ('Пользователи системы', {
+            'fields': (
+                'author',
+                'last_editor',
+                'current_responsible',
+            )
+        }),
+        ('Системные даты', {
+            'fields': (
+                'date_of_creation',
+                'date_of_change',
+                'version',
+            )
+        }),
+    )
+
+    def save_model(self, request, obj, form, change):
+        """Автоматическая установка пользователей и валидация"""
+        # Вызываем clean() для валидации
+        try:
+            obj.clean()
+        except ValidationError as e:
+            from django.forms import ValidationError as FormValidationError
+            raise FormValidationError(e.message_dict)
+
+        if not change:  # Создание
+            obj.author = request.user
+            obj.last_editor = request.user
+            if not obj.current_responsible:
+                obj.current_responsible = request.user
+        else:  # Редактирование
+            obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Кастомизация формы для динамической валидации"""
+        form = super().get_form(request, obj, **kwargs)
+
+        # Добавляем атрибут min для поля даты
+        if 'validity_date' in form.base_fields:
+            today = timezone.now().date().isoformat()
+            form.base_fields['validity_date'].widget = forms.DateInput(
+                attrs={'type': 'date', 'min': today}
+            )
+
+        return form
+
+    def enterprise_display(self, obj):
+        """Отображение предприятия"""
+        return dict(AdministrativeOrder.ENTERPRISE_CHOICES).get(obj.enterprise, obj.enterprise)
+
+    enterprise_display.short_description = 'Предприятие'
+    enterprise_display.admin_order_field = 'enterprise'
+
+    def approval_display(self, obj):
+        """Отображение утвердившего"""
+        if obj.approval:
+            return obj.approval.username
+        return "—"
+
+    approval_display.short_description = 'Утвердил'
+
+    def scope_display(self, obj):
+        """Отображение области применения"""
+        return dict(AdministrativeOrder.SCOPE_CHOICES).get(obj.scope, obj.scope)
+
+    scope_display.short_description = 'Область применения'
+
+    def status_display(self, obj):
+        """Отображение статуса с цветом"""
+        colors = {
+            'active': 'green',
+            'archived': 'gray',
+        }
+        color = colors.get(obj.status, 'gray')
+        status_text = dict(AdministrativeOrder.STATUS_CHOICES).get(obj.status, obj.status)
+        return format_html(
+            '<span style="color: {}; font-weight: bold;">{}</span>',
+            color, status_text
+        )
+
+    status_display.short_description = 'Статус'
+
+    def subject_short(self, obj):
+        """Краткое отображение темы"""
+        if obj.subject:
+            return obj.subject[:50] + '...' if len(obj.subject) > 50 else obj.subject
+        return "—"
+
+    subject_short.short_description = 'Тема'
+    subject_short.admin_order_field = 'subject'
+
+    def validity_date_warning(self, obj):
+        """Отображение срока пересмотра с предупреждением"""
+        if not obj.validity_date:
+            return "—"
+
+        if obj.status != 'active':
+            return obj.validity_date.strftime('%d.%m.%Y')
+
+        if obj.is_validity_approaching():
+            days_left = (obj.validity_date - timezone.now().date()).days
+            return format_html(
+                '<span style="color: orange;">{} ⚠️ ({} дн.)</span>',
+                obj.validity_date.strftime('%d.%m.%Y'),
+                days_left
+            )
+        return obj.validity_date.strftime('%d.%m.%Y')
+
+    validity_date_warning.short_description = 'Срок пересмотра'
+    validity_date_warning.admin_order_field = 'validity_date'
+
+    def display_uploaded_file(self, obj):
+        """Отображение файла"""
+        if obj.uploaded_file:
+            filename = obj.uploaded_file.name.split('/')[-1]
+            return format_html(
+                '<a href="{}" target="_blank" title="{}">📄 {}</a>',
+                obj.uploaded_file.url,
+                filename,
+                filename[:30] + '...' if len(filename) > 30 else filename
+            )
+        return "—"
+
+    display_uploaded_file.short_description = 'Файл'
+
+    def save_model(self, request, obj, form, change):
+        """Автоматическая установка пользователей"""
+        # Вызываем валидацию
+        try:
+            obj.full_clean()
+        except ValidationError as e:
+            from django.forms import ValidationError as FormValidationError
+            raise FormValidationError(e.message_dict)
+
+        if not change:  # Создание
+            obj.author = request.user
+            obj.last_editor = request.user
+            if not obj.current_responsible:
+                obj.current_responsible = request.user
+        else:  # Редактирование
+            obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Кастомизация формы для динамической валидации"""
+        form = super().get_form(request, obj, **kwargs)
+
+        # Добавляем атрибут min для поля даты
+        if 'order_date' in form.base_fields:
+            today = timezone.now().date().isoformat()
+            form.base_fields['order_date'].widget = forms.DateInput(
+                attrs={'type': 'date', 'min': today}
+            )
+
+        if 'validity_date' in form.base_fields:
+            today = timezone.now().date().isoformat()
+            form.base_fields['validity_date'].widget = forms.DateInput(
+                attrs={'type': 'date', 'min': today}
+            )
+
+        return form
+
+
+class DocumentTemplateAcceptSignatureInline(admin.TabularInline):
+    """Inline для множественных подписей ознакомления шаблонов"""
+    model = DocumentTemplateAcceptSignature
+    extra = 1
+    fields = ['signature_file', 'uploaded_by', 'uploaded_at']
+    readonly_fields = ['uploaded_at']
+
+    # Шаблоны
+@admin.register(DocumentTemplate)
+class DocumentTemplateAdmin(admin.ModelAdmin):
+    list_display = [
+        'document_template',
+        'author_display',
+        'date_of_creation',
+        'validity_date_warning',
+        'display_uploaded_file',
+        'document_purpose_short',
+    ]
+
+    list_filter = [
+        'author',
+        'date_of_creation',
+        'current_responsible',
+    ]
+
+    search_fields = [
+        'document_template',
+        'document_purpose',
+        'note',
+    ]
+
+    readonly_fields = [
+        'id',
+        'author',
+        'date_of_creation',
+        'last_editor',
+        'date_of_change',
+    ]
+
+    inlines = [DocumentTemplateAcceptSignatureInline]
+
+    fieldsets = (
+        ('Основная информация', {
+            'fields': (
+                'document_template',
+                'version',
+            )
+        }),
+        ('Файлы', {
+            'fields': (
+                'uploaded_file',
+                'app_uploaded_file',
+            )
+        }),
+        ('Срок пересмотра', {
+            'fields': (
+                'validity_date',
+            )
+        }),
+        ('Назначение и примечание', {
+            'fields': (
+                'document_purpose',
+                'note',
+            )
+        }),
+        ('Пользователи системы', {
+            'fields': (
+                'author',
+                'last_editor',
+                'current_responsible',
+            )
+        }),
+        ('Системные даты', {
+            'fields': (
+                'date_of_creation',
+                'date_of_change',
+            )
+        }),
+    )
+
+    def save_model(self, request, obj, form, change):
+        """Автоматическая установка пользователей и валидация"""
+        # Вызываем clean() для валидации
+        try:
+            obj.clean()
+        except ValidationError as e:
+            from django.forms import ValidationError as FormValidationError
+            raise FormValidationError(e.message_dict)
+
+        if not change:  # Создание
+            obj.author = request.user
+            obj.last_editor = request.user
+            if not obj.current_responsible:
+                obj.current_responsible = request.user
+        else:  # Редактирование
+            obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+    def get_form(self, request, obj=None, **kwargs):
+        """Кастомизация формы для динамической валидации"""
+        form = super().get_form(request, obj, **kwargs)
+
+        # Добавляем атрибут min для поля даты
+        if 'validity_date' in form.base_fields:
+            today = timezone.now().date().isoformat()
+            form.base_fields['validity_date'].widget = forms.DateInput(
+                attrs={'type': 'date', 'min': today}
+            )
+
+        return form
+
+    def author_display(self, obj):
+        """Отображение автора"""
+        if obj.author:
+            return obj.author.username
+        return "—"
+
+    author_display.short_description = 'Автор'
+    author_display.admin_order_field = 'author__username'
+
+    def last_editor_display(self, obj):
+        """Отображение последнего редактора"""
+        if obj.last_editor:
+            return obj.last_editor.username
+        return "—"
+
+    last_editor_display.short_description = 'Последний редактор'
+
+    def validity_date_warning(self, obj):
+        """Отображение срока пересмотра с предупреждением"""
+        if not obj.validity_date:
+            return "—"
+
+        if obj.is_validity_approaching():
+            days_left = (obj.validity_date - timezone.now().date()).days
+            return format_html(
+                '<span style="color: orange;">{} ⚠️ ({} дн.)</span>',
+                obj.validity_date.strftime('%d.%m.%Y'),
+                days_left
+            )
+        return obj.validity_date.strftime('%d.%m.%Y')
+
+    validity_date_warning.short_description = 'Срок пересмотра'
+    validity_date_warning.admin_order_field = 'validity_date'
+
+    def display_uploaded_file(self, obj):
+        """Отображение файла"""
+        if obj.uploaded_file:
+            filename = obj.uploaded_file.name.split('/')[-1]
+            return format_html(
+                '<a href="{}" target="_blank" title="{}">📄 {}</a>',
+                obj.uploaded_file.url,
+                filename,
+                filename[:30] + '...' if len(filename) > 30 else filename
+            )
+        return "—"
+
+    display_uploaded_file.short_description = 'Файл'
+
+    def document_purpose_short(self, obj):
+        """Отображение назначения документа (последний столбец)"""
+        if obj.document_purpose:
+            return format_html(
+                '<div style="min-width: 250px; max-width: 400px; white-space: normal; word-wrap: break-word;">{}</div>',
+                obj.document_purpose[:100] + '...' if len(obj.document_purpose) > 100 else obj.document_purpose
+            )
+        return "—"
+
+    document_purpose_short.short_description = 'Назначение документа'
+
+    def save_model(self, request, obj, form, change):
+        """Автоматическая установка пользователей"""
+        if not change:  # Создание
+            obj.author = request.user
+            obj.last_editor = request.user
+            if not obj.current_responsible:
+                obj.current_responsible = request.user
+        else:  # Редактирование
+            obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
