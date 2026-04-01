@@ -1,0 +1,10 @@
+{% extends "admin/change_form.html" %}
+{% block extrahead %}
+{{ block.super }}
+<script>
+window.INCOMING_LETTER_LPR_URL = "{{ incoming_letter_lpr_url|escapejs }}";
+{% if reply_to_sender_url %}
+window.REPLY_TO_INCOMING_SENDER_URL = "{{ reply_to_sender_url|escapejs }}";
+{% endif %}
+</script>
+{% endblock %}

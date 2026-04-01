@@ -292,6 +292,12 @@ admin.site.register(Post, PostAdmin)
 
 @admin.register(RKDDeveloper)
 class RKDDeveloperAdmin(admin.ModelAdmin):
+    fields = (
+        "name",
+        "charter",
+        "requisites",
+        "additional_data",
+    )
     search_fields = ("name",)
 
 
@@ -987,19 +993,46 @@ class IncomingLetterAdmin(admin.ModelAdmin):
     class Form(forms.ModelForm):
         date_of_receipt_date = forms.DateField(label="Дата получения")
         date_of_receipt_time = forms.TimeField(label="Время получения", required=False)
+        confirm_registration_recalc = forms.BooleanField(
+            required=False,
+            label="Подтвердить пересчёт внутреннего номера",
+            help_text="Обязательно, если меняете календарную дату получения: номер будет выдан заново.",
+        )
 
         class Meta:
             model = IncomingLetter
-            fields = "__all__"
+            exclude = ("registration_number", "registration_number_reassigned")
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             from django.contrib.admin.widgets import AdminDateWidget, AdminTimeWidget
             self.fields["date_of_receipt_date"].widget = AdminDateWidget()
             self.fields["date_of_receipt_time"].widget = AdminTimeWidget()
+            if not self.instance.pk:
+                self.fields.pop("confirm_registration_recalc", None)
             if self.instance and self.instance.pk and self.instance.date_of_receipt:
-                self.fields["date_of_receipt_date"].initial = self.instance.date_of_receipt.date()
-                self.fields["date_of_receipt_time"].initial = self.instance.date_of_receipt.time().replace(second=0, microsecond=0)
+                local_receipt = timezone.localtime(self.instance.date_of_receipt)
+                self.fields["date_of_receipt_date"].initial = local_receipt.date()
+                self.fields["date_of_receipt_time"].initial = local_receipt.time().replace(
+                    second=0, microsecond=0
+                )
+
+            sig = self.fields.get("sender_signature")
+            if sig:
+                sender_id = None
+                if self.data and self.data.get("sender"):
+                    try:
+                        sender_id = int(self.data.get("sender"))
+                    except (TypeError, ValueError):
+                        pass
+                elif self.instance and getattr(self.instance, "sender_id", None):
+                    sender_id = self.instance.sender_id
+                if sender_id:
+                    sig.queryset = Decision_maker.objects.filter(customer_id=sender_id).order_by(
+                        "full_name", "id"
+                    )
+                else:
+                    sig.queryset = Decision_maker.objects.none()
 
         def clean(self):
             cleaned = super().clean()
@@ -1016,6 +1049,45 @@ class IncomingLetterAdmin(admin.ModelAdmin):
             from datetime import time, datetime
             dt = datetime.combine(d, t or time(0, 0))
             cleaned["date_of_receipt"] = timezone.make_aware(dt, timezone.get_current_timezone())
+
+            letter_date = cleaned.get("letter_date")
+            if letter_date is not None and cleaned.get("date_of_receipt"):
+                receipt_local_date = timezone.localtime(cleaned["date_of_receipt"]).date()
+                if receipt_local_date < letter_date:
+                    raise ValidationError(
+                        {
+                            "date_of_receipt_date": (
+                                "Дата получения не может быть раньше даты письма."
+                            ),
+                        }
+                    )
+
+            sender = cleaned.get("sender")
+            sender_sig = cleaned.get("sender_signature")
+            if sender_sig and sender and sender_sig.customer_id != sender.pk:
+                raise ValidationError(
+                    {
+                        "sender_signature": "Подписант должен относиться к выбранной организации.",
+                    }
+                )
+
+            if self.instance.pk and cleaned.get("date_of_receipt"):
+                try:
+                    old = IncomingLetter.objects.only("date_of_receipt").get(pk=self.instance.pk)
+                except IncomingLetter.DoesNotExist:
+                    old = None
+                if old and old.date_of_receipt:
+                    old_d = timezone.localtime(old.date_of_receipt).date()
+                    new_d = timezone.localtime(cleaned["date_of_receipt"]).date()
+                    if old_d != new_d and not cleaned.get("confirm_registration_recalc"):
+                        raise ValidationError(
+                            {
+                                "confirm_registration_recalc": (
+                                    "Дата получения изменится — внутренний регистрационный номер будет "
+                                    "пересчитан. Отметьте подтверждение ниже и снова нажмите «Сохранить»."
+                                ),
+                            }
+                        )
             return cleaned
 
         def save(self, commit=True):
@@ -1028,6 +1100,18 @@ class IncomingLetterAdmin(admin.ModelAdmin):
 
     form = Form
 
+    change_form_template = "admin/crm/incomingletter/change_form.html"
+
+    class Media:
+        js = ("blog/js/incoming_letter_lpr.js",)
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        extra_context["incoming_letter_lpr_url"] = reverse(
+            "crm_decision_makers_by_customer"
+        )
+        return super().changeform_view(request, object_id, form_url, extra_context)
+
     list_display = (
         'letter_date_display',
         'date_of_receipt_display',
@@ -1038,19 +1122,19 @@ class IncomingLetterAdmin(admin.ModelAdmin):
         'subject',
         'replies_link',
         'current_responsible',
-        'registration_number',
+        'registration_number_display',
     )
     list_display_links = ('sender_identification',)
     list_filter = ('receipt_method', 'letter_date')
     search_fields = ('sender_identification', 'subject', 'sender__name_of_company')
     date_hierarchy = 'date_of_receipt'
-    readonly_fields = ('date_of_creation', 'date_of_change', 'registration_number')
-    autocomplete_fields = ('sender', 'sender_signature')
+    readonly_fields = ('date_of_creation', 'date_of_change', 'registration_number_display')
+    autocomplete_fields = ('sender',)
 
     fieldsets = (
         (None, {
             'fields': (
-                'registration_number',
+                'registration_number_display',
                 'sender_identification',
                 'sender',
                 'sender_signature',
@@ -1073,6 +1157,16 @@ class IncomingLetterAdmin(admin.ModelAdmin):
     def get_fieldsets(self, request, obj=None):
         fieldsets = super().get_fieldsets(request, obj)
         if obj is not None:
+            fieldsets = list(fieldsets)
+            first = fieldsets[0]
+            fields = list(first[1]["fields"])
+            if "confirm_registration_recalc" not in fields:
+                try:
+                    idx = fields.index("date_of_receipt_time") + 1
+                    fields.insert(idx, "confirm_registration_recalc")
+                except ValueError:
+                    fields.append("confirm_registration_recalc")
+            fieldsets[0] = (first[0], {**first[1], "fields": tuple(fields)})
             return (
                 fieldsets[0],
                 fieldsets[1],
@@ -1090,10 +1184,34 @@ class IncomingLetterAdmin(admin.ModelAdmin):
         return ('author', 'last_editor') + tuple(self.readonly_fields)
 
     def save_model(self, request, obj, form, change):
+        if change and obj.pk:
+            try:
+                old = IncomingLetter.objects.only("date_of_receipt").get(pk=obj.pk)
+            except IncomingLetter.DoesNotExist:
+                old = None
+            if old and old.date_of_receipt and obj.date_of_receipt:
+                old_d = timezone.localtime(old.date_of_receipt).date()
+                new_d = timezone.localtime(obj.date_of_receipt).date()
+                if old_d != new_d:
+                    obj.registration_number = ""
+                    obj.registration_number_reassigned = True
         if not change:
             obj.author = request.user
         obj.last_editor = request.user
         super().save_model(request, obj, form, change)
+
+    @admin.display(description="Внутренний рег. номер", ordering="registration_number")
+    def registration_number_display(self, obj):
+        if not obj or not obj.pk:
+            return "Присваивается при сохранении"
+        if not obj.registration_number:
+            return "—"
+        if getattr(obj, "registration_number_reassigned", False):
+            return format_html(
+                '{} <span style="color:#666;">(изменен)</span>',
+                obj.registration_number,
+            )
+        return obj.registration_number
 
     @admin.display(description="Связанные исходящие")
     def replies_link(self, obj):
@@ -1107,9 +1225,10 @@ class IncomingLetterAdmin(admin.ModelAdmin):
     def date_of_receipt_display(self, obj):
         if not obj.date_of_receipt:
             return "—"
+        local_dt = timezone.localtime(obj.date_of_receipt)
         if not obj.urgent:
-            return obj.date_of_receipt.strftime("%d.%m.%Y")
-        return obj.date_of_receipt.strftime("%d.%m.%Y %H:%M")
+            return local_dt.strftime("%d.%m.%Y")
+        return local_dt.strftime("%d.%m.%Y %H:%M")
 
     @admin.display(description="Срочно")
     def urgent_warning(self, obj):
@@ -1129,24 +1248,49 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
     class Form(forms.ModelForm):
         date_of_send_date = forms.DateField(label="Дата отправки")
         date_of_send_time = forms.TimeField(label="Время отправки", required=False)
+        confirm_registration_recalc = forms.BooleanField(
+            required=False,
+            label="Подтвердить пересчёт регистрационного номера",
+            help_text="Обязательно, если меняете дату письма: номер привязан к ней и будет выдан заново.",
+        )
 
         class Meta:
             model = OutgoingLetter
-            fields = "__all__"
+            exclude = ("registration_number", "registration_number_reassigned")
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             from django.contrib.admin.widgets import AdminDateWidget, AdminTimeWidget
             self.fields["date_of_send_date"].widget = AdminDateWidget()
             self.fields["date_of_send_time"].widget = AdminTimeWidget()
+            if not self.instance.pk:
+                self.fields.pop("confirm_registration_recalc", None)
 
             if self.instance and self.instance.pk and self.instance.date_of_send:
-                self.fields["date_of_send_date"].initial = self.instance.date_of_send.date()
-                self.fields["date_of_send_time"].initial = self.instance.date_of_send.time().replace(
+                local_send = timezone.localtime(self.instance.date_of_send)
+                self.fields["date_of_send_date"].initial = local_send.date()
+                self.fields["date_of_send_time"].initial = local_send.time().replace(
                     second=0, microsecond=0
                 )
             else:
                 self.fields["date_of_send_date"].initial = timezone.localdate()
+
+            pr = self.fields.get("person_recipient")
+            if pr:
+                recipient_id = None
+                if self.data and self.data.get("recipient"):
+                    try:
+                        recipient_id = int(self.data.get("recipient"))
+                    except (TypeError, ValueError):
+                        pass
+                elif self.instance and getattr(self.instance, "recipient_id", None):
+                    recipient_id = self.instance.recipient_id
+                if recipient_id:
+                    pr.queryset = Decision_maker.objects.filter(customer_id=recipient_id).order_by(
+                        "full_name", "id"
+                    )
+                else:
+                    pr.queryset = Decision_maker.objects.none()
 
         def clean(self):
             cleaned = super().clean()
@@ -1163,6 +1307,31 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
             from datetime import time, datetime
             dt = datetime.combine(d, t or time(0, 0))
             cleaned["date_of_send"] = timezone.make_aware(dt, timezone.get_current_timezone())
+
+            recipient = cleaned.get("recipient")
+            person_recipient = cleaned.get("person_recipient")
+            if person_recipient and recipient and person_recipient.customer_id != recipient.pk:
+                raise ValidationError(
+                    {
+                        "person_recipient": "Получатель (ЛПР) должен относиться к выбранной организации.",
+                    }
+                )
+
+            if self.instance.pk and cleaned.get("letter_date") is not None:
+                try:
+                    old = OutgoingLetter.objects.only("letter_date").get(pk=self.instance.pk)
+                except OutgoingLetter.DoesNotExist:
+                    old = None
+                if old and old.letter_date != cleaned["letter_date"]:
+                    if not cleaned.get("confirm_registration_recalc"):
+                        raise ValidationError(
+                            {
+                                "confirm_registration_recalc": (
+                                    "Дата письма изменится — регистрационный номер будет пересчитан "
+                                    "(он привязан к дате письма). Отметьте подтверждение и снова нажмите «Сохранить»."
+                                ),
+                            }
+                        )
             return cleaned
 
         def save(self, commit=True):
@@ -1175,8 +1344,23 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
 
     form = Form
 
+    change_form_template = "admin/crm/incomingletter/change_form.html"
+
+    class Media:
+        js = ("blog/js/incoming_letter_lpr.js",)
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        extra_context["incoming_letter_lpr_url"] = reverse(
+            "crm_decision_makers_by_customer"
+        )
+        extra_context["reply_to_sender_url"] = reverse(
+            "crm_incoming_letter_sender_for_reply"
+        )
+        return super().changeform_view(request, object_id, form_url, extra_context)
+
     list_display = (
-        'registration_number',
+        'registration_number_display',
         'reply_to_link',
         'recipient',
         'letter_date_display',
@@ -1187,17 +1371,17 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
         'send_method',
         'current_responsible',
     )
-    list_display_links = ('registration_number',)
+    list_display_links = ('registration_number_display',)
     list_filter = ('send_method', 'letter_date')
     search_fields = ('registration_number', 'subject', 'recipient__name_of_company')
     date_hierarchy = 'letter_date'
-    readonly_fields = ('date_of_creation', 'date_of_change', 'registration_number')
-    autocomplete_fields = ('recipient', 'person_recipient', 'reply_to')
+    readonly_fields = ('date_of_creation', 'date_of_change', 'registration_number_display')
+    autocomplete_fields = ('recipient', 'reply_to')
 
     fieldsets = (
         (None, {
             'fields': (
-                'registration_number',
+                'registration_number_display',
                 'reply_to',
                 'recipient',
                 'person_recipient',
@@ -1223,6 +1407,16 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
     def get_fieldsets(self, request, obj=None):
         fieldsets = super().get_fieldsets(request, obj)
         if obj is not None:
+            fieldsets = list(fieldsets)
+            first = fieldsets[0]
+            fields = list(first[1]["fields"])
+            if "confirm_registration_recalc" not in fields:
+                try:
+                    idx = fields.index("letter_date") + 1
+                    fields.insert(idx, "confirm_registration_recalc")
+                except ValueError:
+                    fields.append("confirm_registration_recalc")
+            fieldsets[0] = (first[0], {**first[1], "fields": tuple(fields)})
             return (
                 fieldsets[0],
                 fieldsets[1],
@@ -1240,10 +1434,31 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
         return ('author', 'last_editor') + tuple(self.readonly_fields)
 
     def save_model(self, request, obj, form, change):
+        if change and obj.pk:
+            try:
+                old = OutgoingLetter.objects.only("letter_date").get(pk=obj.pk)
+            except OutgoingLetter.DoesNotExist:
+                old = None
+            if old and obj.letter_date and old.letter_date != obj.letter_date:
+                obj.registration_number = ""
+                obj.registration_number_reassigned = True
         if not change:
             obj.author = request.user
         obj.last_editor = request.user
         super().save_model(request, obj, form, change)
+
+    @admin.display(description="Рег. номер", ordering="registration_number")
+    def registration_number_display(self, obj):
+        if not obj or not obj.pk:
+            return "Присваивается при сохранении"
+        if not obj.registration_number:
+            return "—"
+        if getattr(obj, "registration_number_reassigned", False):
+            return format_html(
+                '{} <span style="color:#666;">(изменен)</span>',
+                obj.registration_number,
+            )
+        return obj.registration_number
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -1267,9 +1482,10 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
     def date_of_send_display(self, obj):
         if not obj.date_of_send:
             return "—"
+        local_dt = timezone.localtime(obj.date_of_send)
         if not obj.urgent:
-            return obj.date_of_send.strftime("%d.%m.%Y")
-        return obj.date_of_send.strftime("%d.%m.%Y %H:%M")
+            return local_dt.strftime("%d.%m.%Y")
+        return local_dt.strftime("%d.%m.%Y %H:%M")
 
     @admin.display(description="Срочно")
     def urgent_warning(self, obj):

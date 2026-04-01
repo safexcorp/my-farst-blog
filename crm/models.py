@@ -1,3 +1,4 @@
+import re
 from django.db import models
 from django.contrib.auth.models import User
 from django.conf import settings
@@ -10,6 +11,18 @@ def validate_file_size(value):
     limit = 20 * 1024 * 1024
     if value.size > limit:
         raise ValidationError('Размер одного файла не должен превышать 20 МБ')
+
+
+def validate_customer_inn(value):
+    if value in (None, ""):
+        return
+    s = str(value).strip()
+    if not s:
+        return
+    if not re.fullmatch(r"\d{1,12}", s):
+        raise ValidationError(
+            "В поле ИНН допускаются только цифры, не более 12."
+        )
 
 
 def _next_registration_dated_prefix_monthly_suffix(
@@ -57,7 +70,13 @@ class Notifications(models.Model):
 
 class Customer(models.Model):
     name_of_company = models.CharField(max_length=255, verbose_name='Название компании', default='Без названия')
-    iin = models.CharField(max_length=12, blank=True, null=True, verbose_name='ИНН')
+    iin = models.CharField(
+        max_length=12,
+        blank=True,
+        null=True,
+        verbose_name='ИНН',
+        validators=[validate_customer_inn],
+    )
     revenue_for_last_year = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, verbose_name='Выручка за последний год', help_text='Миллиард рублей')
     length_of_electrical_network_km = models.DecimalField(max_digits=8, decimal_places=2, blank=True, null=True, verbose_name='Длина сетей, км')
     quantity_of_technical_transformer_pcs = models.PositiveIntegerField(blank=True, null=True, verbose_name='Количество ТП, шт')
@@ -67,9 +86,26 @@ class Customer(models.Model):
     )
 
     def save(self, *args, **kwargs):
+        if self.iin is not None:
+            self.iin = str(self.iin).strip() or None
         # Unicode case folding — лучше, чем .lower() для всех языков
         self.name_of_company_ci = (self.name_of_company or "").casefold()
         super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        inn = self.iin
+        if not inn:
+            return
+        qs = Customer.objects.filter(iin=inn)
+        if self.pk:
+            qs = qs.exclude(pk=self.pk)
+        if qs.exists():
+            raise ValidationError(
+                {
+                    "iin": "Контрагент с таким ИНН уже есть. Укажите другой ИНН или откройте существующую карточку.",
+                }
+            )
 
     def __str__(self):
         return self.name_of_company
@@ -237,6 +273,11 @@ class IncomingLetter(models.Model):
         blank=True,
         editable=False,
     )
+    registration_number_reassigned = models.BooleanField(
+        'Номер пересчитан после смены даты получения',
+        default=False,
+        editable=False,
+    )
     sender_identification = models.CharField(
         'Исходящий номер отправителя',
         max_length=50,
@@ -326,6 +367,11 @@ class OutgoingLetter(models.Model):
         max_length=20,
         unique=True,
         blank=True,
+        editable=False,
+    )
+    registration_number_reassigned = models.BooleanField(
+        'Номер пересчитан после смены даты письма',
+        default=False,
         editable=False,
     )
     recipient = models.ForeignKey(
