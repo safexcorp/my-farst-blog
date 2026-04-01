@@ -101,7 +101,7 @@ class Post(models.Model):
     ]
 
     name = models.CharField(max_length=100, unique=True, verbose_name="Наименование")
-    desig_document_post = models.CharField(max_length=50, null = True, verbose_name="Обозначение изделия")
+    desig_document_post = models.CharField(max_length=50, null=True, verbose_name="Обозначение изделия")
     author = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_posts',
                                verbose_name="Автор")
     last_editor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='edited_posts',
@@ -1595,10 +1595,28 @@ class Attachment(models.Model):
 
 class RKDDeveloper(models.Model):
     name = models.CharField(max_length=200, unique=True, verbose_name="Название")
+    charter = models.FileField(
+        upload_to="rkd_developer/charter/",
+        blank=True,
+        null=True,
+        verbose_name="Устав",
+    )
+    requisites = models.FileField(
+        upload_to="rkd_developer/requisites/",
+        blank=True,
+        null=True,
+        verbose_name="Реквизиты",
+    )
+    additional_data = models.FileField(
+        upload_to="rkd_developer/additional/",
+        blank=True,
+        null=True,
+        verbose_name="Дополнительные данные",
+    )
 
     class Meta:
-        verbose_name = "Организация-разработчик (РКД)"
-        verbose_name_plural = "Организации-разработчики (РКД)"
+        verbose_name = "Организация-разработчик"
+        verbose_name_plural = "Организации-разработчики"
 
     def __str__(self):
         return self.name

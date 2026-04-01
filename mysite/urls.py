@@ -16,9 +16,11 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from django.contrib import admin
-from django.urls import path
 from django.contrib.auth import views as auth_views
+from blog.views import (
+    decision_makers_by_customer_json,
+    incoming_letter_sender_for_reply_json,
+)
 from django.shortcuts import render, redirect
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import login
@@ -37,6 +39,16 @@ def register(request):
     return render(request, 'registration/register.html', {'form': form})
 
 urlpatterns = [
+    path(
+        "crm/api/decision-makers-by-customer/",
+        decision_makers_by_customer_json,
+        name="crm_decision_makers_by_customer",
+    ),
+    path(
+        "crm/api/incoming-letter-sender/",
+        incoming_letter_sender_for_reply_json,
+        name="crm_incoming_letter_sender_for_reply",
+    ),
     path('admin/', admin.site.urls),
     path('register/', register, name='register'),  # маршрут регистрации
     path('login/', auth_views.LoginView.as_view(), name='login'),  # если нужно логин
