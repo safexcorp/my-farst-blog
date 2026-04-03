@@ -88,16 +88,6 @@ class SharedRepository(models.Model):
         help_text='ЭЦП'
     )
 
-    # 8. Подпись ознакомления
-    #signature_accept = models.FileField(
-     #   upload_to='shared_repository/signatures/accept/%Y/%m/%d/',
-      #  verbose_name='Подпись ознакомления',
-       # blank=True,
-        #null=True,
-        #validators=[validate_file_size],
-        #help_text='Файл ЭЦП'
-    #)
-
     # 9. Создатель
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -639,12 +629,11 @@ class QMSDocument(models.Model):
     )
 
     # 18. Связанные документы
-    related_documents = models.TextField(
-        max_length=1000,
-        verbose_name='Связанные документы',
+    related_documents = models.ManyToManyField(
+        'SharedRepository',
+        verbose_name='Связанные отдельные документы',
         blank=True,
-        null=True,
-        help_text='Документы и/или гиперссылки, на которые ссылается данный документ'
+        help_text='Выбор из списка отдельных документов. Можно выбрать несколько'
     )
 
     # 19. Примечание
@@ -819,7 +808,7 @@ class AdministrativeOrder(models.Model):
         default='active'
     )
     validity_date = models.DateField(
-        verbose_name='Срок пересмотра',
+        verbose_name='Дата планового пересмотра',
         blank=True,
         null=True,
         help_text='Обязательно, если статус "Действует". За 30 дней появится предупреждение'
@@ -852,7 +841,9 @@ class AdministrativeOrder(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name='authored_orders',
-        verbose_name='Создатель (автор)'
+        verbose_name='Создатель (автор)',
+        null = True,
+        blank = True
     )
     date_of_creation = models.DateTimeField(
         verbose_name='Дата и время создания',
@@ -862,7 +853,9 @@ class AdministrativeOrder(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name='edited_orders',
-        verbose_name='Последний редактор'
+        verbose_name='Последний редактор',
+        null=True,
+        blank=True
     )
     date_of_change = models.DateTimeField(
         verbose_name='Дата и время последнего изменения',
@@ -872,7 +865,9 @@ class AdministrativeOrder(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name='responsible_orders',
-        verbose_name='Текущий ответственный'
+        verbose_name='Текущий ответственный',
+        null=True,
+        blank=True
     )
     version = models.CharField(
         max_length=3,
@@ -890,34 +885,31 @@ class AdministrativeOrder(models.Model):
 
     def clean(self):
         """Валидация модели"""
-        # Проверка даты пересмотра
-        if self.validity_date:
-            from django.utils import timezone
-            today = timezone.now().date()
+        from django.utils import timezone
+        today = timezone.now().date()
 
-            # Нельзя ставить прошедшую дату
+        # 1. Дата приказа — только прошедшая дата
+        if self.order_date and self.order_date > today:
+            raise ValidationError({
+                'order_date': 'Дата приказа должна быть строго раньше сегодняшнего дня.'
+            })
+
+        # 2. Если статус "Действует", дата пересмотра ОБЯЗАТЕЛЬНА (ЭТА ПРОВЕРКА ВНЕ БЛОКА!)
+        if self.status == 'active' and not self.validity_date:
+            raise ValidationError({
+                'validity_date': 'При статусе "Действует" обязательно указать дату планового пересмотра!'
+            })
+
+        # 3. Если дата пересмотра указана — проверяем её
+        if self.validity_date:
             if self.validity_date < today:
                 raise ValidationError({
-                    'validity_date': 'Дата пересмотра не может быть раньше сегодняшнего дня!'
+                    'validity_date': 'Дата планового пересмотра должна быть строго позже сегодняшнего дня.'
                 })
 
-            if self.validity_date:
-                # Нельзя ставить прошедшую дату
-                if self.validity_date < today:
-                    raise ValidationError({
-                        'validity_date': 'Дата пересмотра не может быть раньше сегодняшнего дня!'
-                    })
-
-                # Дата пересмотра должна быть позже даты приказа
-                if self.order_date and self.validity_date <= self.order_date:
-                    raise ValidationError({
-                        'validity_date': 'Дата пересмотра должна быть позже даты приказа!'
-                    })
-
-            # Если статус "Действует", дата пересмотра обязательна
-            if self.status == 'active' and not self.validity_date:
+            if self.order_date and self.validity_date <= self.order_date:
                 raise ValidationError({
-                    'validity_date': 'Для документа со статусом "Действует" обязательно указать дату пересмотра!'
+                    'validity_date': 'Дата планового пересмотра должна быть позже даты приказа!'
                 })
 
     def save(self, *args, **kwargs):
@@ -1005,22 +997,22 @@ class DocumentTemplate(models.Model):
     # Файлы
     uploaded_file = models.FileField(
         upload_to='templates/documents/%Y/%m/%d/',
-        verbose_name='Загружаемый файл',
+        verbose_name='Загружаемый файл шаблона',
         validators=[validate_file_size],
         help_text='Основной файл шаблона (только один файл)'
     )
-    app_uploaded_file = models.FileField(
-        upload_to='templates/applications/%Y/%m/%d/',
-        verbose_name='Шаблон',
-        blank=True,
-        null=True,
-        validators=[validate_file_size],
-        help_text='Файл шаблона'
-    )
+    #app_uploaded_file = models.FileField(
+        #upload_to='templates/applications/%Y/%m/%d/',
+        #verbose_name='Шаблон',
+        #blank=True,
+        #null=True,
+        #validators=[validate_file_size],
+        #help_text='Файл шаблона'
+    #)
 
     # Дополнительные поля
     validity_date = models.DateField(
-        verbose_name='Срок пересмотра',
+        verbose_name='Дата планового пересмотра',
         blank=True,
         null=True,
         help_text='За 30 дней до даты появится предупреждение'
@@ -1103,18 +1095,18 @@ class DocumentTemplate(models.Model):
 
 
 class DocumentTemplateAcceptSignature(models.Model):
-    """Множественные Приложения (загружаемый файл / файлы"""
+    """Множественные примеры оформления документа"""
     template = models.ForeignKey(
         DocumentTemplate,
         on_delete=models.CASCADE,
         related_name='accept_signatures',
-        verbose_name='Приложение (загружаемый файл / файлы'
+        verbose_name='Пример оформления документа'
     )
     signature_file = models.FileField(
         upload_to='templates/signatures/accept/%Y/%m/%d/',
-        verbose_name='Приложение (загружаемый файл / файлы)',
+        verbose_name='Пример оформления документа',
         validators=[validate_file_size],
-        help_text='Приложение (загружаемый файл / файлы)'
+        help_text='Пример оформления документа'
     )
     uploaded_at = models.DateTimeField(
         auto_now_add=True,
@@ -1128,8 +1120,8 @@ class DocumentTemplateAcceptSignature(models.Model):
     )
 
     class Meta:
-        verbose_name = 'Файлы'
-        verbose_name_plural = 'Приложение (загружаемый файл / файлы)'
+        verbose_name = 'Пример оформления документа'
+        verbose_name_plural = 'Пример оформления документа'
         ordering = ['-uploaded_at']
 
     def __str__(self):
