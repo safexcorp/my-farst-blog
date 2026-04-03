@@ -2604,21 +2604,18 @@ class IndependentDocumentAcceptSignatureInline(admin.TabularInline):
     extra = 1
     fields = ['signature_file', 'uploaded_by', 'uploaded_at']
     readonly_fields = ['uploaded_at']
+    verbose_name = "Подписи ознакомления"
 
 @admin.register(SharedRepository)
 class SharedRepositoryAdmin(admin.ModelAdmin):
 
     list_display = [
-        #'display_id',
-        #'display_category',
         'display_document_title',
         'display_approval',
         'display_date_approval',
-        #'display_signature_accept',
         'display_accept',
         'display_author',
         'display_date_of_change',
-        #'display_current_responsible',
         'display_version',
         'display_uploaded_file',
         'display_document_purpose',
@@ -2645,9 +2642,6 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'date_of_change',
         'last_editor',
         'author',
-        #'display_file_info',
-        #'display_accept_info',
-       # 'display_signature_accept_info',
     ]
 
     inlines = [IndependentDocumentAcceptSignatureInline]
@@ -2866,6 +2860,45 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
 
         return form
 
+    def display_files_list(self, obj):
+        """Список всех файлов документа (аналогично QMSDocument)"""
+        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0;">'
+
+        # Основной файл
+        html += '<h4>Основной документ:</h4>'
+        if obj.uploaded_file:
+            filename = obj.uploaded_file.name.split('/')[-1]
+            html += f'<p>📄 <a href="{obj.uploaded_file.url}" target="_blank">{filename}</a></p>'
+        else:
+            html += '<p>Не загружен</p>'
+
+        # Подпись утверждения
+        html += '<h4>Подпись утверждения:</h4>'
+        if obj.signature_approval:
+            filename = obj.signature_approval.name.split('/')[-1]
+            html += f'<p>🖊️ <a href="{obj.signature_approval.url}" target="_blank">{filename}</a></p>'
+        else:
+            html += '<p>Не загружена</p>'
+
+        # Подписи ознакомления
+        signatures = obj.accept_signatures.all()
+        if signatures.exists():
+            html += '<h4>Подписи ознакомления:</h4><ul>'
+            for sig in signatures:
+                filename = sig.signature_file.name.split('/')[-1]
+                html += f'<li>🖊️ <a href="{sig.signature_file.url}" target="_blank">{filename}</a>'
+                if sig.uploaded_by:
+                    html += f' <span style="color: #666;">(загрузил: {sig.uploaded_by.username})</span>'
+                html += '</li>'
+            html += '</ul>'
+        else:
+            html += '<h4>Подписи ознакомления:</h4><p>Нет загруженных подписей</p>'
+
+        html += '</div>'
+        return format_html(html)
+
+    display_files_list.short_description = 'Файлы документа'
+
 #@admin.register(IndependentDocumentAcceptSignature)
 #class IndependentDocumentAcceptSignatureAdmin(admin.ModelAdmin):
   #  """Админка для подписей ознакомления"""
@@ -2981,7 +3014,7 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
         """Отображение применения знаний (список пользователей)"""
         users = obj.knowledge_apply.all()
         if users.exists():
-            return ", ".join([user.username for user in users[:3]]) + ("..." if users.count() > 3 else "")
+            return ", ".join([user.username for user in users])
         return "—"
 
     display_knowledge_apply.short_description = 'Применение знаний/ практик'
@@ -3126,7 +3159,9 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'display_uploaded_file',
         'display_review_date',
         'display_review_status',
-        'document_purpose'
+        'document_purpose',
+        'display_related_documents',
+        'remark_note'
     ]
 
     list_filter = [
@@ -3149,7 +3184,10 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'display_files_list',
         'last_editor',
         'author',
+        'display_related_shared_documents_list',
     ]
+
+    filter_horizontal = ['related_documents']
 
     inlines = [QMSDocumentAcceptSignatureInline]
 
@@ -3178,8 +3216,10 @@ class QMSDocumentAdmin(admin.ModelAdmin):
             'fields': (
                 'uploaded_file',
                 'document_purpose',
-                'related_documents',
             )
+        }),
+        ('Связанные отдельные документы', {
+            'fields': ('related_documents',),
         }),
         ('Дата планового пересмотра', {
             'fields': (
@@ -3207,6 +3247,45 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         }),
     )
 
+    def display_related_documents(self, obj):
+        """Отображение связанных отдельных документов в списке"""
+        docs = obj.related_documents.all()
+        if docs.exists():
+            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
+        return "—"
+
+    display_related_documents.short_description = 'Связанные отдельные документы'
+
+    def display_related_shared_documents(self, obj):
+        """Отображение количества связанных отдельных документов"""
+        count = obj.related_shared_documents.count()
+        if count:
+            return format_html(
+                '<span style="color: #79aec8;">📄 Отдельных документов: {}</span>',
+                count
+            )
+        return "—"
+
+    display_related_shared_documents.short_description = 'Связанные отдельные документы'
+
+    def display_related_shared_documents_list(self, obj):
+        """Список связанных отдельных документов для детального просмотра"""
+        docs = obj.related_shared_documents.all()
+        if not docs.exists():
+            return "Нет связанных отдельных документов"
+
+        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px;">'
+        html += '<h4>📄 СВЯЗАННЫЕ ОТДЕЛЬНЫЕ ДОКУМЕНТЫ</h4>'
+        html += '<ul style="margin-top: 5px;">'
+
+        for doc in docs:
+            url = reverse('admin:shared_repository_sharedrepository_change', args=[doc.pk])
+            html += f'<li style="margin-bottom: 5px;">🔗 <a href="{url}" target="_blank">{doc.document_title}</a></li>'
+
+        html += '</ul></div>'
+        return format_html(html)
+
+    display_related_shared_documents_list.short_description = 'Связанные отдельные документы'
 
     def display_category(self, obj):
         """Отображение категории"""
@@ -3216,7 +3295,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
     display_category.admin_order_field = 'category'
 
     def display_document_title(self, obj):
-        """Отображение названия документа с вашим любимым форматированием"""
+        """Отображение названия документа"""
         if obj.document_title:
             return format_html(
                 '<div style="min-width: 200px; max-width: 400px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
@@ -3345,6 +3424,18 @@ class QMSDocumentAdmin(admin.ModelAdmin):
             obj.last_editor = request.user
         super().save_model(request, obj, form, change)
 
+    def remark_note(self, obj):
+        """Отображение примечания"""
+        if obj.note:
+            return format_html(
+                '<div style="min-width: 150px; max-width: 600px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
+                obj.note
+            )
+        return "—"
+
+    remark_note.short_description = 'Примечание'
+    remark_note.admin_order_field = 'remark_note'
+
 
 #@admin.register(QMSDocumentAcceptSignature)
 #class QMSDocumentAcceptSignatureAdmin(admin.ModelAdmin):
@@ -3470,14 +3561,28 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
     def get_form(self, request, obj=None, **kwargs):
-        """Кастомизация формы для динамической валидации"""
+        """Кастомизация формы — ограничиваем дату приказа"""
         form = super().get_form(request, obj, **kwargs)
 
-        # Добавляем атрибут min для поля даты
-        if 'validity_date' in form.base_fields:
+        # Ограничиваем выбор даты приказа — только прошедшие даты
+        if 'order_date' in form.base_fields:
             today = timezone.now().date().isoformat()
+            form.base_fields['order_date'].widget = forms.DateInput(
+                attrs={
+                    'type': 'date',
+                    'max': today,                    # нельзя выбрать сегодня и будущее
+                },
+                format='%Y-%m-%d'
+            )
+
+        # Для даты пересмотра оставляем ограничение "минимум сегодня"
+        if 'validity_date' in form.base_fields:
             form.base_fields['validity_date'].widget = forms.DateInput(
-                attrs={'type': 'date', 'min': today}
+                attrs={
+                    'type': 'date',
+                    'min': today,
+                },
+                format='%Y-%m-%d'
             )
 
         return form
@@ -3544,7 +3649,7 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
             )
         return obj.validity_date.strftime('%d.%m.%Y')
 
-    validity_date_warning.short_description = 'Срок пересмотра'
+    validity_date_warning.short_description = 'Срок пересмотра истекает'
     validity_date_warning.admin_order_field = 'validity_date'
 
     def display_uploaded_file(self, obj):
@@ -3560,44 +3665,6 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
         return "—"
 
     display_uploaded_file.short_description = 'Файл'
-
-    def save_model(self, request, obj, form, change):
-        """Автоматическая установка пользователей"""
-        # Вызываем валидацию
-        try:
-            obj.full_clean()
-        except ValidationError as e:
-            from django.forms import ValidationError as FormValidationError
-            raise FormValidationError(e.message_dict)
-
-        if not change:  # Создание
-            obj.author = request.user
-            obj.last_editor = request.user
-            if not obj.current_responsible:
-                obj.current_responsible = request.user
-        else:  # Редактирование
-            obj.last_editor = request.user
-        super().save_model(request, obj, form, change)
-
-    def get_form(self, request, obj=None, **kwargs):
-        """Кастомизация формы для динамической валидации"""
-        form = super().get_form(request, obj, **kwargs)
-
-        # Добавляем атрибут min для поля даты
-        if 'order_date' in form.base_fields:
-            today = timezone.now().date().isoformat()
-            form.base_fields['order_date'].widget = forms.DateInput(
-                attrs={'type': 'date', 'min': today}
-            )
-
-        if 'validity_date' in form.base_fields:
-            today = timezone.now().date().isoformat()
-            form.base_fields['validity_date'].widget = forms.DateInput(
-                attrs={'type': 'date', 'min': today}
-            )
-
-        return form
-
 
 class DocumentTemplateAcceptSignatureInline(admin.TabularInline):
     """Inline для множественных подписей ознакомления шаблонов"""
@@ -3650,7 +3717,7 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
         ('Файлы', {
             'fields': (
                 'uploaded_file',
-                'app_uploaded_file',
+                #'app_uploaded_file',
             )
         }),
         ('Срок пересмотра', {
@@ -3741,7 +3808,7 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
             )
         return obj.validity_date.strftime('%d.%m.%Y')
 
-    validity_date_warning.short_description = 'Срок пересмотра'
+    validity_date_warning.short_description = 'Срок пересмотра истекает'
     validity_date_warning.admin_order_field = 'validity_date'
 
     def display_uploaded_file(self, obj):
@@ -3776,6 +3843,6 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
             obj.last_editor = request.user
             if not obj.current_responsible:
                 obj.current_responsible = request.user
-        else:  # Редактирование
+        else:  # Редактирование 
             obj.last_editor = request.user
         super().save_model(request, obj, form, change)
