@@ -852,7 +852,9 @@ class AdministrativeOrder(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name='authored_orders',
-        verbose_name='Создатель (автор)'
+        verbose_name='Создатель (автор)',
+        null=True,
+        blank=True
     )
     date_of_creation = models.DateTimeField(
         verbose_name='Дата и время создания',
@@ -862,7 +864,9 @@ class AdministrativeOrder(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name='edited_orders',
-        verbose_name='Последний редактор'
+        verbose_name='Последний редактор',
+        null=True,
+        blank=True
     )
     date_of_change = models.DateTimeField(
         verbose_name='Дата и время последнего изменения',
@@ -872,7 +876,9 @@ class AdministrativeOrder(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name='responsible_orders',
-        verbose_name='Текущий ответственный'
+        verbose_name='Текущий ответственный',
+        null=True,
+        blank=True
     )
     version = models.CharField(
         max_length=3,
