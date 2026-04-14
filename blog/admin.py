@@ -15,7 +15,6 @@ from django.forms.models import BaseInlineFormSet
 from django.forms import ValidationError
 from django.contrib.contenttypes.admin import GenericTabularInline
 from django.contrib.contenttypes.forms import BaseGenericInlineFormSet
-
 from crm.models import (
     Notifications,
     Customer,
@@ -88,6 +87,8 @@ from .models import (
     Attachment,
     UniversalRKD,
     RKDDeveloper,
+    Shipment,
+    ShipmentAdditionalFile,
 )
 from .services import WorkAssignmentService
 
@@ -234,6 +235,27 @@ class UniversalRKDInline(admin.TabularInline):
     )
 
 
+class ShipmentAdditionalFileInline(admin.TabularInline):
+    model = ShipmentAdditionalFile
+    extra = 1
+    fields = ("file",)
+
+
+class ShipmentInline(admin.TabularInline):
+    model = Shipment
+    extra = 0
+    show_change_link = True
+    fields = (
+        "serial_number",
+        "manufacture_date",
+        "product_passport",
+        "shipment_date",
+        "recipient",
+        "note",
+    )
+    autocomplete_fields = ("recipient",)
+
+
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
     change_form_template = "admin/blog/universal_rkd_category_change_form.html"
@@ -253,6 +275,7 @@ class PostAdmin(admin.ModelAdmin):
         RevisionTaskInline,
         WorkAssignmentInline,
         UniversalRKDInline,
+        ShipmentInline,
     ]
 
     def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
@@ -264,10 +287,18 @@ class PostAdmin(admin.ModelAdmin):
         for instance in instances:
             instance.post = form.instance
 
-            # Если name пустое или только пробелы — взять из головной модели
-            if not instance.name or not instance.name.strip():
-                instance.name = instance.post.name
+            # Только для сущностей с полем name (журнал РКД и др.)
+            if hasattr(instance, "name"):
+                if not instance.name or not instance.name.strip():
+                    instance.name = instance.post.name
 
+            if isinstance(instance, Shipment):
+                user = request.user
+                if instance.pk is None:
+                    instance.author = user
+                instance.last_editor = user
+                if not instance.current_responsible_id:
+                    instance.current_responsible = user
 
             instance.save()
         formset.save_m2m()
@@ -516,6 +547,134 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         if not change:
             obj.author = request.user
         obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(Shipment)
+class ShipmentAdmin(admin.ModelAdmin):
+    """Журнал: только 7 колонок по ТЗ (без id и прочих служебных в списке)."""
+
+    change_list_template = "admin/blog/shipment/change_list.html"
+    inlines = (ShipmentAdditionalFileInline,)
+    list_display = (
+        "serial_number",
+        "manufacture_date",
+        "passport_link",
+        "additional_files_links",
+        "shipment_date",
+        "recipient",
+        "note",
+    )
+    list_display_links = ("serial_number",)
+    list_filter = ("post",)
+    search_fields = ("serial_number", "post__name", "note", "completeness")
+    ordering = ("post", "manufacture_date", "serial_number", "pk")
+    autocomplete_fields = (
+        "post",
+        "recipient",
+        "author",
+        "last_editor",
+        "current_responsible",
+    )
+    fieldsets = (
+        (
+            "Разработка",
+            {"fields": ("post",)},
+        ),
+        (
+            "Данные отгрузки",
+            {
+                "fields": (
+                    "serial_number",
+                    "manufacture_date",
+                    "product_passport",
+                    "shipment_date",
+                    "recipient",
+                    "completeness",
+                    "note",
+                )
+            },
+        ),
+        (
+            "Ответственные",
+            {
+                "fields": (
+                    "author",
+                    "last_editor",
+                    "current_responsible",
+                    "date_of_creation",
+                    "date_of_change",
+                )
+            },
+        ),
+    )
+
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("post", "recipient")
+            .prefetch_related("additional_files")
+        )
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = dict(extra_context or {})
+        post_id = request.GET.get("post__id__exact")
+        if post_id:
+            extra_context["shipment_breadcrumb_post"] = Post.objects.filter(pk=post_id).first()
+        return super().changelist_view(request, extra_context)
+
+    def get_readonly_fields(self, request, obj=None):
+        """Создатель фиксируется при первом сохранении; в уже созданной записи только просмотр."""
+        fields = ["date_of_creation", "date_of_change"]
+        if obj is not None:
+            fields.append("author")
+        return fields
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        initial = dict(initial or {})
+        initial["author"] = request.user.pk
+        initial["last_editor"] = request.user.pk
+        initial["current_responsible"] = request.user.pk
+        return initial
+
+    @admin.display(description="Паспорт", ordering="product_passport")
+    def passport_link(self, obj):
+        if obj.product_passport:
+            return format_html(
+                '<a href="{}" target="_blank" rel="noopener noreferrer">Открыть файл</a>',
+                obj.product_passport.url,
+            )
+        return "—"
+
+    @admin.display(description="Дополнительные данные (загружаемый файл)")
+    def additional_files_links(self, obj):
+        rows = list(obj.additional_files.all())
+        if not rows:
+            return "—"
+        parts = []
+        for af in rows:
+            f = getattr(af, "file", None)
+            if f and getattr(f, "name", None):
+                name = f.name.rsplit("/", 1)[-1]
+                parts.append(
+                    format_html(
+                        '<a href="{}" target="_blank" rel="noopener noreferrer">{}</a>',
+                        f.url,
+                        escape(name),
+                    )
+                )
+        if not parts:
+            return "—"
+        return mark_safe("<br>".join(str(p) for p in parts))
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        if not obj.current_responsible_id:
+            obj.current_responsible = request.user
         super().save_model(request, obj, form, change)
 
 
@@ -1309,6 +1468,18 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
             from datetime import time, datetime
             dt = datetime.combine(d, t or time(0, 0))
             cleaned["date_of_send"] = timezone.make_aware(dt, timezone.get_current_timezone())
+
+            letter_date = cleaned.get("letter_date")
+            if letter_date is not None and cleaned.get("date_of_send"):
+                send_local_date = timezone.localtime(cleaned["date_of_send"]).date()
+                if send_local_date < letter_date:
+                    raise ValidationError(
+                        {
+                            "date_of_send_date": (
+                                "Дата отправки не может быть раньше даты письма."
+                            ),
+                        }
+                    )
 
             recipient = cleaned.get("recipient")
             person_recipient = cleaned.get("person_recipient")
@@ -2604,21 +2775,18 @@ class IndependentDocumentAcceptSignatureInline(admin.TabularInline):
     extra = 1
     fields = ['signature_file', 'uploaded_by', 'uploaded_at']
     readonly_fields = ['uploaded_at']
+    verbose_name = "Подписи ознакомления"
 
 @admin.register(SharedRepository)
 class SharedRepositoryAdmin(admin.ModelAdmin):
 
     list_display = [
-        #'display_id',
-        #'display_category',
         'display_document_title',
         'display_approval',
         'display_date_approval',
-        #'display_signature_accept',
         'display_accept',
         'display_author',
         'display_date_of_change',
-        #'display_current_responsible',
         'display_version',
         'display_uploaded_file',
         'display_document_purpose',
@@ -2645,9 +2813,6 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'date_of_change',
         'last_editor',
         'author',
-        #'display_file_info',
-        #'display_accept_info',
-       # 'display_signature_accept_info',
     ]
 
     inlines = [IndependentDocumentAcceptSignatureInline]
@@ -2866,6 +3031,45 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
 
         return form
 
+    def display_files_list(self, obj):
+        """Список всех файлов документа (аналогично QMSDocument)"""
+        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0;">'
+
+        # Основной файл
+        html += '<h4>Основной документ:</h4>'
+        if obj.uploaded_file:
+            filename = obj.uploaded_file.name.split('/')[-1]
+            html += f'<p>📄 <a href="{obj.uploaded_file.url}" target="_blank">{filename}</a></p>'
+        else:
+            html += '<p>Не загружен</p>'
+
+        # Подпись утверждения
+        html += '<h4>Подпись утверждения:</h4>'
+        if obj.signature_approval:
+            filename = obj.signature_approval.name.split('/')[-1]
+            html += f'<p>🖊️ <a href="{obj.signature_approval.url}" target="_blank">{filename}</a></p>'
+        else:
+            html += '<p>Не загружена</p>'
+
+        # Подписи ознакомления
+        signatures = obj.accept_signatures.all()
+        if signatures.exists():
+            html += '<h4>Подписи ознакомления:</h4><ul>'
+            for sig in signatures:
+                filename = sig.signature_file.name.split('/')[-1]
+                html += f'<li>🖊️ <a href="{sig.signature_file.url}" target="_blank">{filename}</a>'
+                if sig.uploaded_by:
+                    html += f' <span style="color: #666;">(загрузил: {sig.uploaded_by.username})</span>'
+                html += '</li>'
+            html += '</ul>'
+        else:
+            html += '<h4>Подписи ознакомления:</h4><p>Нет загруженных подписей</p>'
+
+        html += '</div>'
+        return format_html(html)
+
+    display_files_list.short_description = 'Файлы документа'
+
 #@admin.register(IndependentDocumentAcceptSignature)
 #class IndependentDocumentAcceptSignatureAdmin(admin.ModelAdmin):
   #  """Админка для подписей ознакомления"""
@@ -2981,7 +3185,7 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
         """Отображение применения знаний (список пользователей)"""
         users = obj.knowledge_apply.all()
         if users.exists():
-            return ", ".join([user.username for user in users[:3]]) + ("..." if users.count() > 3 else "")
+            return ", ".join([user.username for user in users])
         return "—"
 
     display_knowledge_apply.short_description = 'Применение знаний/ практик'
@@ -3126,7 +3330,9 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'display_uploaded_file',
         'display_review_date',
         'display_review_status',
-        'document_purpose'
+        'document_purpose',
+        'display_related_documents',
+        'remark_note'
     ]
 
     list_filter = [
@@ -3149,7 +3355,10 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'display_files_list',
         'last_editor',
         'author',
+        'display_related_shared_documents_list',
     ]
+
+    filter_horizontal = ['related_documents']
 
     inlines = [QMSDocumentAcceptSignatureInline]
 
@@ -3178,8 +3387,10 @@ class QMSDocumentAdmin(admin.ModelAdmin):
             'fields': (
                 'uploaded_file',
                 'document_purpose',
-                'related_documents',
             )
+        }),
+        ('Связанные отдельные документы', {
+            'fields': ('related_documents',),
         }),
         ('Дата планового пересмотра', {
             'fields': (
@@ -3207,6 +3418,45 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         }),
     )
 
+    def display_related_documents(self, obj):
+        """Отображение связанных отдельных документов в списке"""
+        docs = obj.related_documents.all()
+        if docs.exists():
+            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
+        return "—"
+
+    display_related_documents.short_description = 'Связанные отдельные документы'
+
+    def display_related_shared_documents(self, obj):
+        """Отображение количества связанных отдельных документов"""
+        count = obj.related_shared_documents.count()
+        if count:
+            return format_html(
+                '<span style="color: #79aec8;">📄 Отдельных документов: {}</span>',
+                count
+            )
+        return "—"
+
+    display_related_shared_documents.short_description = 'Связанные отдельные документы'
+
+    def display_related_shared_documents_list(self, obj):
+        """Список связанных отдельных документов для детального просмотра"""
+        docs = obj.related_shared_documents.all()
+        if not docs.exists():
+            return "Нет связанных отдельных документов"
+
+        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px;">'
+        html += '<h4>📄 СВЯЗАННЫЕ ОТДЕЛЬНЫЕ ДОКУМЕНТЫ</h4>'
+        html += '<ul style="margin-top: 5px;">'
+
+        for doc in docs:
+            url = reverse('admin:shared_repository_sharedrepository_change', args=[doc.pk])
+            html += f'<li style="margin-bottom: 5px;">🔗 <a href="{url}" target="_blank">{doc.document_title}</a></li>'
+
+        html += '</ul></div>'
+        return format_html(html)
+
+    display_related_shared_documents_list.short_description = 'Связанные отдельные документы'
 
     def display_category(self, obj):
         """Отображение категории"""
@@ -3216,7 +3466,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
     display_category.admin_order_field = 'category'
 
     def display_document_title(self, obj):
-        """Отображение названия документа с вашим любимым форматированием"""
+        """Отображение названия документа"""
         if obj.document_title:
             return format_html(
                 '<div style="min-width: 200px; max-width: 400px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
@@ -3345,6 +3595,18 @@ class QMSDocumentAdmin(admin.ModelAdmin):
             obj.last_editor = request.user
         super().save_model(request, obj, form, change)
 
+    def remark_note(self, obj):
+        """Отображение примечания"""
+        if obj.note:
+            return format_html(
+                '<div style="min-width: 150px; max-width: 600px; white-space: normal; word-wrap: break-word; padding: 5px;">{}</div>',
+                obj.note
+            )
+        return "—"
+
+    remark_note.short_description = 'Примечание'
+    remark_note.admin_order_field = 'remark_note'
+
 
 #@admin.register(QMSDocumentAcceptSignature)
 #class QMSDocumentAcceptSignatureAdmin(admin.ModelAdmin):
@@ -3470,14 +3732,28 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
     def get_form(self, request, obj=None, **kwargs):
-        """Кастомизация формы для динамической валидации"""
+        """Кастомизация формы — ограничиваем дату приказа"""
         form = super().get_form(request, obj, **kwargs)
 
-        # Добавляем атрибут min для поля даты
-        if 'validity_date' in form.base_fields:
+        # Ограничиваем выбор даты приказа — только прошедшие даты
+        if 'order_date' in form.base_fields:
             today = timezone.now().date().isoformat()
+            form.base_fields['order_date'].widget = forms.DateInput(
+                attrs={
+                    'type': 'date',
+                    'max': today,                    # нельзя выбрать сегодня и будущее
+                },
+                format='%Y-%m-%d'
+            )
+
+        # Для даты пересмотра оставляем ограничение "минимум сегодня"
+        if 'validity_date' in form.base_fields:
             form.base_fields['validity_date'].widget = forms.DateInput(
-                attrs={'type': 'date', 'min': today}
+                attrs={
+                    'type': 'date',
+                    'min': today,
+                },
+                format='%Y-%m-%d'
             )
 
         return form
@@ -3544,7 +3820,7 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
             )
         return obj.validity_date.strftime('%d.%m.%Y')
 
-    validity_date_warning.short_description = 'Срок пересмотра'
+    validity_date_warning.short_description = 'Срок пересмотра истекает'
     validity_date_warning.admin_order_field = 'validity_date'
 
     def display_uploaded_file(self, obj):
@@ -3560,44 +3836,6 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
         return "—"
 
     display_uploaded_file.short_description = 'Файл'
-
-    def save_model(self, request, obj, form, change):
-        """Автоматическая установка пользователей"""
-        # Вызываем валидацию
-        try:
-            obj.full_clean()
-        except ValidationError as e:
-            from django.forms import ValidationError as FormValidationError
-            raise FormValidationError(e.message_dict)
-
-        if not change:  # Создание
-            obj.author = request.user
-            obj.last_editor = request.user
-            if not obj.current_responsible:
-                obj.current_responsible = request.user
-        else:  # Редактирование
-            obj.last_editor = request.user
-        super().save_model(request, obj, form, change)
-
-    def get_form(self, request, obj=None, **kwargs):
-        """Кастомизация формы для динамической валидации"""
-        form = super().get_form(request, obj, **kwargs)
-
-        # Добавляем атрибут min для поля даты
-        if 'order_date' in form.base_fields:
-            today = timezone.now().date().isoformat()
-            form.base_fields['order_date'].widget = forms.DateInput(
-                attrs={'type': 'date', 'min': today}
-            )
-
-        if 'validity_date' in form.base_fields:
-            today = timezone.now().date().isoformat()
-            form.base_fields['validity_date'].widget = forms.DateInput(
-                attrs={'type': 'date', 'min': today}
-            )
-
-        return form
-
 
 class DocumentTemplateAcceptSignatureInline(admin.TabularInline):
     """Inline для множественных подписей ознакомления шаблонов"""
@@ -3650,7 +3888,7 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
         ('Файлы', {
             'fields': (
                 'uploaded_file',
-                'app_uploaded_file',
+                #'app_uploaded_file',
             )
         }),
         ('Срок пересмотра', {
@@ -3741,7 +3979,7 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
             )
         return obj.validity_date.strftime('%d.%m.%Y')
 
-    validity_date_warning.short_description = 'Срок пересмотра'
+    validity_date_warning.short_description = 'Срок пересмотра истекает'
     validity_date_warning.admin_order_field = 'validity_date'
 
     def display_uploaded_file(self, obj):
@@ -3776,6 +4014,6 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
             obj.last_editor = request.user
             if not obj.current_responsible:
                 obj.current_responsible = request.user
-        else:  # Редактирование
+        else:  # Редактирование 
             obj.last_editor = request.user
         super().save_model(request, obj, form, change)
