@@ -15,7 +15,6 @@ from django.forms.models import BaseInlineFormSet
 from django.forms import ValidationError
 from django.contrib.contenttypes.admin import GenericTabularInline
 from django.contrib.contenttypes.forms import BaseGenericInlineFormSet
-
 from crm.models import (
     Notifications,
     Customer,
@@ -88,6 +87,8 @@ from .models import (
     Attachment,
     UniversalRKD,
     RKDDeveloper,
+    Shipment,
+    ShipmentAdditionalFile,
 )
 from .services import WorkAssignmentService
 
@@ -234,6 +235,27 @@ class UniversalRKDInline(admin.TabularInline):
     )
 
 
+class ShipmentAdditionalFileInline(admin.TabularInline):
+    model = ShipmentAdditionalFile
+    extra = 1
+    fields = ("file",)
+
+
+class ShipmentInline(admin.TabularInline):
+    model = Shipment
+    extra = 0
+    show_change_link = True
+    fields = (
+        "serial_number",
+        "manufacture_date",
+        "product_passport",
+        "shipment_date",
+        "recipient",
+        "note",
+    )
+    autocomplete_fields = ("recipient",)
+
+
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
     change_form_template = "admin/blog/universal_rkd_category_change_form.html"
@@ -253,6 +275,7 @@ class PostAdmin(admin.ModelAdmin):
         RevisionTaskInline,
         WorkAssignmentInline,
         UniversalRKDInline,
+        ShipmentInline,
     ]
 
     def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
@@ -264,10 +287,18 @@ class PostAdmin(admin.ModelAdmin):
         for instance in instances:
             instance.post = form.instance
 
-            # Если name пустое или только пробелы — взять из головной модели
-            if not instance.name or not instance.name.strip():
-                instance.name = instance.post.name
+            # Только для сущностей с полем name (журнал РКД и др.)
+            if hasattr(instance, "name"):
+                if not instance.name or not instance.name.strip():
+                    instance.name = instance.post.name
 
+            if isinstance(instance, Shipment):
+                user = request.user
+                if instance.pk is None:
+                    instance.author = user
+                instance.last_editor = user
+                if not instance.current_responsible_id:
+                    instance.current_responsible = user
 
             instance.save()
         formset.save_m2m()
@@ -516,6 +547,134 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         if not change:
             obj.author = request.user
         obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(Shipment)
+class ShipmentAdmin(admin.ModelAdmin):
+    """Журнал: только 7 колонок по ТЗ (без id и прочих служебных в списке)."""
+
+    change_list_template = "admin/blog/shipment/change_list.html"
+    inlines = (ShipmentAdditionalFileInline,)
+    list_display = (
+        "serial_number",
+        "manufacture_date",
+        "passport_link",
+        "additional_files_links",
+        "shipment_date",
+        "recipient",
+        "note",
+    )
+    list_display_links = ("serial_number",)
+    list_filter = ("post",)
+    search_fields = ("serial_number", "post__name", "note", "completeness")
+    ordering = ("post", "manufacture_date", "serial_number", "pk")
+    autocomplete_fields = (
+        "post",
+        "recipient",
+        "author",
+        "last_editor",
+        "current_responsible",
+    )
+    fieldsets = (
+        (
+            "Разработка",
+            {"fields": ("post",)},
+        ),
+        (
+            "Данные отгрузки",
+            {
+                "fields": (
+                    "serial_number",
+                    "manufacture_date",
+                    "product_passport",
+                    "shipment_date",
+                    "recipient",
+                    "completeness",
+                    "note",
+                )
+            },
+        ),
+        (
+            "Ответственные",
+            {
+                "fields": (
+                    "author",
+                    "last_editor",
+                    "current_responsible",
+                    "date_of_creation",
+                    "date_of_change",
+                )
+            },
+        ),
+    )
+
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("post", "recipient")
+            .prefetch_related("additional_files")
+        )
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = dict(extra_context or {})
+        post_id = request.GET.get("post__id__exact")
+        if post_id:
+            extra_context["shipment_breadcrumb_post"] = Post.objects.filter(pk=post_id).first()
+        return super().changelist_view(request, extra_context)
+
+    def get_readonly_fields(self, request, obj=None):
+        """Создатель фиксируется при первом сохранении; в уже созданной записи только просмотр."""
+        fields = ["date_of_creation", "date_of_change"]
+        if obj is not None:
+            fields.append("author")
+        return fields
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        initial = dict(initial or {})
+        initial["author"] = request.user.pk
+        initial["last_editor"] = request.user.pk
+        initial["current_responsible"] = request.user.pk
+        return initial
+
+    @admin.display(description="Паспорт", ordering="product_passport")
+    def passport_link(self, obj):
+        if obj.product_passport:
+            return format_html(
+                '<a href="{}" target="_blank" rel="noopener noreferrer">Открыть файл</a>',
+                obj.product_passport.url,
+            )
+        return "—"
+
+    @admin.display(description="Дополнительные данные (загружаемый файл)")
+    def additional_files_links(self, obj):
+        rows = list(obj.additional_files.all())
+        if not rows:
+            return "—"
+        parts = []
+        for af in rows:
+            f = getattr(af, "file", None)
+            if f and getattr(f, "name", None):
+                name = f.name.rsplit("/", 1)[-1]
+                parts.append(
+                    format_html(
+                        '<a href="{}" target="_blank" rel="noopener noreferrer">{}</a>',
+                        f.url,
+                        escape(name),
+                    )
+                )
+        if not parts:
+            return "—"
+        return mark_safe("<br>".join(str(p) for p in parts))
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        if not obj.current_responsible_id:
+            obj.current_responsible = request.user
         super().save_model(request, obj, form, change)
 
 
@@ -1309,6 +1468,18 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
             from datetime import time, datetime
             dt = datetime.combine(d, t or time(0, 0))
             cleaned["date_of_send"] = timezone.make_aware(dt, timezone.get_current_timezone())
+
+            letter_date = cleaned.get("letter_date")
+            if letter_date is not None and cleaned.get("date_of_send"):
+                send_local_date = timezone.localtime(cleaned["date_of_send"]).date()
+                if send_local_date < letter_date:
+                    raise ValidationError(
+                        {
+                            "date_of_send_date": (
+                                "Дата отправки не может быть раньше даты письма."
+                            ),
+                        }
+                    )
 
             recipient = cleaned.get("recipient")
             person_recipient = cleaned.get("person_recipient")

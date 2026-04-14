@@ -1965,3 +1965,151 @@ class UniversalRKD(models.Model):
             max_o = agg["m"] or 0
             self.order_in_section = max_o + 1
         super().save(*args, **kwargs)
+
+
+class Shipment(models.Model):
+    """Отгрузки изделий в рамках разработки (модификации)."""
+
+    post = models.ForeignKey(
+        "Post",
+        on_delete=models.CASCADE,
+        related_name="shipments",
+        verbose_name="Разработка (модификация)",
+    )
+    serial_number = models.CharField(max_length=20, verbose_name="Заводской номер")
+    manufacture_date = models.DateField(verbose_name="Дата изготовления")
+    product_passport = models.FileField(
+        upload_to="blog/shipment/passport/%Y/%m/",
+        blank=True,
+        null=True,
+        verbose_name="Паспорт",
+    )
+    shipment_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Дата отгрузки",
+    )
+    recipient = models.ForeignKey(
+        "crm.Customer",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="shipments",
+        verbose_name="Получатель",
+    )
+    completeness = models.TextField(
+        max_length=5000,
+        blank=True,
+        default="",
+        verbose_name="Комплектность",
+    )
+    note = models.TextField(
+        max_length=1000,
+        blank=True,
+        default="",
+        verbose_name="Примечание",
+    )
+    author = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="shipments_created",
+        verbose_name="Создатель",
+    )
+    date_of_creation = models.DateTimeField(
+        default=timezone.now,
+        verbose_name="Дата и время создания",
+    )
+    last_editor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="shipments_edited",
+        verbose_name="Последний редактор",
+    )
+    date_of_change = models.DateTimeField(
+        auto_now=True,
+        verbose_name="Дата и время последнего изменения",
+    )
+    current_responsible = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="shipments_responsible",
+        verbose_name="Текущий ответственный",
+    )
+
+    class Meta:
+        verbose_name = "Отгрузка"
+        verbose_name_plural = "Отгрузки"
+        ordering = ("post", "manufacture_date", "serial_number", "pk")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("post", "serial_number"),
+                name="blog_shipment_unique_serial_per_post",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.serial_number} — {self.post}"
+
+    def clean(self):
+        super().clean()
+        if self.serial_number is not None:
+            self.serial_number = self.serial_number.strip()
+
+        if self.post_id and self.serial_number:
+            qs = Shipment.objects.filter(
+                post_id=self.post_id,
+                serial_number=self.serial_number,
+            )
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                p = Post.objects.filter(pk=self.post_id).only("name").first()
+                post_title = p.name if p else "—"
+                raise ValidationError(
+                    {
+                        "serial_number": (
+                            f"В отгрузке по разработке «{post_title}» такой заводской номер уже существует."
+                        ),
+                    }
+                )
+
+        if (
+            self.shipment_date
+            and self.manufacture_date
+            and self.shipment_date < self.manufacture_date
+        ):
+            raise ValidationError(
+                {
+                    "shipment_date": (
+                        "Дата отгрузки не может быть раньше даты изготовления."
+                    ),
+                }
+            )
+
+
+class ShipmentAdditionalFile(models.Model):
+    """Дополнительные файлы к отгрузке (несколько штук)."""
+
+    shipment = models.ForeignKey(
+        Shipment,
+        on_delete=models.CASCADE,
+        related_name="additional_files",
+        verbose_name="Отгрузка",
+    )
+    file = models.FileField(
+        upload_to="blog/shipment/additional/%Y/%m/",
+        verbose_name="Файл",
+    )
+
+    class Meta:
+        verbose_name = "Дополнительный файл отгрузки"
+        verbose_name_plural = "Дополнительные файлы отгрузки"
+
+    def __str__(self):
+        return self.file.name if self.file else str(self.pk)
