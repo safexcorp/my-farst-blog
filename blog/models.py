@@ -1622,6 +1622,37 @@ class RKDDeveloper(models.Model):
         return self.name
 
 
+class ShipmentSupplier(models.Model):
+    """Организация-поставщик для отгрузок (те же реквизиты, что у организации-разработчика РКД)."""
+
+    name = models.CharField(max_length=200, unique=True, verbose_name="Название")
+    charter = models.FileField(
+        upload_to="shipment_supplier/charter/",
+        blank=True,
+        null=True,
+        verbose_name="Устав",
+    )
+    requisites = models.FileField(
+        upload_to="shipment_supplier/requisites/",
+        blank=True,
+        null=True,
+        verbose_name="Реквизиты",
+    )
+    additional_data = models.FileField(
+        upload_to="shipment_supplier/additional/",
+        blank=True,
+        null=True,
+        verbose_name="Дополнительные данные",
+    )
+
+    class Meta:
+        verbose_name = "Поставщик"
+        verbose_name_plural = "Поставщики"
+
+    def __str__(self):
+        return self.name
+
+
 class UniversalRKD(models.Model):
     STATUS_CHOICES = [
         ("Зарегистрирован", "Зарегистрирован"),
@@ -1982,7 +2013,15 @@ class Shipment(models.Model):
         upload_to="blog/shipment/passport/%Y/%m/",
         blank=True,
         null=True,
-        verbose_name="Паспорт",
+        verbose_name="Паспорт/Формуляр",
+    )
+    supplier = models.ForeignKey(
+        "ShipmentSupplier",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="shipments",
+        verbose_name="Поставщик",
     )
     shipment_date = models.DateField(
         null=True,

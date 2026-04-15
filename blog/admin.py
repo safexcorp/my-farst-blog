@@ -89,6 +89,7 @@ from .models import (
     RKDDeveloper,
     Shipment,
     ShipmentAdditionalFile,
+    ShipmentSupplier,
 )
 from .services import WorkAssignmentService
 
@@ -248,12 +249,13 @@ class ShipmentInline(admin.TabularInline):
     fields = (
         "serial_number",
         "manufacture_date",
+        "supplier",
         "product_passport",
         "shipment_date",
         "recipient",
         "note",
     )
-    autocomplete_fields = ("recipient",)
+    autocomplete_fields = ("recipient", "supplier")
 
 
 @admin.register(Post)
@@ -325,6 +327,17 @@ admin.site.register(Post, PostAdmin)
 
 @admin.register(RKDDeveloper)
 class RKDDeveloperAdmin(admin.ModelAdmin):
+    fields = (
+        "name",
+        "charter",
+        "requisites",
+        "additional_data",
+    )
+    search_fields = ("name",)
+
+
+@admin.register(ShipmentSupplier)
+class ShipmentSupplierAdmin(admin.ModelAdmin):
     fields = (
         "name",
         "charter",
@@ -552,11 +565,12 @@ class UniversalRKDAdmin(admin.ModelAdmin):
 
 @admin.register(Shipment)
 class ShipmentAdmin(admin.ModelAdmin):
-    """Журнал: только 7 колонок по ТЗ (без id и прочих служебных в списке)."""
+    """Журнал: колонки по ТЗ — разработка первой, как в РКД; без служебного id в списке."""
 
     change_list_template = "admin/blog/shipment/change_list.html"
     inlines = (ShipmentAdditionalFileInline,)
     list_display = (
+        "shipment_post_column",
         "serial_number",
         "manufacture_date",
         "passport_link",
@@ -567,11 +581,12 @@ class ShipmentAdmin(admin.ModelAdmin):
     )
     list_display_links = ("serial_number",)
     list_filter = ("post",)
-    search_fields = ("serial_number", "post__name", "note", "completeness")
+    search_fields = ("serial_number", "post__name", "note", "completeness", "supplier__name")
     ordering = ("post", "manufacture_date", "serial_number", "pk")
     autocomplete_fields = (
         "post",
         "recipient",
+        "supplier",
         "author",
         "last_editor",
         "current_responsible",
@@ -587,6 +602,7 @@ class ShipmentAdmin(admin.ModelAdmin):
                 "fields": (
                     "serial_number",
                     "manufacture_date",
+                    "supplier",
                     "product_passport",
                     "shipment_date",
                     "recipient",
@@ -613,7 +629,7 @@ class ShipmentAdmin(admin.ModelAdmin):
         return (
             super()
             .get_queryset(request)
-            .select_related("post", "recipient")
+            .select_related("post", "recipient", "supplier")
             .prefetch_related("additional_files")
         )
 
@@ -639,7 +655,11 @@ class ShipmentAdmin(admin.ModelAdmin):
         initial["current_responsible"] = request.user.pk
         return initial
 
-    @admin.display(description="Паспорт", ordering="product_passport")
+    @admin.display(description="Разработка (модификация)", ordering="post")
+    def shipment_post_column(self, obj):
+        return obj.post or "—"
+
+    @admin.display(description="Паспорт/Формуляр", ordering="product_passport")
     def passport_link(self, obj):
         if obj.product_passport:
             return format_html(
