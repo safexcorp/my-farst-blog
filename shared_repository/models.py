@@ -153,6 +153,14 @@ class SharedRepository(models.Model):
         null=True,
         help_text='Все текстовые символы - 5000 символов max'
     )
+
+    related_documents = models.ManyToManyField(
+        'QMSDocument',
+        verbose_name='Связанные документы СМК',
+        blank=True,
+        help_text='Выбор из списка документов СМК. Можно выбрать несколько'
+    )
+
     # 17. Примечание документа
     note = models.TextField(
         max_length=5000,
