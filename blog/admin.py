@@ -2811,6 +2811,7 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'display_uploaded_file',
         'display_document_purpose',
         'display_note',
+        'display_related_documents',
     ]
 
     list_filter = [
@@ -2833,7 +2834,10 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'date_of_change',
         'last_editor',
         'author',
+        'display_related_qms_documents_list',
     ]
+
+    filter_horizontal = ['related_documents']
 
     inlines = [IndependentDocumentAcceptSignatureInline]
 
@@ -2863,6 +2867,9 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
                 #'signature_accept',
             )
         }),
+        ('Связанные документы СМК', {
+            'fields': ('related_documents',),
+        }),
         ('Пользователи системы', {
             'fields': (
                 'author',
@@ -2870,15 +2877,52 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
                 'current_responsible',
             )
         }),
-        ('Даты и время', {
+        ('Системные даты', {
             'fields': (
                 'date_of_creation',
                 'date_of_change',
             )
         }),
     )
+    def display_related_documents(self, obj):
+        """Отображение связанных документов СМК в списке"""
+        docs = obj.related_documents.all()
+        if docs.exists():
+            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
+        return "—"
 
-    # --- Кастомные отображения для соответствия ТЗ ---
+    display_related_documents.short_description = 'Связанные документы СМК'
+
+    def display_related_qms_documents(self, obj):
+        """Отображение количества связанных документов СМК"""
+        count = obj.related_qms_documents.count()
+        if count:
+            return format_html(
+                '<span style="color: #79aec8;">📄 Документов СМК: {}</span>',
+                count
+            )
+        return "—"
+
+    display_related_qms_documents.short_description = 'Связанные документы СМК'
+
+    def display_related_qms_documents_list(self, obj):
+        """Список связанных документов СМК для детального просмотра"""
+        docs = obj.related_qms_documents.all()
+        if not docs.exists():
+            return "Нет связанных документов СМК"
+
+        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px;">'
+        html += '<h4>📄 СВЯЗАННЫЕ ДОКУМЕНТЫ СМК</h4>'
+        html += '<ul style="margin-top: 5px;">'
+
+        for doc in docs:
+            url = reverse('admin:qmsdocument_qmsdocument_change', args=[doc.pk])
+            html += f'<li style="margin-bottom: 5px;">🔗 <a href="{url}" target="_blank">{doc.document_title}</a></li>'
+
+        html += '</ul></div>'
+        return format_html(html)
+
+    display_related_qms_documents_list.short_description = 'Связанные документы СМК'
 
     def display_id(self, obj):
         return obj.id
@@ -3175,7 +3219,7 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
                 'current_responsible',
             )
         }),
-        ('Версия и даты', {
+        ('Версия и системные даты', {
             'fields': (
                 'version',
                 'date_of_creation',
