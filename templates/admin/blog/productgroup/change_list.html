@@ -1,0 +1,17 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    #changelist #result_list td {
+      max-width: 22rem;
+      white-space: normal;
+      word-break: break-word;
+      vertical-align: top;
+    }
+    #changelist #result_list th {
+      vertical-align: top;
+    }
+  </style>
+{% endblock %}
