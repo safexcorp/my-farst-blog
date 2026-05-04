@@ -1,14 +1,17 @@
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin.utils import unquote
+from django.contrib.admin.widgets import RelatedFieldWidgetWrapper
 from django.shortcuts import redirect, render
 from django.urls import path, reverse
 from django.utils import timezone
 from datetime import timedelta
 from django.utils.html import escape, format_html
+from django.template.defaultfilters import linebreaksbr
 from django.utils.safestring import mark_safe
 import re
-from django.db.models import Q, F, Value, TextField, DateField, BooleanField, Case, When
+from django.db.models import Q, F, Value , TextField, DateField, BooleanField, Case, When, IntegerField
+from django.db.models.functions import Cast
 from functools import reduce
 from operator import and_, or_
 from django.forms.models import BaseInlineFormSet
@@ -48,7 +51,7 @@ KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature, Admini
 AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature)
 
 from .admin_forms import RescheduleAdminForm
-from .forms import WorkAssignmentForm, UniversalRKDForm
+from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
 from .helpers import (
     first_incomplete_step_code,
     next_step_code_after,
@@ -74,22 +77,25 @@ from .models import (
     ListTechnicalProposal,
     Post,
     Process,
+    ProductGroup,
+    ProductGroupDocument,
     ProtocolTechnicalProposal,
     ReportTechnicalProposal,
     Route,
     RouteProcess,
     SoftwareProduct,
-    TechnicalProposal,
+    TechnicalProposalDocument,
     TaskForDesignWork,
     RevisionTask,
     WorkAssignment,
+    WorkAssignmentSubtask,
     WorkAssignmentDeadlineChange,
     Attachment,
     UniversalRKD,
     RKDDeveloper,
+    RKDDeveloperAdditionalFile,
     Shipment,
     ShipmentAdditionalFile,
-    ShipmentSupplier,
 )
 from .services import WorkAssignmentService
 
@@ -103,7 +109,6 @@ def _inject_rkd_category_json(extra_context):
 
 
 def _admin_warning_triangle_html(*, title: str, color: str = "#f0ad4e") -> str:
-    """Как в журнале СИЗ / поверки: жёлтый треугольник с подсказкой."""
     t = escape(title)
     return (
         f'<span title="{t}" style="display:inline-flex;align-items:center;">'
@@ -117,12 +122,14 @@ def _admin_warning_triangle_html(*, title: str, color: str = "#f0ad4e") -> str:
     )
 
 
-def _universal_rkd_planned_review_show_warning(validity_date) -> bool:
-    """Предупреждение, если до даты пересмотра осталось не более 60 дней или срок уже прошёл."""
+def _universal_rkd_planned_review_show_warning(validity_date, *, days: int) -> bool:
     if not validity_date:
         return False
+    d = int(days or 0)
+    if d < 0:
+        d = 0
     today = timezone.now().date()
-    return (validity_date - today).days <= 60
+    return (validity_date - today).days <= d
 
 
 class RequiredFileGenericFormSet(BaseGenericInlineFormSet):
@@ -156,14 +163,341 @@ class RequiredFileGenericFormSet(BaseGenericInlineFormSet):
 
 class AttachmentInline(GenericTabularInline):
     model = Attachment
-    formset = RequiredFileGenericFormSet   # ваш общий formset
+    formset = RequiredFileGenericFormSet
     extra = 1
     fields = ("file",)
 
-@admin.register(TechnicalProposal)
-class TechnicalProposalAdmin(admin.ModelAdmin):
-    list_display = ['name', 'author', 'date_of_creation']
-    readonly_fields = ('date_of_creation', 'date_of_change')
+
+class WorkAssignmentAttachmentInline(AttachmentInline):
+    verbose_name_plural = "Вложения"
+
+
+def _tp_docs_section_header(title: str):
+    return mark_safe(
+        '<div style="'
+        "margin: 0 0 10px 0;"
+        "padding: 10px 14px;"
+        "font-weight: 700;"
+        "font-size: 13px;"
+        "letter-spacing: 0.4px;"
+        "text-transform: uppercase;"
+        "border-left: 4px solid var(--primary, #79aec8);"
+        "background: var(--darkened-bg, rgba(121,174,200,0.12));"
+        "color: var(--body-fg, inherit);"
+        "border-radius: 3px;"
+        f'">{escape(title)}</div>'
+    )
+
+
+@admin.register(TechnicalProposalDocument)
+class TechnicalProposalDocumentAdmin(admin.ModelAdmin):
+    change_form_template = "admin/blog/technicalproposaldocument/change_form.html"
+    change_list_template = "admin/blog/technicalproposaldocument/change_list.html"
+    form = TechnicalProposalForm
+
+    list_display = (
+        "tp_post_column",
+        "tp_document_kind",
+        "category",
+        "desig_document",
+        "name",
+        "tp_documents_column",
+        "status",
+    )
+    list_display_links = ("name",)
+    list_filter = ("document_kind", "status", "post")
+    search_fields = ("name", "desig_document", "category", "post__name")
+
+    @admin.display(description="Разработка (модификация)", ordering="post")
+    def tp_post_column(self, obj):
+        return obj.post or "—"
+
+    @admin.display(description="Вид документа ПТ", ordering="document_kind")
+    def tp_document_kind(self, obj):
+        return obj.get_document_kind_display() or "—"
+
+    @admin.display(description="Документ")
+    def tp_documents_column(self, obj):
+        parts = []
+        if obj.document_uploaded_file:
+            parts.append(
+                format_html(
+                    '<a href="{}" target="_blank" rel="noopener noreferrer">Документ</a>',
+                    obj.document_uploaded_file.url,
+                )
+            )
+        if obj.approval_document:
+            parts.append(
+                format_html(
+                    '<a href="{}" target="_blank" rel="noopener noreferrer">Лист утверждения</a>',
+                    obj.approval_document.url,
+                )
+            )
+        if obj.attestation_document:
+            parts.append(
+                format_html(
+                    '<a href="{}" target="_blank" rel="noopener noreferrer">Удостоверяющий лист</a>',
+                    obj.attestation_document.url,
+                )
+            )
+        if not parts:
+            return "—"
+        return mark_safe("<br>".join(str(p) for p in parts))
+
+    autocomplete_fields = (
+        "post",
+        "author",
+        "last_editor",
+        "current_responsible",
+        "checked_by",
+        "approved_by",
+        "develop_org",
+    )
+    readonly_fields = (
+        "date_of_creation",
+        "date_of_change",
+        "tp_display_files_list",
+    )
+
+    fieldsets = (
+        (
+            "Разработка и классификация",
+            {
+                "fields": (
+                    "post",
+                    "document_kind",
+                    "category",
+                    "name",
+                    "desig_document",
+                    "litera",
+                    "trl",
+                )
+            },
+        ),
+        (
+            "Содержание и статус",
+            {
+                "fields": (
+                    "info_format",
+                    "status",
+                    "related_documents",
+                    "develop_org",
+                )
+            },
+        ),
+        (
+            None,
+            {
+                "description": _tp_docs_section_header("Основной документ"),
+                "fields": (
+                    "document_uploaded_file",
+                    "document_source",
+                ),
+            },
+        ),
+        (
+            None,
+            {
+                "description": _tp_docs_section_header("Лист утверждения"),
+                "fields": (
+                    "approval_document",
+                    "approval_source",
+                ),
+            },
+        ),
+        (
+            None,
+            {
+                "description": _tp_docs_section_header("Удостоверяющий лист"),
+                "fields": (
+                    "attestation_document",
+                    "attestation_source",
+                ),
+            },
+        ),
+        (
+            "Согласование",
+            {
+                "fields": (
+                    "checked_by",
+                    "signature_checked",
+                    "approved_by",
+                    "signature_approved",
+                )
+            },
+        ),
+        (
+            "Дополнительно",
+            {
+                "fields": (
+                    "comment",
+                )
+            },
+        ),
+        (
+            "Ответственные",
+            {
+                "fields": (
+                    "author",
+                    "current_responsible",
+                    "last_editor",
+                    "version",
+                    "date_of_creation",
+                    "date_of_change",
+                )
+            },
+        ),
+        (
+            "Файлы документа",
+            {
+                "fields": ("tp_display_files_list",),
+            },
+        ),
+    )
+
+    @admin.display(description="Файлы документа")
+    def tp_display_files_list(self, obj):
+        card_style = (
+            "border: 1px solid var(--hairline-color, #e1e4e8);"
+            "border-radius: 6px;"
+            "background: var(--body-bg, #fff);"
+            "padding: 14px 16px;"
+            "max-width: 920px;"
+        )
+        section_title = (
+            "margin: 16px 0 8px 0;"
+            "font-size: 12px;"
+            "font-weight: 600;"
+            "letter-spacing: 0.02em;"
+            "text-transform: uppercase;"
+            "color: var(--body-quiet-color, #6b7280);"
+        )
+        row_base = "display:flex; gap:12px; align-items:flex-start; padding:8px 0;"
+        row_sep = "border-bottom: 1px solid var(--hairline-color, #eef0f3);"
+        label_style = "width: 260px; flex: 0 0 260px; color: var(--body-fg, #111); font-weight: 500;"
+        value_style = "flex: 1; min-width: 0; word-break: break-word;"
+        muted = "color: var(--body-quiet-color, #6b7280);"
+        link_style = "color: var(--link-fg, #417690); text-decoration: none;"
+
+        if not obj or not getattr(obj, "pk", None):
+            return format_html(
+                '<div style="{}">'
+                '<div style="{}">Сводка по файлам</div>'
+                '<div style="{}">После первого сохранения записи здесь появятся ссылки на загруженные файлы.</div>'
+                "</div>",
+                card_style,
+                section_title,
+                muted,
+            )
+
+        def _basename(f):
+            name = getattr(f, "name", "") or ""
+            return name.rsplit("/", 1)[-1] or name
+
+        def _row(label, f, *, with_sep, uploaded_by=None, uploaded_at=None):
+            row_style = row_base + (row_sep if with_sep else "")
+            label_html = f'<div style="{label_style}">{escape(label)}</div>'
+            if not f:
+                return f'<div style="{row_style}">{label_html}<div style="{value_style} {muted}">не загружен</div></div>'
+            url = getattr(f, "url", "") or ""
+            filename = escape(_basename(f))
+            if url:
+                value = f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer" style="{link_style}">{filename}</a>'
+            else:
+                value = f'<span style="{muted}">{filename}</span>'
+            if uploaded_by and uploaded_at:
+                value += (
+                    f'<div style="margin-top:6px;font-size:12px;{muted}">'
+                    f"изменил: {escape(uploaded_by.get_username())} · "
+                    f"{escape(uploaded_at.strftime('%d.%m.%Y %H:%M'))}"
+                    f"</div>"
+                )
+            elif uploaded_by:
+                value += (
+                    f'<div style="margin-top:6px;font-size:12px;{muted}">'
+                    f"изменил: {escape(uploaded_by.get_username())}"
+                    f"</div>"
+                )
+            return f'<div style="{row_style}">{label_html}<div style="{value_style}">{value}</div></div>'
+
+        last_editor = getattr(obj, "last_editor", None) or getattr(obj, "author", None)
+        changed_at = getattr(obj, "date_of_change", None)
+
+        html = f'<div style="{card_style}">'
+        html += f'<div style="{section_title}">Документы</div>'
+        html += _row("Документ — итоговый", getattr(obj, "document_uploaded_file", None), with_sep=True, uploaded_by=last_editor, uploaded_at=changed_at)
+        html += _row("Документ — исходник", getattr(obj, "document_source", None), with_sep=True, uploaded_by=last_editor, uploaded_at=changed_at)
+        html += _row("Лист утверждения — итоговый (PDF)", getattr(obj, "approval_document", None), with_sep=True, uploaded_by=last_editor, uploaded_at=changed_at)
+        html += _row("Лист утверждения — исходник (DOCX)", getattr(obj, "approval_source", None), with_sep=True, uploaded_by=last_editor, uploaded_at=changed_at)
+        html += _row("Удостоверяющий лист — итоговый (PDF)", getattr(obj, "attestation_document", None), with_sep=True, uploaded_by=last_editor, uploaded_at=changed_at)
+        html += _row("Удостоверяющий лист — исходник (DOCX)", getattr(obj, "attestation_source", None), with_sep=False, uploaded_by=last_editor, uploaded_at=changed_at)
+        html += f'<div style="{section_title}">Подписи</div>'
+        html += _row("Подпись проверки", getattr(obj, "signature_checked", None), with_sep=True, uploaded_by=last_editor, uploaded_at=changed_at)
+        html += _row("Подпись утверждения", getattr(obj, "signature_approved", None), with_sep=False, uploaded_by=last_editor, uploaded_at=changed_at)
+        html += "</div>"
+        return mark_safe(html)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related(
+            "post",
+            "develop_org",
+            "author",
+            "last_editor",
+            "current_responsible",
+            "checked_by",
+            "approved_by",
+        )
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = dict(extra_context or {})
+        post_id = request.GET.get("post__id__exact")
+        if post_id:
+            extra_context["tp_breadcrumb_post"] = Post.objects.filter(pk=post_id).first()
+        return super().changelist_view(request, extra_context)
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        extra_context = dict(extra_context or {})
+        if object_id:
+            obj = self.get_object(request, unquote(object_id))
+            if obj is not None:
+                if obj.post_id:
+                    extra_context["tp_breadcrumb_post"] = obj.post
+                extra_context["tp_breadcrumb_record_title"] = str(obj)
+        else:
+            post_q = request.GET.get("post")
+            if post_q:
+                extra_context["tp_breadcrumb_post"] = Post.objects.filter(pk=post_q).first()
+        return super().changeform_view(request, object_id, form_url, extra_context)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+    _PDF_FILE_FIELDS = {
+        "approval_document",
+        "attestation_document",
+    }
+    _DOCX_FILE_FIELDS = {
+        "approval_source",
+        "attestation_source",
+    }
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is None:
+            return formfield
+        name = db_field.name
+        if name in self._PDF_FILE_FIELDS:
+            formfield.widget.attrs.setdefault("accept", ".pdf,application/pdf")
+        elif name in self._DOCX_FILE_FIELDS:
+            formfield.widget.attrs.setdefault(
+                "accept",
+                ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        return formfield
 
 class ListTechnicalProposalInline(admin.TabularInline):
     model = ListTechnicalProposal
@@ -187,7 +521,9 @@ class RevisionTaskInline(admin.TabularInline):
 class WorkAssignmentInline(admin.TabularInline):
     model = WorkAssignment
     extra = 0
+    readonly_fields = ("wa_code_inline",)
     fields = (
+        "wa_code_inline",
         "name",
         "category",
         "executor",
@@ -198,9 +534,12 @@ class WorkAssignmentInline(admin.TabularInline):
         "version",
         "task",
         "target_deadline",
-        "result",
     )
     show_change_link = True
+
+    @admin.display(description="Код")
+    def wa_code_inline(self, obj):
+        return obj.wa_full_code or "—"
 
     def get_extra_buttons(self, obj):
         if obj and obj.id:
@@ -249,40 +588,373 @@ class ShipmentInline(admin.TabularInline):
     fields = (
         "serial_number",
         "manufacture_date",
-        "supplier",
+        "manufacturer_org",
+        "supplier_org",
         "product_passport",
         "shipment_date",
+        "buyer",
         "recipient",
         "note",
     )
-    autocomplete_fields = ("recipient", "supplier")
+    autocomplete_fields = ("buyer", "recipient", "manufacturer_org", "supplier_org")
+
+
+class ProductGroupDocumentInline(admin.TabularInline):
+    model = ProductGroupDocument
+    extra = 0
+    fields = ("title", "kind", "file")
+    verbose_name_plural = "Документы группы"
+
+
+@admin.register(ProductGroup)
+class ProductGroupAdmin(admin.ModelAdmin):
+    change_list_template = "admin/blog/productgroup/change_list.html"
+    list_display = (
+        "name",
+        "designation",
+        "main_purpose",
+        "main_documents_column",
+    )
+    list_display_links = ("name",)
+    search_fields = ("name", "designation", "main_purpose")
+    readonly_fields = (
+        "author",
+        "last_editor",
+        "date_of_creation",
+        "date_of_change",
+    )
+    fieldsets = (
+        (None, {
+            "fields": (
+                "name",
+                "designation",
+                "main_purpose",
+            ),
+        }),
+        ("Сведения о записи", {
+            "fields": (
+                "author",
+                "last_editor",
+                "date_of_creation",
+                "date_of_change",
+            ),
+        }),
+    )
+    inlines = (ProductGroupDocumentInline,)
+
+    def get_queryset(self, request):
+        qs = (
+            super()
+            .get_queryset(request)
+            .prefetch_related("documents")
+        )
+        raw = request.GET.get("id__exact") or request.GET.get("pk")
+        if raw is not None and str(raw).strip().isdigit():
+            qs = qs.filter(pk=int(raw))
+        return qs
+
+    @admin.display(description="Основные документы (PDF)")
+    def main_documents_column(self, obj):
+        if not obj.pk:
+            return "—"
+        docs = [
+            d
+            for d in obj.documents.all()
+            if d.kind == ProductGroupDocument.KIND_MAIN and d.file and d.file.name
+        ]
+        docs.sort(key=lambda x: x.pk)
+        if not docs:
+            return "—"
+        parts = []
+        for d in docs:
+            parts.append(
+                format_html(
+                    '<div style="margin:0 0 6px 0;line-height:1.35;">'
+                    '<a href="{}" target="_blank" rel="noopener noreferrer">{}</a>'
+                    "</div>",
+                    d.file.url,
+                    escape(d.title),
+                )
+            )
+        return mark_safe("".join(str(p) for p in parts))
+
+    def save_model(self, request, obj, form, change):
+        if request.user.is_authenticated:
+            if not change or obj.author_id is None:
+                obj.author = request.user
+            obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+
+class PostAdminForm(forms.ModelForm):
+    shipments_selector = forms.ModelMultipleChoiceField(
+        queryset=Shipment.objects.none(),
+        required=False,
+        label="Изделия к отгрузке",
+    )
+
+    class Meta:
+        model = Post
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        instance = getattr(self, "instance", None)
+        current_post_id = instance.pk if instance and instance.pk else None
+
+        qs = Shipment.objects.select_related("post").order_by("-date_of_creation", "-id")
+        if current_post_id:
+            # Показываем только уже привязанные к этой разработке отгрузки.
+            qs = qs.filter(post_id=current_post_id)
+            self.initial["shipments_selector"] = list(
+                Shipment.objects.filter(post_id=current_post_id).values_list("pk", flat=True)
+            )
+            self.fields["shipments_selector"].help_text = (
+                "Здесь отображаются отгрузки, уже привязанные к этой разработке."
+            )
+        else:
+            qs = qs.none()
+            self.fields["shipments_selector"].help_text = (
+                "После создания разработки здесь будут появляться отгрузки, "
+                "добавленные в сущности «Изделия к отгрузке» и привязанные к этой разработке."
+            )
+        self.fields["shipments_selector"].queryset = qs
 
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
+    form = PostAdminForm
     change_form_template = "admin/blog/universal_rkd_category_change_form.html"
     list_display = (
+        'wa_code_column',
         'name',
+        'name_full',
         'desig_document_post',
-        'modification_code',
+        'product_group_link',
         'author',
         'date_of_creation',
         'date_of_change',
     )
-    search_fields = ('name', 'modification_code')
-    readonly_fields = ('date_of_change',)
+    list_display_links = ('wa_code_column', 'name')
+    list_filter = ('product_group',)
+    search_fields = ('name', 'name_full', 'desig_document_post', 'modification_code', 'wa_code')
+    autocomplete_fields = ('product_group',)
+    readonly_fields = (
+        'author',
+        'last_editor',
+        'date_of_creation',
+        'date_of_change',
+        'group_name_display',
+        'group_designation_display',
+    )
+    fieldsets = (
+        ("Идентификация изделия (продукта)", {
+            "fields": (
+                "name",
+                "name_full",
+                "desig_document_post",
+            ),
+        }),
+        ("Принадлежность к группе", {
+            "fields": (
+                "is_group_modification",
+                "product_group",
+                "group_name_display",
+                "group_designation_display",
+                "main_purpose",
+            ),
+        }),
+        ("Описание изделия (продукта)", {
+            "fields": (
+                "group_modification_features",
+                "order_article",
+                "note",
+                "group_documents",
+            ),
+        }),
+        ("Стадия и готовность", {
+            "fields": ("litera", "trl"),
+        }),
+        ("Версионирование", {
+            "classes": ("collapse",),
+            "fields": ("version", "version_diff"),
+        }),
+        ("Системные сведения", {
+            "fields": (
+                "author",
+                "date_of_creation",
+                "last_editor",
+                "date_of_change",
+                "current_responsible",
+            ),
+        }),
+        ("Изделия к отгрузке", {
+            "fields": ("shipments_selector",),
+        }),
+        ("Дополнительные сведения", {
+            "classes": ("collapse",),
+            "fields": (
+                "modification_code",
+                "validity_date",
+                "develop_org",
+                "technical_specifications_ref",
+                "operating_manual_ref",
+                "product_passport_ref",
+            ),
+        }),
+    )
     inlines = [
-        # ListTechnicalProposalInline,  # ВТП — в форме «Разработка» не показываем
         TaskForDesignWorkInline,
         RevisionTaskInline,
         WorkAssignmentInline,
         UniversalRKDInline,
-        ShipmentInline,
     ]
+
+    @admin.display(description="Общее наименование группы изделий (продуктов)")
+    def group_name_display(self, obj):
+        value = (obj.product_group.name if obj and obj.product_group_id else "") or ""
+        return format_html('<span id="pg_val_name">{}</span>', value or "—")
+
+    @admin.display(description="Общее обозначение группы изделий (продуктов)")
+    def group_designation_display(self, obj):
+        value = (obj.product_group.designation if obj and obj.product_group_id else "") or ""
+        return format_html('<span id="pg_val_designation">{}</span>', value or "—")
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                "product-group-data/<int:pk>/",
+                self.admin_site.admin_view(self.product_group_data_view),
+                name="blog_post_product_group_data",
+            ),
+        ]
+        return custom + urls
+
+    def product_group_data_view(self, request, pk):
+        from django.http import JsonResponse
+        try:
+            group = ProductGroup.objects.get(pk=pk)
+        except ProductGroup.DoesNotExist:
+            return JsonResponse({"ok": False}, status=404)
+        return JsonResponse({
+            "ok": True,
+            "name": group.name or "",
+            "designation": group.designation or "",
+            "main_purpose": group.main_purpose or "",
+        })
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _PostForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                for optional_name in (
+                    "current_responsible",
+                    "name_full",
+                    "desig_document_post",
+                    "product_group",
+                ):
+                    f = self.fields.get(optional_name)
+                    if f is not None:
+                        f.required = False
+
+                field = self.fields.get("develop_org")
+                if field and not self.is_bound:
+                    current_name = (getattr(self.instance, "develop_org", "") or "").strip()
+                    if current_name:
+                        org = RKDDeveloper.objects.filter(name=current_name).only("pk").first()
+                        if org:
+                            self.initial["develop_org"] = str(org.pk)
+
+        return _PostForm
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is None or db_field.name != "develop_org":
+            return formfield
+
+        org_items = list(
+            RKDDeveloper.objects.order_by("name").values_list("pk", "name")
+        )
+        choices = [("", "---------")] + [(str(pk), name) for pk, name in org_items if name]
+        formfield.widget = forms.Select(choices=choices)
+        formfield.choices = choices
+        rel = Shipment._meta.get_field("manufacturer_org").remote_field
+        formfield.widget = RelatedFieldWidgetWrapper(
+            formfield.widget,
+            rel,
+            self.admin_site,
+            can_add_related=True,
+            can_change_related=True,
+            can_delete_related=True,
+            can_view_related=True,
+        )
+        formfield.help_text = ""
+        return formfield
 
     def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
         extra_context = _inject_rkd_category_json(extra_context)
+        extra_context = extra_context or {}
+        extra_context["product_group_data_url_template"] = reverse(
+            "admin:blog_post_product_group_data", args=[0]
+        )
         return super().changeform_view(request, object_id, form_url, extra_context)
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related("product_group")
+
+    @admin.display(description="Общая группа разработок", ordering="product_group__name")
+    def product_group_link(self, obj):
+        if not obj or not obj.product_group_id:
+            return "—"
+        url = reverse("admin:blog_productgroup_changelist") + f"?id__exact={obj.product_group_id}"
+        return format_html(
+            '<a href="{}">{}</a>',
+            url,
+            escape(obj.product_group.name),
+        )
+
+    @admin.display(description="Код", ordering="wa_code")
+    def wa_code_column(self, obj):
+        return obj.wa_code or "—"
+
+    def save_model(self, request, obj, form, change):
+        raw_value = form.cleaned_data.get("develop_org")
+        if raw_value:
+            org = RKDDeveloper.objects.filter(pk=raw_value).only("name").first()
+            obj.develop_org = org.name if org else ""
+        else:
+            obj.develop_org = ""
+
+        if not obj.is_group_modification:
+            obj.product_group = None
+
+        if request.user.is_authenticated:
+            if not change or obj.author_id is None:
+                obj.author = request.user
+            obj.last_editor = request.user
+            if not obj.current_responsible_id:
+                obj.current_responsible = request.user
+
+        super().save_model(request, obj, form, change)
+
+        if not obj.wa_code:
+            from .helpers import assign_wa_code_to_post
+            assign_wa_code_to_post(obj)
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        post = form.instance
+        selected_ids = set(
+            (form.cleaned_data.get("shipments_selector") or Shipment.objects.none())
+            .values_list("pk", flat=True)
+        )
+        # Привязываем выбранные отгрузки к этой разработке (переназначаем при необходимости).
+        if selected_ids:
+            Shipment.objects.filter(pk__in=selected_ids).update(post=post)
 
     def save_formset(self, request, form, formset, change):
         instances = formset.save(commit=False)
@@ -301,6 +973,18 @@ class PostAdmin(admin.ModelAdmin):
                 instance.last_editor = user
                 if not instance.current_responsible_id:
                     instance.current_responsible = user
+
+            if isinstance(instance, WorkAssignment):
+                if instance.pk is None and request.user.is_authenticated:
+                    instance.author = request.user
+                    instance.last_editor = request.user
+                if instance.post_id:
+                    from .helpers import assign_wa_code_to_post, next_wa_number_for_post
+                    assign_wa_code_to_post(instance.post)
+                    if not instance.wa_number:
+                        instance.wa_number = next_wa_number_for_post(
+                            instance.post, exclude_pk=instance.pk
+                        )
 
             instance.save()
         formset.save_m2m()
@@ -325,26 +1009,89 @@ except admin.sites.NotRegistered:
 admin.site.register(Post, PostAdmin)
 
 
+class RKDDeveloperAdditionalFileInline(admin.TabularInline):
+    model = RKDDeveloperAdditionalFile
+    extra = 1
+    fields = ("file",)
+
+
 @admin.register(RKDDeveloper)
 class RKDDeveloperAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "inn",
+        "charter_link",
+        "requisites_link",
+        "additional_files_links",
+    )
+    list_display_links = ("name",)
+    search_fields = ("name", "inn")
+    inlines = (RKDDeveloperAdditionalFileInline,)
     fields = (
         "name",
+        "inn",
         "charter",
         "requisites",
-        "additional_data",
     )
-    search_fields = ("name",)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("additional_files")
+
+    @admin.display(description="Устав")
+    def charter_link(self, obj):
+        if obj.charter:
+            return format_html(
+                '<a href="{}" target="_blank" rel="noopener noreferrer">Открыть файл</a>',
+                obj.charter.url,
+            )
+        return "—"
+
+    @admin.display(description="Реквизиты")
+    def requisites_link(self, obj):
+        if obj.requisites:
+            return format_html(
+                '<a href="{}" target="_blank" rel="noopener noreferrer">Открыть файл</a>',
+                obj.requisites.url,
+            )
+        return "—"
+
+    @admin.display(description="Дополнительные данные")
+    def additional_files_links(self, obj):
+        rows = list(obj.additional_files.all())
+        if not rows:
+            return "—"
+        parts = []
+        for af in rows:
+            f = getattr(af, "file", None)
+            if f and getattr(f, "name", None):
+                name = f.name.rsplit("/", 1)[-1]
+                parts.append(
+                    format_html(
+                        '<a href="{}" target="_blank" rel="noopener noreferrer">{}</a>',
+                        f.url,
+                        escape(name),
+                    )
+                )
+        if not parts:
+            return "—"
+        return mark_safe("<br>".join(str(p) for p in parts))
 
 
-@admin.register(ShipmentSupplier)
-class ShipmentSupplierAdmin(admin.ModelAdmin):
-    fields = (
-        "name",
-        "charter",
-        "requisites",
-        "additional_data",
+def _rkd_docs_section_header(title: str):
+    return mark_safe(
+        '<div style="'
+        "margin: 0 0 10px 0;"
+        "padding: 10px 14px;"
+        "font-weight: 700;"
+        "font-size: 13px;"
+        "letter-spacing: 0.4px;"
+        "text-transform: uppercase;"
+        "border-left: 4px solid var(--primary, #79aec8);"
+        "background: var(--darkened-bg, rgba(121,174,200,0.12));"
+        "color: var(--body-fg, inherit);"
+        "border-radius: 3px;"
+        f'">{escape(title)}</div>'
     )
-    search_fields = ("name",)
 
 
 @admin.register(UniversalRKD)
@@ -361,8 +1108,8 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         "name",
         "rkd_documents_column",
         "quantity",
-        "rkd_planned_review_warning",
         "note",
+        "rkd_planned_review_warning",
     )
     list_display_links = ("name",)
     list_filter = ("specification_section", "status", "post")
@@ -409,27 +1156,19 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         return mark_safe("<br>".join(str(p) for p in parts))
 
     @admin.display(
-        description="Срок пересмотра истекает",
+        description="Оповещение о пересмотре",
         ordering="validity_date",
     )
     def rkd_planned_review_warning(self, obj):
-        if not _universal_rkd_planned_review_show_warning(obj.validity_date):
+        days = getattr(obj, "review_reminder_days", 60)
+        if not _universal_rkd_planned_review_show_warning(
+            getattr(obj, "validity_date", None),
+            days=days,
+        ):
             return "—"
         return mark_safe(
             _admin_warning_triangle_html(
-                title="Плановый пересмотр: осталось не более 60 дней или срок прошёл",
-            )
-        )
-
-    @admin.display(description="Напоминание о пересмотре (до 60 дн.)")
-    def rkd_planned_review_warning_display(self, obj):
-        if not obj or not getattr(obj, "validity_date", None):
-            return "—"
-        if not _universal_rkd_planned_review_show_warning(obj.validity_date):
-            return "—"
-        return mark_safe(
-            _admin_warning_triangle_html(
-                title="Плановый пересмотр: осталось не более 60 дней или срок прошёл",
+                title=f"Плановый пересмотр: осталось не более {days} дн. или срок прошёл",
             )
         )
 
@@ -447,7 +1186,7 @@ class UniversalRKDAdmin(admin.ModelAdmin):
     readonly_fields = (
         "date_of_creation",
         "date_of_change",
-        "rkd_planned_review_warning_display",
+        "display_files_list",
     )
 
     fieldsets = (
@@ -475,17 +1214,44 @@ class UniversalRKDAdmin(admin.ModelAdmin):
                     "position",
                     "info_format",
                     "validity_date",
-                    "rkd_planned_review_warning_display",
+                    "review_reminder_days",
                     "language",
                     "internal_recipients",
                     "external_recipients",
                     "status",
                     "related_documents",
                     "develop_org",
-                    "document_uploaded_file",
-                    "approval_document",
-                    "attestation_document",
                 )
+            },
+        ),
+        (
+            None,
+            {
+                "description": _rkd_docs_section_header("Основной документ"),
+                "fields": (
+                    "document_uploaded_file",
+                    "document_source",
+                ),
+            },
+        ),
+        (
+            None,
+            {
+                "description": _rkd_docs_section_header("Лист утверждения"),
+                "fields": (
+                    "approval_document",
+                    "approval_source",
+                ),
+            },
+        ),
+        (
+            None,
+            {
+                "description": _rkd_docs_section_header("Удостоверяющий лист"),
+                "fields": (
+                    "attestation_document",
+                    "attestation_source",
+                ),
             },
         ),
         (
@@ -523,12 +1289,174 @@ class UniversalRKDAdmin(admin.ModelAdmin):
                 )
             },
         ),
+        (
+            "Файлы документа",
+            {
+                "fields": ("display_files_list",),
+            },
+        ),
     )
 
+    @admin.display(description="Файлы документа")
+    def display_files_list(self, obj):
+        card_style = (
+            "border: 1px solid var(--hairline-color, #e1e4e8);"
+            "border-radius: 6px;"
+            "background: var(--body-bg, #fff);"
+            "padding: 14px 16px;"
+            "max-width: 920px;"
+        )
+        section_title = (
+            "margin: 16px 0 8px 0;"
+            "font-size: 12px;"
+            "font-weight: 600;"
+            "letter-spacing: 0.02em;"
+            "text-transform: uppercase;"
+            "color: var(--body-quiet-color, #6b7280);"
+        )
+        row_base = "display:flex; gap:12px; align-items:flex-start; padding:8px 0;"
+        row_sep = "border-bottom: 1px solid var(--hairline-color, #eef0f3);"
+        label_style = "width: 220px; flex: 0 0 220px; color: var(--body-fg, #111); font-weight: 500;"
+        value_style = "flex: 1; min-width: 0; word-break: break-word;"
+        muted = "color: var(--body-quiet-color, #6b7280);"
+        link_style = "color: var(--link-fg, #417690); text-decoration: none;"
+
+        if not obj or not getattr(obj, "pk", None):
+            return format_html(
+                '<div style="{}">'
+                '<div style="{}">Сводка по файлам</div>'
+                '<div style="{}">После первого сохранения записи здесь появятся ссылки на загруженные файлы.</div>'
+                "</div>",
+                card_style,
+                section_title,
+                muted,
+            )
+
+        def _basename(f):
+            name = getattr(f, "name", "") or ""
+            return name.rsplit("/", 1)[-1] or name
+
+        def _row(
+            label: str,
+            f,
+            *,
+            with_sep: bool,
+            uploaded_by=None,
+            uploaded_at=None,
+            action_label: str = "загрузил",
+        ):
+            row_style = row_base + (row_sep if with_sep else "")
+            label_html = f'<div style="{label_style}">{escape(label)}</div>'
+            if not f:
+                return f'<div style="{row_style}">{label_html}<div style="{value_style} {muted}">не загружен</div></div>'
+            url = getattr(f, "url", "") or ""
+            filename = escape(_basename(f))
+            if url:
+                value = (
+                    f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer" style="{link_style}">{filename}</a>'
+                )
+            else:
+                value = f'<span style="{muted}">{filename}</span>'
+            if uploaded_by and uploaded_at:
+                value += (
+                    f'<div style="margin-top:6px;font-size:12px;{muted}">'
+                    f"{escape(action_label)}: {escape(uploaded_by.get_username())} · "
+                    f"{escape(uploaded_at.strftime('%d.%m.%Y %H:%M'))}"
+                    f"</div>"
+                )
+            elif uploaded_by:
+                value += (
+                    f'<div style="margin-top:6px;font-size:12px;{muted}">'
+                    f"{escape(action_label)}: {escape(uploaded_by.get_username())}"
+                    f"</div>"
+                )
+            return f'<div style="{row_style}">{label_html}<div style="{value_style}">{value}</div></div>'
+
+        html = f'<div style="{card_style}">'
+        html += f'<div style="{section_title}">Документы</div>'
+        last_editor = getattr(obj, "last_editor", None) or getattr(obj, "author", None)
+        changed_at = getattr(obj, "date_of_change", None)
+        html += _row(
+            "Документ — итоговый",
+            getattr(obj, "document_uploaded_file", None),
+            with_sep=True,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+        html += _row(
+            "Документ — исходник",
+            getattr(obj, "document_source", None),
+            with_sep=True,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+        html += _row(
+            "Лист утверждения — итоговый (PDF)",
+            getattr(obj, "approval_document", None),
+            with_sep=True,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+        html += _row(
+            "Лист утверждения — исходник (DOCX)",
+            getattr(obj, "approval_source", None),
+            with_sep=True,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+        html += _row(
+            "Удостоверяющий лист — итоговый (PDF)",
+            getattr(obj, "attestation_document", None),
+            with_sep=True,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+        html += _row(
+            "Удостоверяющий лист — исходник (DOCX)",
+            getattr(obj, "attestation_source", None),
+            with_sep=False,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+
+        html += f'<div style="{section_title}">Подписи</div>'
+        html += _row(
+            "Подпись проверки",
+            getattr(obj, "signature_checked", None),
+            with_sep=True,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+        html += _row(
+            "Подпись утверждения",
+            getattr(obj, "signature_approved", None),
+            with_sep=False,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+
+        html += "</div>"
+        return mark_safe(html)
+
     def get_ordering(self, request):
+        position_asc = F("_position_num").asc(nulls_last=True)
         if request.GET.get("post__id__exact"):
-            return ("section_sort_index", "order_in_section", "pk")
-        return ("post_id", "section_sort_index", "order_in_section", "pk")
+            return ("section_sort_index", position_asc, "order_in_section", "pk")
+        return (
+            "post_id",
+            "section_sort_index",
+            position_asc,
+            "order_in_section",
+            "pk",
+        )
 
     def changelist_view(self, request, extra_context=None):
         extra_context = dict(extra_context or {})
@@ -552,15 +1480,59 @@ class UniversalRKDAdmin(admin.ModelAdmin):
                 extra_context["rkd_breadcrumb_post"] = Post.objects.filter(pk=post_q).first()
         return super().changeform_view(request, object_id, form_url, extra_context)
 
+    def get_changeform_initial_data(self, request):
+        return super().get_changeform_initial_data(request)
+
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        return qs.select_related("post", "develop_org")
+        qs = qs.annotate(
+            _position_num=Case(
+                When(
+                    position__regex=r"^[0-9]+$",
+                    then=Cast("position", output_field=IntegerField()),
+                ),
+                default=Value(None),
+                output_field=IntegerField(),
+            )
+        )
+        return qs.select_related(
+            "post",
+            "develop_org",
+            "author",
+            "last_editor",
+            "current_responsible",
+            "checked_by",
+            "approved_by",
+        )
 
     def save_model(self, request, obj, form, change):
         if not change:
             obj.author = request.user
         obj.last_editor = request.user
         super().save_model(request, obj, form, change)
+
+    _PDF_FILE_FIELDS = {
+        "approval_document",
+        "attestation_document",
+    }
+    _DOCX_FILE_FIELDS = {
+        "approval_source",
+        "attestation_source",
+    }
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is None:
+            return formfield
+        name = db_field.name
+        if name in self._PDF_FILE_FIELDS:
+            formfield.widget.attrs.setdefault("accept", ".pdf,application/pdf")
+        elif name in self._DOCX_FILE_FIELDS:
+            formfield.widget.attrs.setdefault(
+                "accept",
+                ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        return formfield
 
 
 @admin.register(Shipment)
@@ -576,17 +1548,29 @@ class ShipmentAdmin(admin.ModelAdmin):
         "passport_link",
         "additional_files_links",
         "shipment_date",
-        "recipient",
+        "manufacturer_column",
+        "supplier_column",
+        "buyer_column",
+        "recipient_column",
         "note",
     )
     list_display_links = ("serial_number",)
     list_filter = ("post",)
-    search_fields = ("serial_number", "post__name", "note", "completeness", "supplier__name")
+    search_fields = (
+        "serial_number",
+        "post__name",
+        "note",
+        "completeness",
+        "manufacturer_org__name",
+        "supplier_org__name",
+    )
     ordering = ("post", "manufacture_date", "serial_number", "pk")
     autocomplete_fields = (
         "post",
+        "buyer",
         "recipient",
-        "supplier",
+        "manufacturer_org",
+        "supplier_org",
         "author",
         "last_editor",
         "current_responsible",
@@ -602,9 +1586,11 @@ class ShipmentAdmin(admin.ModelAdmin):
                 "fields": (
                     "serial_number",
                     "manufacture_date",
-                    "supplier",
+                    "manufacturer_org",
+                    "supplier_org",
                     "product_passport",
                     "shipment_date",
+                    "buyer",
                     "recipient",
                     "completeness",
                     "note",
@@ -629,7 +1615,7 @@ class ShipmentAdmin(admin.ModelAdmin):
         return (
             super()
             .get_queryset(request)
-            .select_related("post", "recipient", "supplier")
+            .select_related("post", "buyer", "recipient", "manufacturer_org", "supplier_org")
             .prefetch_related("additional_files")
         )
 
@@ -639,6 +1625,33 @@ class ShipmentAdmin(admin.ModelAdmin):
         if post_id:
             extra_context["shipment_breadcrumb_post"] = Post.objects.filter(pk=post_id).first()
         return super().changelist_view(request, extra_context)
+
+    @admin.display(description="Изготовитель", ordering="manufacturer_org__name")
+    def manufacturer_column(self, obj):
+        return obj.manufacturer_org or "—"
+
+    @admin.display(description="Поставщик", ordering="supplier_org__name")
+    def supplier_column(self, obj):
+        return obj.supplier_org or "—"
+
+    @admin.display(description="Покупатель", ordering="buyer__name_of_company")
+    def buyer_column(self, obj):
+        if not obj.buyer:
+            return "—"
+        return format_html(
+            '<span style="white-space: normal; word-break: break-word; display: inline-block; max-width: 220px;">{}</span>',
+            str(obj.buyer),
+        )
+
+    @admin.display(description="Грузополучатель", ordering="recipient")
+    def recipient_column(self, obj):
+        if not obj.recipient:
+            return "—"
+        return format_html(
+            '<span style="white-space: normal; word-break: break-word; '
+            'display: inline-block; max-width: 220px;">{}</span>',
+            str(obj.recipient),
+        )
 
     def get_readonly_fields(self, request, obj=None):
         """Создатель фиксируется при первом сохранении; в уже созданной записи только просмотр."""
@@ -698,7 +1711,7 @@ class ShipmentAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-@admin.register(ListTechnicalProposal)
+# @admin.register(ListTechnicalProposal)  # скрыто: замещено TechnicalProposal (ПТ)
 class ListTechnicalProposalAdmin(admin.ModelAdmin):
     list_display = ['name', 'category', 'desig_document_list_technical_proposal', 'status', 'date_of_creation']
     search_fields = ['name', 'desig_document_list_technical_proposal']
@@ -710,7 +1723,7 @@ class ListTechnicalProposalAdmin(admin.ModelAdmin):
         #    obj.name = obj.post.name
         #super().save_model(request, obj, form, change)
 
-@admin.register(GeneralDrawingProduct)
+# @admin.register(GeneralDrawingProduct)  # скрыто: замещено TechnicalProposal (ПТ)
 class GeneralDrawingProductAdmin(admin.ModelAdmin):
     list_display = (
         'name','category','author','date_of_creation','status','version',
@@ -719,7 +1732,7 @@ class GeneralDrawingProductAdmin(admin.ModelAdmin):
     list_filter = ('category', 'status', 'trl', 'litera')
     readonly_fields = ('date_of_change',)
 
-@admin.register(ElectronicModelProduct)
+# @admin.register(ElectronicModelProduct)  # скрыто: замещено TechnicalProposal (ПТ)
 class ElectronicModelProductAdmin(admin.ModelAdmin):
     list_display = (
         'name','desig_document_electronic_model_product','author','date_of_creation','status','version','trl',
@@ -728,7 +1741,7 @@ class ElectronicModelProductAdmin(admin.ModelAdmin):
     list_filter = ('status', 'trl', 'category', 'develop_org')
     readonly_fields = ('date_of_change',)
 
-@admin.register(GeneralElectricalDiagram)
+# @admin.register(GeneralElectricalDiagram)  # скрыто: замещено TechnicalProposal (ПТ)
 class GeneralElectricalDiagramAdmin(admin.ModelAdmin):
     list_display = (
         'name','desig_document','author','date_of_creation','status','version',
@@ -737,24 +1750,24 @@ class GeneralElectricalDiagramAdmin(admin.ModelAdmin):
     list_filter = ('status', 'trl', 'develop_org', 'language')
     readonly_fields = ('date_of_change',)
 
-@admin.register(SoftwareProduct)
+# @admin.register(SoftwareProduct)  # скрыто: замещено TechnicalProposal (ПТ)
 class SoftwareProductAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'desig_document_software_product', 'status', 'version', 'date_of_creation')
     search_fields = ('name', 'desig_document_software_product', 'status')
     list_filter = ('status', 'trl', 'category', 'version')
     readonly_fields = ('date_of_change',)
 
-@admin.register(GeneralDrawingUnit)
+# @admin.register(GeneralDrawingUnit)  # скрыто: замещено TechnicalProposal (ПТ)
 class GeneralDrawingUnitAdmin(admin.ModelAdmin):
     list_display = ('name', 'desig_document_general_drawing_unit', 'status', 'version')
     readonly_fields = ('date_of_change',)
 
-@admin.register(ElectronicModelUnit)
+# @admin.register(ElectronicModelUnit)  # скрыто: замещено TechnicalProposal (ПТ)
 class ElectronicModelUnitAdmin(admin.ModelAdmin):
     list_display = ('name', 'desig_document_electronic_model_unit', 'status', 'version')
     readonly_fields = ('date_of_change',)
 
-@admin.register(DrawingPartUnit)
+# @admin.register(DrawingPartUnit)  # скрыто: замещено TechnicalProposal (ПТ)
 class DrawingPartUnitAdmin(admin.ModelAdmin):
     list_display = (
         'name',
@@ -797,7 +1810,7 @@ class DrawingPartUnitAdmin(admin.ModelAdmin):
         }),
     )
 
-@admin.register(ElectronicModelPartUnit)
+# @admin.register(ElectronicModelPartUnit)  # скрыто: замещено TechnicalProposal (ПТ)
 class ElectronicModelPartUnitAdmin(admin.ModelAdmin):
     list_display = (
         'name',
@@ -835,7 +1848,7 @@ class ElectronicModelPartUnitAdmin(admin.ModelAdmin):
         }),
     )
 
-@admin.register(DrawingPartProduct)
+# @admin.register(DrawingPartProduct)  # скрыто: замещено TechnicalProposal (ПТ)
 class DrawingPartProductAdmin(admin.ModelAdmin):
     list_display = (
         'name',
@@ -859,7 +1872,7 @@ class DrawingPartProductAdmin(admin.ModelAdmin):
         obj.last_editor = request.user
         super().save_model(request, obj, form, change)
 
-@admin.register(ElectronicModelPartProduct)
+# @admin.register(ElectronicModelPartProduct)  # скрыто: замещено TechnicalProposal (ПТ)
 class ElectronicModelPartProductAdmin(admin.ModelAdmin):
     list_display = (
         'desig_document_electronic_model_part_product', 'name', 'category',
@@ -876,7 +1889,7 @@ class ElectronicModelPartProductAdmin(admin.ModelAdmin):
         obj.last_editor = request.user
         super().save_model(request, obj, form, change)
 
-@admin.register(ReportTechnicalProposal)
+# @admin.register(ReportTechnicalProposal)  # скрыто: замещено TechnicalProposal (ПТ)
 class ReportTechnicalProposalAdmin(admin.ModelAdmin):
     list_display = (
         'name', 'category', 'status', 'version',
@@ -886,7 +1899,7 @@ class ReportTechnicalProposalAdmin(admin.ModelAdmin):
     search_fields = ('name', 'desig_document_report_technical_proposal', 'author__username')
     readonly_fields = ('date_of_change',)
 
-@admin.register(AddReportTechnicalProposal)
+# @admin.register(AddReportTechnicalProposal)  # скрыто: замещено TechnicalProposal (ПТ)
 class AddReportTechnicalProposalAdmin(admin.ModelAdmin):
     list_display = (
         'name',
@@ -927,7 +1940,7 @@ class AddReportTechnicalProposalAdmin(admin.ModelAdmin):
         }),
     )
 
-@admin.register(ProtocolTechnicalProposal)
+# @admin.register(ProtocolTechnicalProposal)  # скрыто: замещено TechnicalProposal (ПТ)
 class ProtocolTechnicalProposalAdmin(admin.ModelAdmin):
     list_display = (
         'name', 'category',
@@ -2375,26 +3388,263 @@ class DeadlineChangeInline(admin.TabularInline):
             initial['technical_assignment'] = tech_id
         return initial
 
+
+class WorkAssignmentSubtaskInline(admin.TabularInline):
+    model = WorkAssignmentSubtask
+    extra = 0
+    can_delete = True
+    show_change_link = False
+    fields = (
+        "parent_rz_display",
+        "subtask_code_link",
+        "executor",
+        "target_deadline",
+        "task_preview",
+        "criteria_preview",
+    )
+    readonly_fields = (
+        "parent_rz_display",
+        "subtask_code_link",
+        "executor",
+        "target_deadline",
+        "task_preview",
+        "criteria_preview",
+    )
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description="РЗ")
+    def parent_rz_display(self, obj):
+        wa = getattr(obj, "work_assignment", None)
+        if wa is not None and getattr(wa, "pk", None):
+            return wa.wa_full_code or "—"
+        return "—"
+
+    @admin.display(description="Подзадача")
+    def subtask_code_link(self, obj):
+        if not obj.pk:
+            return "—"
+        code = obj.subtask_full_code or "—"
+        url = reverse("admin:blog_workassignmentsubtask_change", args=[obj.pk])
+        return format_html(
+            '<a href="{}" class="subtask-open-link"><strong>{}</strong></a>',
+            url,
+            code,
+        )
+
+    @admin.display(description="Задача")
+    def task_preview(self, obj):
+        t = (obj.task or "").strip()
+        if not t:
+            return "—"
+        return mark_safe(
+            '<div class="subtask-inline-cell">' + linebreaksbr(t) + "</div>"
+        )
+
+    @admin.display(description="Критерий выполнения")
+    def criteria_preview(self, obj):
+        t = (obj.acceptance_criteria or "").strip()
+        if t in ("", "---"):
+            return "—"
+        return mark_safe(
+            '<div class="subtask-inline-cell">' + linebreaksbr(t) + "</div>"
+        )
+
+
+@admin.register(WorkAssignmentSubtask)
+class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
+    def has_module_permission(self, request):
+        return False
+
+    def add_view(self, request, form_url="", extra_context=None):
+        extra = dict(extra_context or ())
+        extra["title"] = "Добавить подзадачу рабочего задания"
+        return super().add_view(request, form_url, extra_context=extra)
+
+    list_display = ("id", "work_assignment", "task_short", "target_deadline", "executor")
+    search_fields = ("task", "work_assignment__name")
+    readonly_fields = ("date_of_creation", "date_of_change")
+
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": (
+                    "category",
+                    "executor",
+                    "author",
+                    "current_responsible",
+                    "task",
+                    "acceptance_criteria",
+                )
+            },
+        ),
+        (
+            "Сроки",
+            {
+                "fields": (
+                    "target_deadline",
+                    "hard_deadline",
+                    ("time_window_start", "time_window_end"),
+                    "conditional_deadline",
+                )
+            },
+        ),
+        (
+            "Контроль и результат",
+            {
+                "fields": (
+                    "control_status",
+                    "control_date",
+                    "result_description",
+                    "uploaded_file",
+                )
+            },
+        ),
+        (
+            "Системная информация",
+            {
+                "fields": (
+                    "date_of_creation",
+                    "date_of_change",
+                    "last_editor",
+                )
+            },
+        ),
+    )
+
+    def get_exclude(self, request, obj=None):
+        excl = list(super().get_exclude(request, obj) or [])
+        for name in (
+            "work_assignment",
+            "version",
+            "deadline_version",
+            "reschedule_count",
+        ):
+            if name not in excl:
+                excl.append(name)
+        return excl
+
+    def _get_parent_wa(self, request, obj=None):
+        if obj is not None and getattr(obj, "work_assignment_id", None):
+            return obj.work_assignment
+        wa_id = request.GET.get("work_assignment") or request.POST.get("work_assignment")
+        if not wa_id:
+            return None
+        try:
+            return WorkAssignment.objects.get(pk=wa_id)
+        except (WorkAssignment.DoesNotExist, ValueError, TypeError):
+            return None
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = super().get_fieldsets(request, obj)
+        parent = self._get_parent_wa(request, obj)
+        if parent is None:
+            return fieldsets
+
+        code = parent.wa_full_code or ""
+        title = (parent.name or "").strip()
+        if code and title:
+            label = f"{code} — {title}"
+        else:
+            label = code or title or "—"
+
+        description = format_html(
+            '<div style="margin:0 0 12px;padding:10px 14px;'
+            'background:rgba(121,174,200,.10);border-left:3px solid #79aec8;'
+            'border-radius:4px;font-size:13px;">'
+            '<span style="opacity:.75;">Рабочее задание:</span> '
+            '<strong>{}</strong>'
+            '</div>',
+            label,
+        )
+
+        new_fieldsets = []
+        for i, (name, opts) in enumerate(fieldsets):
+            opts = dict(opts)
+            if i == 0:
+                opts["description"] = description
+            new_fieldsets.append((name, opts))
+        return new_fieldsets
+
+    @admin.display(description="Задача")
+    def task_short(self, obj):
+        t = (obj.task or "").strip().replace("\n", " ")
+        return (t[:60] + "...") if len(t) > 60 else (t or "—")
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        if request.user.is_authenticated:
+            initial.setdefault("author", request.user.pk)
+            initial.setdefault("last_editor", request.user.pk)
+            initial.setdefault("current_responsible", request.user.pk)
+        return initial
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormCls = super().get_form(request, obj, change=change, **kwargs)
+        parent_wa = self._get_parent_wa(request, obj)
+
+        class _SubtaskForm(FormCls):
+            def __init__(self, *args, **kw):
+                super().__init__(*args, **kw)
+                if parent_wa is not None and not getattr(self.instance, "work_assignment_id", None):
+                    self.instance.work_assignment = parent_wa
+
+        return _SubtaskForm
+
+    def save_model(self, request, obj, form, change):
+        user = request.user
+        if not change:
+            if user.is_authenticated:
+                obj.author = user
+                obj.last_editor = user
+            if not getattr(obj, "work_assignment_id", None):
+                parent = self._get_parent_wa(request)
+                if parent is not None:
+                    obj.work_assignment = parent
+
+        if obj.work_assignment_id and not obj.subtask_number:
+            from .helpers import next_subtask_number_for_wa
+            obj.subtask_number = next_subtask_number_for_wa(
+                obj.work_assignment, exclude_pk=obj.pk
+            )
+
+        super().save_model(request, obj, form, change)
+
+
 @admin.register(WorkAssignment)
 class WorkAssignmentAdmin(admin.ModelAdmin):
     #form = WorkAssignmentForm
 
     list_display = (
+        'wa_code_column',
         'name', 'author', 'executor', 'post',
         'effective_deadline_readonly',
         'overdue_flag',
-        'result', 'version',
+        'version',
         'target_deadline', 'hard_deadline',
         'control_status', 'control_date',
         'deadline_version', 'reschedule_count', # служебные
     )
-    search_fields = ('name','author__username','current_responsible__username')
-    list_filter = ('result','control_status', OverdueFilter)
+    list_display_links = ('wa_code_column', 'name')
+    ordering = ('post__wa_code', 'wa_number', 'pk')
+    search_fields = (
+        'name',
+        'author__username',
+        'current_responsible__username',
+        'post__wa_code',
+    )
+    list_filter = ('control_status', OverdueFilter)
+
+    @admin.display(description='Код', ordering='post__wa_code')
+    def wa_code_column(self, obj):
+        return obj.wa_full_code or '—'
 
     readonly_fields = ('date_of_creation','date_of_change',
                        'effective_deadline_readonly','deadline_version','reschedule_count')
 
-    inlines = [DeadlineChangeInline, AttachmentInline]
+    inlines = [DeadlineChangeInline, WorkAssignmentSubtaskInline, WorkAssignmentAttachmentInline]
 
     fieldsets = (
         ('Основная информация', {
@@ -2413,7 +3663,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             )
         }),
         ('Контроль выполнения', {
-            'fields': ('control_status', 'control_date', 'result', 'result_description')
+            'fields': ('control_status', 'control_date', 'result_description')
         }),
         ('Системная информация', {
             'fields': ('route', 'date_of_creation', 'date_of_change', 'last_editor',
@@ -2421,24 +3671,95 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         }),
     )
 
-    def get_form(self, request, obj=None, change=False, **kwargs):
-        form = super().get_form(request, obj=obj, change=change, **kwargs)
-        for name in (
-            "target_deadline",
-            "hard_deadline",
-            "time_window_start",
-            "time_window_end",
-        ):
-            if name in form.base_fields:
-                form.base_fields[name].disabled = True
-        return form
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None:
+            for name in (
+                "target_deadline_display",
+                "hard_deadline_display",
+                "time_window_start_display",
+                "time_window_end_display",
+            ):
+                if name not in fields:
+                    fields.append(name)
+        return fields
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = super().get_fieldsets(request, obj)
+        if obj is None:
+            return fieldsets
+        rename = {
+            "target_deadline": "target_deadline_display",
+            "hard_deadline": "hard_deadline_display",
+            "time_window_start": "time_window_start_display",
+            "time_window_end": "time_window_end_display",
+        }
+        new_fieldsets = []
+        for title, opts in fieldsets:
+            opts = dict(opts)
+            new_fields = []
+            for f in opts.get("fields", ()):
+                if isinstance(f, (tuple, list)):
+                    new_fields.append(tuple(rename.get(x, x) for x in f))
+                else:
+                    new_fields.append(rename.get(f, f))
+            opts["fields"] = tuple(new_fields)
+            new_fieldsets.append((title, opts))
+        return new_fieldsets
+
+    @staticmethod
+    def _readonly_date_input(value):
+        if value in (None, ""):
+            text = ""
+        elif hasattr(value, "strftime"):
+            text = value.strftime("%d.%m.%Y")
+        else:
+            text = str(value)
+        return format_html(
+            '<input type="text" value="{}" disabled '
+            'style="background:var(--body-bg);color:var(--body-fg);'
+            'border:1px solid var(--border-color);padding:4px 6px;'
+            'border-radius:4px;width:160px;cursor:not-allowed;opacity:1;">',
+            text,
+        )
+
+    @admin.display(description="Целевой срок выполнения")
+    def target_deadline_display(self, obj):
+        return self._readonly_date_input(obj.target_deadline)
+
+    @admin.display(description="Абсолютный дедлайн")
+    def hard_deadline_display(self, obj):
+        return self._readonly_date_input(obj.hard_deadline)
+
+    @admin.display(description="Временное окно: с")
+    def time_window_start_display(self, obj):
+        return self._readonly_date_input(obj.time_window_start)
+
+    @admin.display(description="Временное окно: по")
+    def time_window_end_display(self, obj):
+        return self._readonly_date_input(obj.time_window_end)
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
         post_id = request.GET.get("post")
         if post_id:
             initial["post"] = post_id
+        if request.user.is_authenticated:
+            initial.setdefault("author", request.user.pk)
+            initial.setdefault("last_editor", request.user.pk)
         return initial
+
+    def save_model(self, request, obj, form, change):
+        user = request.user
+        if not change and user.is_authenticated:
+            obj.author = user
+            obj.last_editor = user
+        if obj.post_id:
+            from .helpers import assign_wa_code_to_post, next_wa_number_for_post
+            assign_wa_code_to_post(obj.post)
+            if not obj.wa_number:
+                obj.wa_number = next_wa_number_for_post(obj.post, exclude_pk=obj.pk)
+        super().save_model(request, obj, form, change)
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -2456,7 +3777,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         qs = qs.annotate(
             is_overdue=Case(
                 When(
-                    Q(result__isnull=True) & Q(effective_deadline_db__lt=today),
+                    Q(control_status__isnull=True) & Q(effective_deadline_db__lt=today),
                     then=True
                 ),
                 default=False,
@@ -2471,7 +3792,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     effective_deadline_readonly.short_description = "Эффективный срок"
 
     def overdue_flag(self, obj):
-        return "—" if obj.result else ("⚠️" if obj.is_overdue else "—")
+        return "—" if obj.control_status else ("⚠️" if obj.is_overdue else "—")
     overdue_flag.short_description = "Просрочено?"
 
     def get_urls(self):

@@ -5,6 +5,35 @@
 (function () {
   "use strict";
 
+  var POSITION_EDITABLE_SECTIONS = new Set([
+    "assembly_units",
+    "parts",
+    "standard_products",
+    "other_products",
+    "materials",
+  ]);
+
+  function sectionAllowsPosition(sectionCode) {
+    return POSITION_EDITABLE_SECTIONS.has(sectionCode || "");
+  }
+
+  function syncPosition(sectionSelect) {
+    var sectionCode = sectionSelect.value || "";
+    var posName = sectionSelect.name.replace(/specification_section$/, "position");
+    var root = sectionSelect.form || document;
+    var pos = root.querySelector("[name=" + JSON.stringify(posName) + "]");
+    if (!pos || (pos.tagName !== "INPUT" && pos.tagName !== "TEXTAREA")) return;
+
+    if (sectionAllowsPosition(sectionCode)) {
+      pos.disabled = false;
+      if (pos.value === "-") pos.value = "";
+      return;
+    }
+
+    pos.value = "-";
+    pos.disabled = true;
+  }
+
   function categoryMap() {
     var el = document.getElementById("rkd-category-by-section");
     if (!el || !el.textContent) return {};
@@ -46,6 +75,8 @@
     } else {
       cat.value = "";
     }
+
+    syncPosition(sectionSelect);
   }
 
   function syncAll() {

@@ -11,7 +11,104 @@
 
 {% block extrahead %}
   {{ block.super }}
+  <style>
+    #subtasks-group .form-row.has_original td.original p {
+      display: none !important;
+    }
+    #subtasks-group .inline-group table {
+      table-layout: auto;
+      width: 100%;
+    }
+    #subtasks-group td.field-task_preview,
+    #subtasks-group td.field-criteria_preview {
+      vertical-align: top;
+    }
+    #subtasks-group .subtask-inline-cell {
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      max-width: 22rem;
+      min-width: 9rem;
+      line-height: 1.4;
+    }
+  </style>
   <script>
+    (function () {
+      var POPUP_NAME_PREFIX = "subtask_popup_";
+      var SUBTASK_PATH_RE = /\/admin\/blog\/workassignmentsubtask\//;
+
+      function isSubtaskPopup(win) {
+        try {
+          if (!win) return false;
+          if (typeof win.name === "string" && win.name.indexOf(POPUP_NAME_PREFIX) === 0) return true;
+          if (win.location && SUBTASK_PATH_RE.test(win.location.pathname || "")) return true;
+        } catch (e) {}
+        return false;
+      }
+      function wrapDismiss(name) {
+        var prev = window[name];
+        window[name] = function (win) {
+          if (isSubtaskPopup(win)) {
+            try { win.close(); } catch (e) {}
+            window.location.reload();
+            return;
+          }
+          if (typeof prev === "function") {
+            return prev.apply(this, arguments);
+          }
+        };
+      }
+      wrapDismiss("dismissAddRelatedObjectPopup");
+      wrapDismiss("dismissChangeRelatedObjectPopup");
+      wrapDismiss("dismissDeleteRelatedObjectPopup");
+
+      document.addEventListener("DOMContentLoaded", function () {
+        var match = window.location.pathname.match(/\/workassignment\/(\d+)\//);
+        var parentPk = match ? match[1] : null;
+
+        function openPopup(url) {
+          var sep = url.indexOf("?") >= 0 ? "&" : "?";
+          if (url.indexOf("_popup=1") < 0) url += sep + "_popup=1";
+          var name = POPUP_NAME_PREFIX + Date.now();
+          var w = window.open(
+            url,
+            name,
+            "width=1100,height=820,scrollbars=yes,resizable=yes"
+          );
+          return w;
+        }
+
+        var group = document.getElementById("subtasks-group");
+        if (group) {
+          var addBtn = document.createElement("a");
+          addBtn.href = "#";
+          addBtn.className = "addlink";
+          addBtn.id = "add-subtask-btn";
+          addBtn.style.display = "inline-block";
+          addBtn.style.marginTop = "8px";
+          addBtn.textContent = "Добавить подзадачу";
+          if (!parentPk) {
+            addBtn.style.opacity = "0.5";
+            addBtn.style.pointerEvents = "none";
+            addBtn.title = "Сначала сохраните рабочее задание";
+          }
+          addBtn.addEventListener("click", function (e) {
+            e.preventDefault();
+            if (!parentPk) return;
+            openPopup("/admin/blog/workassignmentsubtask/add/?work_assignment=" + parentPk);
+          });
+          group.appendChild(addBtn);
+        }
+
+        document.addEventListener("click", function (e) {
+          var a = e.target.closest("a.subtask-open-link");
+          if (!a) return;
+          e.preventDefault();
+          openPopup(a.getAttribute("href"));
+        });
+      });
+    })();
+
     document.addEventListener("DOMContentLoaded", function () {
       var form =
         document.querySelector("#workassignment_form") ||
@@ -54,11 +151,16 @@
       if (!link) return;
 
       var row =
+        document.querySelector(".form-row.field-target_deadline_display") ||
+        document.querySelector(".fieldBox.field-target_deadline_display") ||
         document.querySelector(".form-row.field-target_deadline") ||
         document.querySelector(".fieldBox.field-target_deadline");
       if (!row) return;
 
-      var target = row.querySelector("input, select, textarea") || row;
+      var target =
+        row.querySelector("input, select, textarea") ||
+        row.querySelector(".readonly") ||
+        row;
 
       var moved = link.cloneNode(true);
       moved.removeAttribute("id");

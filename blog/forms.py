@@ -2,8 +2,12 @@ from typing import Optional
 from django import forms
 from django.contrib.admin.widgets import AdminDateWidget
 from django.utils import timezone
-from .models import WorkAssignment, UniversalRKD
-from .helpers import RKD_CATEGORY_BY_SECTION, section_has_category_choices
+from .models import WorkAssignment, UniversalRKD, TechnicalProposalDocument
+from .helpers import (
+    RKD_CATEGORY_BY_SECTION,
+    section_allows_position,
+    section_has_category_choices,
+)
 
 _CATEGORY_PLACEHOLDER = [("", "---------")]
 
@@ -73,6 +77,20 @@ class UniversalRKDForm(forms.ModelForm):
         widgets = {
             "validity_date": AdminDateWidget(),
         }
+        labels = {
+            "document_uploaded_file": "Итоговый",
+            "document_source": "Исходник",
+            "approval_document": "Итоговый (PDF)",
+            "approval_source": "Исходник (DOCX)",
+            "attestation_document": "Итоговый (PDF)",
+            "attestation_source": "Исходник (DOCX)",
+        }
+        help_texts = {
+            "approval_document": "Допустимый формат: PDF.",
+            "approval_source": "Допустимый формат: DOCX.",
+            "attestation_document": "Допустимый формат: PDF.",
+            "attestation_source": "Допустимый формат: DOCX.",
+        }
 
     def _current_specification_section(self) -> Optional[str]:
         if self.is_bound:
@@ -110,4 +128,26 @@ class UniversalRKDForm(forms.ModelForm):
         section = cleaned.get("specification_section") or ""
         if not section_has_category_choices(section):
             cleaned["category"] = ""
+        if not section_allows_position(section):
+            cleaned["position"] = "-"
         return cleaned
+
+
+class TechnicalProposalForm(forms.ModelForm):
+    class Meta:
+        model = TechnicalProposalDocument
+        fields = "__all__"
+        labels = {
+            "document_uploaded_file": "Итоговый",
+            "document_source": "Исходник",
+            "approval_document": "Итоговый (PDF)",
+            "approval_source": "Исходник (DOCX)",
+            "attestation_document": "Итоговый (PDF)",
+            "attestation_source": "Исходник (DOCX)",
+        }
+        help_texts = {
+            "approval_document": "Допустимый формат: PDF.",
+            "approval_source": "Допустимый формат: DOCX.",
+            "attestation_document": "Допустимый формат: PDF.",
+            "attestation_source": "Допустимый формат: DOCX.",
+        }
