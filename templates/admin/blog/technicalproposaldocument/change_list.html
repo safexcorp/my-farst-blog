@@ -1,0 +1,36 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    .tp-changelist-headings .tp-changelist-supertitle {
+      margin: 0 0 0.35rem 0;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--body-quiet-color, #747474);
+    }
+    .tp-changelist-headings h1 {
+      margin-top: 0;
+    }
+  </style>
+{% endblock %}
+
+{% block content_title %}
+  <header class="tp-changelist-headings">
+    <p class="tp-changelist-supertitle">Электронная структура технического предложения</p>
+    <h1>Выберите документ ПТ для изменения</h1>
+  </header>
+{% endblock %}
+{% block content_subtitle %}{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+&rsaquo; <a href="{% url 'admin:app_list' app_label=cl.opts.app_label %}">{{ cl.opts.app_config.verbose_name }}</a>
+&rsaquo; <a href="{% url cl.opts|admin_urlname:'changelist' %}">{{ cl.opts.verbose_name_plural|capfirst }}</a>
+{% if tp_breadcrumb_post %}
+&rsaquo; {{ tp_breadcrumb_post.name }}
+{% endif %}
+</div>
+{% endblock %}

@@ -135,6 +135,16 @@ RKD_CATEGORY_BY_SECTION: dict[str, tuple[str, ...]] = {
     "documentation": _CATEGORY_DOCUMENTATION,
 }
 
+POSITION_EDITABLE_SECTIONS: frozenset[str] = frozenset(
+    {
+        "assembly_units",
+        "parts",
+        "standard_products",
+        "other_products",
+        "materials",
+    }
+)
+
 
 def rkd_category_by_section_json() -> str:
     """JSON для JS в админке (зависимый select «Категория»)."""
@@ -154,4 +164,71 @@ def allowed_categories_for_section(section: str) -> frozenset[str]:
 
 def section_has_category_choices(section: str) -> bool:
     return bool(RKD_CATEGORY_BY_SECTION.get(section, ()))
+
+
+def section_allows_position(section: str) -> bool:
+    return section in POSITION_EDITABLE_SECTIONS
+
+
+WA_CODE_LENGTH = 3
+_WA_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _wa_index_to_code(index: int) -> str:
+    """0 → 'AAA', 1 → 'AAB', 26 → 'ABA', и т.д."""
+    n = len(_WA_CODE_ALPHABET)
+    chars = []
+    for _ in range(WA_CODE_LENGTH):
+        index, r = divmod(index, n)
+        chars.append(_WA_CODE_ALPHABET[r])
+    return "".join(reversed(chars))
+
+
+def _wa_code_to_index(code: str) -> int:
+    n = len(_WA_CODE_ALPHABET)
+    idx = 0
+    for ch in code:
+        idx = idx * n + _WA_CODE_ALPHABET.index(ch)
+    return idx
+
+
+def next_free_wa_code(taken_codes) -> str:
+    taken = set(taken_codes or ())
+    max_idx = len(_WA_CODE_ALPHABET) ** WA_CODE_LENGTH
+    for i in range(max_idx):
+        code = _wa_index_to_code(i)
+        if code not in taken:
+            return code
+    raise RuntimeError("Свободные буквенные коды для рабочих заданий закончились.")
+
+
+def assign_wa_code_to_post(post) -> str:
+    if getattr(post, "wa_code", None):
+        return post.wa_code
+    Post = post.__class__
+    taken = Post.objects.exclude(pk=post.pk).exclude(wa_code__isnull=True).values_list("wa_code", flat=True)
+    code = next_free_wa_code(taken)
+    post.wa_code = code
+    Post.objects.filter(pk=post.pk).update(wa_code=code)
+    return code
+
+
+def next_wa_number_for_post(post, exclude_pk=None) -> int:
+    from django.db.models import Max
+    from .models import WorkAssignment
+    qs = WorkAssignment.objects.filter(post=post)
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    last = qs.aggregate(m=Max("wa_number"))["m"] or 0
+    return last + 1
+
+
+def next_subtask_number_for_wa(work_assignment, exclude_pk=None) -> int:
+    from django.db.models import Max
+    from .models import WorkAssignmentSubtask
+    qs = WorkAssignmentSubtask.objects.filter(work_assignment=work_assignment)
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    last = qs.aggregate(m=Max("subtask_number"))["m"] or 0
+    return last + 1
 

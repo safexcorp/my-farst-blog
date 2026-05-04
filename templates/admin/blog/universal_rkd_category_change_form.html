@@ -17,4 +17,94 @@
 {{ rkd_category_by_section_dict|json_script:"rkd-category-by-section" }}
 {% endif %}
 <script src="{% static 'blog/js/universal_rkd_category.js' %}"></script>
+{% if product_group_data_url_template %}
+<script>
+(function () {
+    "use strict";
+
+    var DATA_URL_TPL = "{{ product_group_data_url_template }}";
+
+    function setSpan(spanId, value) {
+        var el = document.getElementById(spanId);
+        if (!el) { return; }
+        el.textContent = value && value.trim().length ? value : "—";
+    }
+
+    function setMainPurposeIfEmpty(value) {
+        var el = document.getElementById("id_main_purpose");
+        if (!el || (el.value || "").trim()) { return; }
+        if (value) { el.value = value; }
+    }
+
+    function fetchGroupAndFill(pk) {
+        if (!pk) { return; }
+        var url = DATA_URL_TPL.replace(/\/0\/?$/, "/" + pk + "/");
+        fetch(url, { credentials: "same-origin" })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+                if (!data || !data.ok) { return; }
+                setSpan("pg_val_name", data.name);
+                setSpan("pg_val_designation", data.designation);
+                setMainPurposeIfEmpty(data.main_purpose);
+            })
+            .catch(function () {});
+    }
+
+    function clearGroupSpans() {
+        setSpan("pg_val_name", "");
+        setSpan("pg_val_designation", "");
+    }
+
+    function applyGroupSelectState(checked, $groupSelect) {
+        var wrapper = $groupSelect[0].closest(".related-widget-wrapper") || $groupSelect[0].parentElement;
+        if (checked) {
+            $groupSelect.prop("disabled", false);
+            if (wrapper) { wrapper.style.opacity = "1"; }
+        } else {
+            $groupSelect.val(null).trigger("change.select2");
+            $groupSelect.prop("disabled", true);
+            if (wrapper) { wrapper.style.opacity = "0.5"; }
+            clearGroupSpans();
+        }
+    }
+
+    /* Ждём, пока django.jQuery и Select2 инициализируются */
+    function init() {
+        var $ = window.django && window.django.jQuery;
+        if (!$) { return; }
+
+        var $checkbox = $("#id_is_group_modification");
+        var $groupSelect = $("#id_product_group");
+        if (!$checkbox.length || !$groupSelect.length) { return; }
+
+        applyGroupSelectState($checkbox.prop("checked"), $groupSelect);
+        if ($checkbox.prop("checked") && $groupSelect.val()) {
+            fetchGroupAndFill($groupSelect.val());
+        }
+
+        $checkbox.on("change", function () {
+            var checked = $checkbox.prop("checked");
+            applyGroupSelectState(checked, $groupSelect);
+            if (checked && $groupSelect.val()) {
+                fetchGroupAndFill($groupSelect.val());
+            }
+        });
+
+        /* Select2 стреляет нативным change; ловим его через jQuery */
+        $groupSelect.on("change", function () {
+            if (!$checkbox.prop("checked")) { return; }
+            var pk = $groupSelect.val() || "";
+            if (pk) { fetchGroupAndFill(pk); } else { clearGroupSpans(); }
+        });
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", init);
+    } else {
+        /* DOMContentLoaded уже прошёл, но Select2 мог ещё не инициализироваться */
+        setTimeout(init, 0);
+    }
+})();
+</script>
+{% endif %}
 {% endblock %}
