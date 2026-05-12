@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Протокол ПСИ - {{ psi.serial_number }}</title>
+    <style>
+        body {
+            font-family: 'DejaVu Sans', 'Arial', sans-serif;
+            margin: 20px;
+            font-size: 12px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+        .header-info {
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background-color: #f9f9f9;
+        }
+        .header-info p {
+            margin: 5px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        .conclusion-section {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            padding: 10px;
+        }
+        .conditions-section {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background-color: #f9f9f9;
+        }
+        .signature {
+            margin-top: 30px;
+            border-top: 1px solid #ddd;
+            padding-top: 15px;
+        }
+        .warning {
+            color: orange;
+            font-weight: bold;
+        }
+        .fail {
+            color: red;
+            font-weight: bold;
+        }
+        .pass {
+            color: green;
+        }
+    </style>
+</head>
+<body>
+    <h1>ПРОТОКОЛ ПРИЕМО-СДАТОЧНЫХ ИСПЫТАНИЙ (ПСИ)</h1>
+
+    <div class="header-info">
+        <p><strong>Заводской номер:</strong> {{ psi.serial_number }}</p>
+        <p><strong>Модель:</strong> {{ psi.model_name }}</p>
+        <p><strong>Дата испытания / изготовления:</strong> {{ psi.test_date|date:"d.m.Y" }}</p>
+        <p><strong>Версия программы управления ИБП:</strong> {{ psi.fw_version }}</p>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 70%;">Наименование проверки</th>
+                <th style="width: 30%;">Результат</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Проверка соответствия КД и внешнего вида (5.3)</td>
+                <td class="{% if psi.visual_check == 'не соответствует' %}fail{% elif psi.visual_check == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_visual_check_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>Проверка содержания маркировки</td>
+                <td class="{% if psi.marking_check == 'не соответствует' %}fail{% elif psi.marking_check == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_marking_check_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>Проверка электрического сопротивления изоляции (5.7)</td>
+                <td>{{ psi.get_insulation_res_display }}</td>
+            </tr>
+            <tr>
+                <td>Проверка электрической прочности изоляции (5.8)</td>
+                <td class="{% if psi.insulation_strength == 'не соответствует' %}fail{% elif psi.insulation_strength == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_insulation_strength_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>5.6.1 Проверка включения</td>
+                <td class="{% if psi.func_power_on == 'не соответствует' %}fail{% elif psi.func_power_on == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_func_power_on_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>5.6.2 Проверка индикации</td>
+                <td class="{% if psi.func_display == 'не соответствует' %}fail{% elif psi.func_display == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_func_display_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>5.6.3 Проверка навигации по страницам</td>
+                <td class="{% if psi.func_navigation == 'не соответствует' %}fail{% elif psi.func_navigation == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_func_navigation_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>5.6.4 Проверка работы в автономном режиме</td>
+                <td class="{% if psi.func_battery_mode == 'не соответствует' %}fail{% elif psi.func_battery_mode == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_func_battery_mode_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>5.6.5 Проверка режима «байпас»</td>
+                <td class="{% if psi.func_bypass == 'не соответствует' %}fail{% elif psi.func_bypass == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_func_bypass_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>5.6.6 Проверка отключения звукового сигнала</td>
+                <td class="{% if psi.func_audio == 'не соответствует' %}fail{% elif psi.func_audio == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_func_audio_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>5.6.7 Проверка режима настроек</td>
+                <td class="{% if psi.func_settings == 'не соответствует' %}fail{% elif psi.func_settings == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_func_settings_display }}
+                </td>
+            </tr>
+            <tr>
+                <td>5.6.8 Проверка обмена данными с терминалом</td>
+                <td class="{% if psi.func_terminal == 'не соответствует' %}fail{% elif psi.func_terminal == 'соответствует' %}pass{% endif %}">
+                    {{ psi.get_func_terminal_display }}
+                </td>
+            </tr>
+            <tr>
+                <td><strong>Проверка комплектности</strong></td>
+                <td>{{ psi.completeness }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="conclusion-section">
+        <p><strong>Заключение:</strong>
+            <span class="{% if psi.conclusion == 'не готов' %}fail{% else %}pass{% endif %}">
+                {{ psi.get_conclusion_display }}
+            </span>
+        </p>
+        <p><strong>Комментарий:</strong> {{ psi.comment|default:"—" }}</p>
+    </div>
+
+    <div class="conditions-section">
+        <p><strong>Условия испытаний (Метеоусловия):</strong></p>
+        <p><strong>Температура:</strong> {{ psi.get_temperature_display }}</p>
+        <p><strong>Влажность:</strong> {{ psi.get_humidity_display }}</p>
+        <p><strong>Давление:</strong> {{ psi.get_pressure_display }}</p>
+        {% if psi.remark %}
+        <p><strong>Комментарий:</strong> {{ psi.remark }}</p>
+        {% endif %}
+    </div>
+
+    <div class="signature">
+        <p><strong>Испытатель / ОТК:</strong> {{ psi.inspector }}</p>
+        <p><strong>Цех:</strong> {{ psi.workshop }}</p>
+        <p><strong>Дата:</strong> {{ psi.test_date|date:"d.m.Y" }}</p>
+    </div>
+</body>
+</html>
