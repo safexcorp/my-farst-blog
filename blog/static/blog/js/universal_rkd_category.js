@@ -34,6 +34,26 @@
     pos.disabled = true;
   }
 
+  function syncOneField(fieldName, allowed) {
+    var field = document.querySelector("[name=" + JSON.stringify(fieldName) + "]");
+    if (!field || (field.tagName !== "INPUT" && field.tagName !== "TEXTAREA")) return;
+    if (allowed) {
+      field.disabled = false;
+      if (field.value === "-") field.value = "";
+    } else {
+      field.value = "-";
+      field.disabled = true;
+    }
+  }
+
+  function syncQuantityWeight(sectionSelect) {
+    var sectionCode = sectionSelect.value || "";
+    var allowed = POSITION_EDITABLE_SECTIONS.has(sectionCode || "");
+    var base = sectionSelect.name.replace(/specification_section$/, "");
+    syncOneField(base + "quantity", allowed);
+    syncOneField(base + "weight", allowed);
+  }
+
   function categoryMap() {
     var el = document.getElementById("rkd-category-by-section");
     if (!el || !el.textContent) return {};
@@ -51,32 +71,34 @@
     var catName = sectionSelect.name.replace(/specification_section$/, "category");
     var root = sectionSelect.form || document;
     var cat = root.querySelector("[name=" + JSON.stringify(catName) + "]");
-    if (!cat || cat.tagName !== "SELECT") return;
 
-    var prev = cat.value;
-    cat.innerHTML = "";
-    var rows = [["", "---------"]];
-    codes.forEach(function (c) {
-      rows.push([c, c]);
-    });
-    rows.forEach(function (pair) {
-      var o = document.createElement("option");
-      o.value = pair[0];
-      o.textContent = pair[1];
-      cat.appendChild(o);
-    });
-    if (
-      prev &&
-      Array.prototype.some.call(cat.options, function (opt) {
-        return opt.value === prev;
-      })
-    ) {
-      cat.value = prev;
-    } else {
-      cat.value = "";
+    if (cat && cat.tagName === "SELECT") {
+      var prev = cat.value;
+      cat.innerHTML = "";
+      var rows = [["", "---------"]];
+      codes.forEach(function (c) {
+        rows.push([c, c]);
+      });
+      rows.forEach(function (pair) {
+        var o = document.createElement("option");
+        o.value = pair[0];
+        o.textContent = pair[1];
+        cat.appendChild(o);
+      });
+      if (
+        prev &&
+        Array.prototype.some.call(cat.options, function (opt) {
+          return opt.value === prev;
+        })
+      ) {
+        cat.value = prev;
+      } else {
+        cat.value = "";
+      }
     }
 
     syncPosition(sectionSelect);
+    syncQuantityWeight(sectionSelect);
   }
 
   function syncAll() {

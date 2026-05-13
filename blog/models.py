@@ -13,6 +13,7 @@ from .helpers import (
     SPECIFICATION_SECTION_CHOICES,
     allowed_categories_for_section,
     section_allows_position,
+    section_allows_quantity_weight,
     section_has_category_choices,
     specification_section_sort_index,
 )
@@ -135,7 +136,7 @@ class ProductGroup(models.Model):
 
     class Meta:
         verbose_name = "Общая группа разработок"
-        verbose_name_plural = "Общие группы разработок"
+        verbose_name_plural = "Группы разработок (модификаций)"
         ordering = ("name",)
 
     def __str__(self):
@@ -160,7 +161,7 @@ class ProductGroupDocument(models.Model):
     )
     title = models.CharField(
         max_length=500,
-        verbose_name="Название документа",
+        verbose_name="Название и обозначение документа",
     )
     kind = models.CharField(
         max_length=20,
@@ -171,6 +172,12 @@ class ProductGroupDocument(models.Model):
     file = models.FileField(
         upload_to="blog/productgroup/documents/%Y/%m/",
         verbose_name="Файл",
+    )
+    note = models.TextField(
+        max_length=5000,
+        blank=True,
+        default="",
+        verbose_name="Примечание",
     )
 
     class Meta:
@@ -198,13 +205,28 @@ class ProductGroupDocument(models.Model):
 
 class Post(models.Model):
     LITERA_CHOICES = [
-        ('П-', 'П-'),
         ('П', 'П'),
+        ('Э', 'Э'),
+        ('Т', 'Т'),
+        ('О', 'О'),
+        ('О1', 'О₁'),
+        ('О2', 'О₂'),
+        ('О3', 'О₃'),
+        ('А', 'А'),
+        ('Б', 'Б'),
+        ('И', 'И'),
     ]
 
     TRL_CHOICES = [
-        ('1-', '1-'),
         ('1', '1'),
+        ('2', '2'),
+        ('3', '3'),
+        ('4', '4'),
+        ('5', '5'),
+        ('6', '6'),
+        ('7', '7'),
+        ('8', '8'),
+        ('9', '9'),
     ]
 
     name = models.CharField(
@@ -216,7 +238,6 @@ class Post(models.Model):
         max_length=255,
         blank=True,
         null=True,
-        unique=True,
         verbose_name="Наименование изделия (продукта) полное",
     )
     desig_document_post = models.CharField(
@@ -247,6 +268,13 @@ class Post(models.Model):
     main_purpose = models.TextField(
         max_length=2000,
         blank=True,
+        default="",
+        verbose_name="Основное назначение изделия (продукта)",
+    )
+    main_purpose_own = models.TextField(
+        max_length=2000,
+        blank=True,
+        null=True,
         default="",
         verbose_name="Основное назначение изделия (продукта)",
     )
@@ -288,9 +316,9 @@ class Post(models.Model):
     version = models.CharField(max_length=20, default='1', verbose_name="Версия")
     version_diff = models.TextField(max_length=1000, blank=True, default='Стартовая версия',
                                     verbose_name="Сравнение версий")
-    litera = models.CharField(max_length=20, choices=LITERA_CHOICES, default='П-',
+    litera = models.CharField(max_length=20, choices=LITERA_CHOICES, default='П',
                               verbose_name="Стадия разработки (литера)")
-    trl = models.CharField(max_length=10, choices=TRL_CHOICES, default='1-',
+    trl = models.CharField(max_length=10, choices=TRL_CHOICES, default='1',
                            verbose_name="Уровень готовности технологий (TRL)")
 
     prelim_design = models.OneToOneField(prelim_design, on_delete=models.SET_NULL, null=True, blank=True,
@@ -313,6 +341,15 @@ class Post(models.Model):
     conformity_assessment = models.OneToOneField(ConformityAssessment, on_delete=models.SET_NULL, null=True, blank=True,
                                                  verbose_name="Подтверждение соответствия")
 
+    in_production = models.BooleanField(
+        default=False,
+        verbose_name="Постановка на производство",
+    )
+    in_production_date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Дата постановки на производство",
+    )
     modification_code = models.CharField(
         max_length=50,
         blank=True,
@@ -328,6 +365,12 @@ class Post(models.Model):
         blank=True,
         default="",
         verbose_name="Организация-разработчик",
+    )
+    manufacturer_org_post = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        verbose_name="Организация-изготовитель",
     )
     technical_specifications_ref = models.CharField(
         max_length=500,
@@ -347,7 +390,7 @@ class Post(models.Model):
 
     class Meta:
         verbose_name = "Разработка"
-        verbose_name_plural = "Разработки"
+        verbose_name_plural = "Разработки (модификации)"
 
     def __str__(self):
         return self.name
@@ -361,6 +404,10 @@ class Post(models.Model):
         if self.is_group_modification and not self.product_group_id:
             raise ValidationError({
                 "product_group": "Выберите общую группу разработок или снимите галочку.",
+            })
+        if self.in_production and not self.in_production_date:
+            raise ValidationError({
+                "in_production_date": "Укажите дату постановки на производство.",
             })
 
 
@@ -2220,6 +2267,7 @@ class UniversalRKD(models.Model):
 
     SHEET_SIZE_CHOICES = [
         ("А0", "А0"),
+        ("А1", "А1"),
         ("А5", "А5"),
         ("А4", "А4"),
         ("БЧ", "БЧ"),
@@ -2328,6 +2376,11 @@ class UniversalRKD(models.Model):
         verbose_name="Последний редактор",
     )
     version = models.CharField(max_length=3, default="1", verbose_name="Версия")
+    version_diff = models.TextField(
+        blank=True,
+        default="Стартовая версия",
+        verbose_name="Сравнение версий",
+    )
     date_of_change = models.DateTimeField(auto_now=True, verbose_name="Дата и время последнего изменения")
     current_responsible = models.ForeignKey(
         User,
@@ -2360,6 +2413,12 @@ class UniversalRKD(models.Model):
         null=True,
         blank=True,
         verbose_name="Дата планового пересмотра",
+    )
+    revision_criteria = models.TextField(
+        max_length=1000,
+        blank=True,
+        default="",
+        verbose_name="Критерии пересмотра",
     )
     review_reminder_days = models.PositiveSmallIntegerField(
         default=60,
@@ -2401,18 +2460,21 @@ class UniversalRKD(models.Model):
     )
     document_uploaded_file = models.FileField(
         upload_to="blog/universal_rkd/documents/%Y/%m/",
+        max_length=500,
         blank=True,
         null=True,
         verbose_name="Документ: итоговый",
     )
     document_source = models.FileField(
         upload_to="blog/universal_rkd/documents/source/%Y/%m/",
+        max_length=500,
         blank=True,
         null=True,
         verbose_name="Документ: исходник",
     )
     approval_document = models.FileField(
         upload_to="blog/universal_rkd/approval/%Y/%m/",
+        max_length=500,
         blank=True,
         null=True,
         validators=[FileExtensionValidator(allowed_extensions=["pdf"])],
@@ -2421,6 +2483,7 @@ class UniversalRKD(models.Model):
     )
     approval_source = models.FileField(
         upload_to="blog/universal_rkd/approval/source/%Y/%m/",
+        max_length=500,
         blank=True,
         null=True,
         validators=[FileExtensionValidator(allowed_extensions=["docx"])],
@@ -2429,6 +2492,7 @@ class UniversalRKD(models.Model):
     )
     attestation_document = models.FileField(
         upload_to="blog/universal_rkd/attestation/%Y/%m/",
+        max_length=500,
         blank=True,
         null=True,
         validators=[FileExtensionValidator(allowed_extensions=["pdf"])],
@@ -2437,6 +2501,7 @@ class UniversalRKD(models.Model):
     )
     attestation_source = models.FileField(
         upload_to="blog/universal_rkd/attestation/source/%Y/%m/",
+        max_length=500,
         blank=True,
         null=True,
         validators=[FileExtensionValidator(allowed_extensions=["docx"])],
@@ -2450,13 +2515,14 @@ class UniversalRKD(models.Model):
         null=True,
         blank=True,
         related_name="universal_rkd_checked",
-        verbose_name="Проверил / согласовал",
+        verbose_name="Проверил (схемотехнические требования)",
     )
     signature_checked = models.FileField(
         upload_to="blog/universal_rkd/signatures/checked/%Y/%m/",
+        max_length=500,
         blank=True,
         null=True,
-        verbose_name="Подпись проверки (файл)",
+        verbose_name="Подпись (схемотехника)",
     )
     approved_by = models.ForeignKey(
         User,
@@ -2468,12 +2534,13 @@ class UniversalRKD(models.Model):
     )
     signature_approved = models.FileField(
         upload_to="blog/universal_rkd/signatures/approved/%Y/%m/",
+        max_length=500,
         blank=True,
         null=True,
         verbose_name="Подпись утверждения (файл)",
     )
 
-    quantity = models.CharField(max_length=10, blank=True, default="", verbose_name="Количество")
+    quantity = models.CharField(max_length=10, blank=True, default="", verbose_name="Количество", help_text="на изделие / узел")
     note = models.CharField(
         max_length=100,
         blank=True,
@@ -2485,8 +2552,8 @@ class UniversalRKD(models.Model):
     comment = models.TextField(max_length=1000, blank=True, default="", verbose_name="Комментарий")
 
     class Meta:
-        verbose_name = "РКД"
-        verbose_name_plural = "РКД"
+        verbose_name = "РКД разработки (модификации)"
+        verbose_name_plural = "РКД разработки (модификации)"
         ordering = ("post_id", "section_sort_index", "order_in_section", "pk")
         constraints = [
             models.UniqueConstraint(
@@ -2549,6 +2616,9 @@ class UniversalRKD(models.Model):
                         )
                     }
                 )
+        if not section_allows_quantity_weight(section):
+            self.quantity = "-"
+            self.weight = "-"
         if not section_allows_position(section):
             self.position = self.POSITION_DASH
         else:
@@ -2607,6 +2677,55 @@ class UniversalRKD(models.Model):
             max_o = agg["m"] or 0
             self.order_in_section = max_o + 1
         super().save(*args, **kwargs)
+
+
+class UniversalRKDSignature(models.Model):
+    """Подписи к документу РКД (проверил / согласовал / утвердил)."""
+
+    ROLE_CHOICES = [
+        ("scheme", "Проверил (схемотехнические требования)"),
+        ("it", "Проверил IT (требования, связанные с клиент-серверным ПО)"),
+        ("3d", "Проверил 3D (требования, связанные с 3D-печатью)"),
+        ("tt", "Проверил ТТ (технические требования)"),
+        ("nk", "Проверил НК (нормоконтроль)"),
+        ("agreed", "Согласовал"),
+        ("approved", "Утвердил"),
+    ]
+
+    rkd = models.ForeignKey(
+        UniversalRKD,
+        on_delete=models.CASCADE,
+        related_name="signatures",
+        verbose_name="Документ РКД",
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        verbose_name="Роль",
+    )
+    signed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rkd_signatures",
+        verbose_name="Кто подписал",
+    )
+    signature_file = models.FileField(
+        upload_to="blog/universal_rkd/signatures/%Y/%m/",
+        max_length=500,
+        blank=True,
+        null=True,
+        verbose_name="Файл подписи",
+    )
+
+    class Meta:
+        verbose_name = "Подпись документа"
+        verbose_name_plural = "Подписи документа"
+        ordering = ("role",)
+
+    def __str__(self):
+        return f"{self.get_role_display()} — {self.signed_by or '—'}"
 
 
 class Shipment(models.Model):

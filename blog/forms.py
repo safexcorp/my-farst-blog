@@ -6,6 +6,7 @@ from .models import WorkAssignment, UniversalRKD, TechnicalProposalDocument
 from .helpers import (
     RKD_CATEGORY_BY_SECTION,
     section_allows_position,
+    section_allows_quantity_weight,
     section_has_category_choices,
 )
 
@@ -130,6 +131,9 @@ class UniversalRKDForm(forms.ModelForm):
             cleaned["category"] = ""
         if not section_allows_position(section):
             cleaned["position"] = "-"
+        if not section_allows_quantity_weight(section):
+            cleaned["quantity"] = "-"
+            cleaned["weight"] = "-"
         return cleaned
 
 
