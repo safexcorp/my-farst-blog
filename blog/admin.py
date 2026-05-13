@@ -92,6 +92,7 @@ from .models import (
     WorkAssignmentDeadlineChange,
     Attachment,
     UniversalRKD,
+    UniversalRKDSignature,
     RKDDeveloper,
     RKDDeveloperAdditionalFile,
     Shipment,
@@ -130,6 +131,99 @@ def _universal_rkd_planned_review_show_warning(validity_date, *, days: int) -> b
         d = 0
     today = timezone.now().date()
     return (validity_date - today).days <= d
+
+
+def _file_link_marker(file_field) -> str:
+    """Сериализует FileField в маркер для последующего рендера ссылкой.
+
+    Формат: [имя_файла](url) — парсится в `_render_version_diff`.
+    Если файла нет, возвращает «—».
+    """
+    if not file_field:
+        return "—"
+    try:
+        url = file_field.url
+    except Exception:
+        return "—"
+    name = file_field.name.rsplit("/", 1)[-1] if file_field.name else "файл"
+    return f"[{name}]({url})"
+
+
+def _build_version_diff_block(*, old_obj, new_obj, model_cls, skip_fields,
+                              user, version_to: str) -> str:
+    """Строит блок изменений между `old_obj` и `new_obj` по полям модели.
+
+    Возвращает текст блока вида:
+        ─── Версия N (DD.MM.YYYY HH:MM, ФИО) ───
+        - Поле: «старое» → «новое»
+        - Файл: предыдущий [name.pdf](url) → [new.pdf](url)
+    Если изменений нет — возвращает пустую строку.
+    """
+    diff_parts = []
+    for field in model_cls._meta.concrete_fields:
+        if field.name in skip_fields:
+            continue
+        if field.is_relation:
+            old_pk = getattr(old_obj, field.attname, None)
+            new_pk = getattr(new_obj, field.attname, None)
+            if old_pk == new_pk:
+                continue
+            try:
+                old_disp = str(field.related_model.objects.get(pk=old_pk)) if old_pk else "—"
+            except Exception:
+                old_disp = str(old_pk) if old_pk else "—"
+            try:
+                new_disp = str(field.related_model.objects.get(pk=new_pk)) if new_pk else "—"
+            except Exception:
+                new_disp = str(new_pk) if new_pk else "—"
+            diff_parts.append(f"- {field.verbose_name}: «{old_disp}» → «{new_disp}»")
+            continue
+        if getattr(field, "upload_to", None) is not None:
+            old_file = getattr(old_obj, field.name, None)
+            new_file = getattr(new_obj, field.name, None)
+            old_name = old_file.name if old_file else ""
+            new_name = new_file.name if new_file else ""
+            if old_name == new_name:
+                continue
+            diff_parts.append(
+                f"- {field.verbose_name}: предыдущий {_file_link_marker(old_file)} "
+                f"→ {_file_link_marker(new_file)}"
+            )
+            continue
+        old_val = getattr(old_obj, field.name, None)
+        new_val = getattr(new_obj, field.name, None)
+        if str(old_val) != str(new_val):
+            old_disp = old_val if old_val not in (None, "") else "—"
+            new_disp = new_val if new_val not in (None, "") else "—"
+            diff_parts.append(f"- {field.verbose_name}: «{old_disp}» → «{new_disp}»")
+
+    if not diff_parts:
+        return ""
+
+    user_name = ""
+    if user is not None:
+        user_name = user.get_full_name() or user.get_username() or ""
+    ts = timezone.localtime(timezone.now()).strftime("%d.%m.%Y %H:%M")
+    header_parts = [f"Версия {version_to}", ts]
+    if user_name:
+        header_parts.append(user_name)
+    header = f"─── {' · '.join(header_parts)} ───"
+    return header + "\n" + "\n".join(diff_parts)
+
+
+_FILE_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+
+def _render_version_diff(text: str) -> str:
+    """Преобразует сохранённый текст истории версий в HTML."""
+    if not text:
+        return "—"
+    escaped = escape(text)
+    escaped = _FILE_LINK_RE.sub(
+        lambda m: f'<a href="{m.group(2)}" target="_blank" rel="noopener noreferrer">{m.group(1)}</a>',
+        escaped,
+    )
+    return escaped.replace("\n", "<br>")
 
 
 class RequiredFileGenericFormSet(BaseGenericInlineFormSet):
@@ -568,6 +662,7 @@ class UniversalRKDInline(admin.TabularInline):
     show_change_link = True
     fields = (
         "specification_section",
+        "position",
         "category",
         "desig_document",
         "name",
@@ -602,7 +697,7 @@ class ShipmentInline(admin.TabularInline):
 class ProductGroupDocumentInline(admin.TabularInline):
     model = ProductGroupDocument
     extra = 0
-    fields = ("title", "kind", "file")
+    fields = ("title", "kind", "file", "note")
     verbose_name_plural = "Документы группы"
 
 
@@ -653,7 +748,7 @@ class ProductGroupAdmin(admin.ModelAdmin):
             qs = qs.filter(pk=int(raw))
         return qs
 
-    @admin.display(description="Основные документы (PDF)")
+    @admin.display(description="Общие документы (PDF)")
     def main_documents_column(self, obj):
         if not obj.pk:
             return "—"
@@ -721,6 +816,47 @@ class PostAdminForm(forms.ModelForm):
         self.fields["shipments_selector"].queryset = qs
 
 
+class InProductionMonthFilter(admin.SimpleListFilter):
+    title = "Постановка на производство"
+    parameter_name = "prod_month"
+
+    def lookups(self, request, model_admin):
+        from django.db.models.functions import TruncMonth
+
+        months = (
+            model_admin.get_queryset(request)
+            .filter(in_production=True, in_production_date__isnull=False)
+            .annotate(month=TruncMonth("in_production_date"))
+            .values_list("month", flat=True)
+            .distinct()
+            .order_by("-month")
+        )
+        return [("all", "Все поставленные на производство")] + [
+            (d.strftime("%Y-%m"), d.strftime("%m.%Y")) for d in months
+        ]
+
+    def queryset(self, request, queryset):
+        import calendar
+        from datetime import date as _date
+
+        val = self.value()
+        if not val:
+            return queryset
+        if val == "all":
+            return queryset.filter(in_production=True)
+        try:
+            year, month = map(int, val.split("-"))
+            first = _date(year, month, 1)
+            last = _date(year, month, calendar.monthrange(year, month)[1])
+            return queryset.filter(
+                in_production=True,
+                in_production_date__gte=first,
+                in_production_date__lte=last,
+            )
+        except (ValueError, AttributeError):
+            return queryset
+
+
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
     form = PostAdminForm
@@ -730,14 +866,16 @@ class PostAdmin(admin.ModelAdmin):
         'name',
         'name_full',
         'desig_document_post',
+        'group_modification_features_short',
         'product_group_link',
+        'in_production_column',
         'author',
         'date_of_creation',
         'date_of_change',
     )
     list_display_links = ('wa_code_column', 'name')
-    list_filter = ('product_group',)
-    search_fields = ('name', 'name_full', 'desig_document_post', 'modification_code', 'wa_code')
+    list_filter = ('product_group', InProductionMonthFilter)
+    search_fields = ('name', 'name_full', 'desig_document_post', 'wa_code')
     autocomplete_fields = ('product_group',)
     readonly_fields = (
         'author',
@@ -746,6 +884,9 @@ class PostAdmin(admin.ModelAdmin):
         'date_of_change',
         'group_name_display',
         'group_designation_display',
+        'group_main_purpose_display',
+        'version',
+        'version_diff_display',
     )
     fieldsets = (
         ("Идентификация изделия (продукта)", {
@@ -761,23 +902,24 @@ class PostAdmin(admin.ModelAdmin):
                 "product_group",
                 "group_name_display",
                 "group_designation_display",
-                "main_purpose",
+                "group_main_purpose_display",
             ),
         }),
         ("Описание изделия (продукта)", {
             "fields": (
+                "main_purpose_own",
                 "group_modification_features",
                 "order_article",
                 "note",
                 "group_documents",
             ),
         }),
-        ("Стадия и готовность", {
+        ("Уровень технической зрелости", {
             "fields": ("litera", "trl"),
         }),
         ("Версионирование", {
             "classes": ("collapse",),
-            "fields": ("version", "version_diff"),
+            "fields": ("version", "version_diff_display"),
         }),
         ("Системные сведения", {
             "fields": (
@@ -794,12 +936,10 @@ class PostAdmin(admin.ModelAdmin):
         ("Дополнительные сведения", {
             "classes": ("collapse",),
             "fields": (
-                "modification_code",
-                "validity_date",
+                "in_production",
+                "in_production_date",
                 "develop_org",
-                "technical_specifications_ref",
-                "operating_manual_ref",
-                "product_passport_ref",
+                "manufacturer_org_post",
             ),
         }),
     )
@@ -819,6 +959,11 @@ class PostAdmin(admin.ModelAdmin):
     def group_designation_display(self, obj):
         value = (obj.product_group.designation if obj and obj.product_group_id else "") or ""
         return format_html('<span id="pg_val_designation">{}</span>', value or "—")
+
+    @admin.display(description="Основное назначение изделия (продукта)")
+    def group_main_purpose_display(self, obj):
+        value = (obj.product_group.main_purpose if obj and obj.product_group_id else "") or ""
+        return format_html('<span id="pg_val_main_purpose">{}</span>', value or "—")
 
     def get_urls(self):
         urls = super().get_urls()
@@ -851,7 +996,6 @@ class PostAdmin(admin.ModelAdmin):
             def __init__(self, *args, **form_kwargs):
                 super().__init__(*args, **form_kwargs)
                 for optional_name in (
-                    "current_responsible",
                     "name_full",
                     "desig_document_post",
                     "product_group",
@@ -860,38 +1004,55 @@ class PostAdmin(admin.ModelAdmin):
                     if f is not None:
                         f.required = False
 
-                field = self.fields.get("develop_org")
-                if field and not self.is_bound:
-                    current_name = (getattr(self.instance, "develop_org", "") or "").strip()
-                    if current_name:
-                        org = RKDDeveloper.objects.filter(name=current_name).only("pk").first()
-                        if org:
-                            self.initial["develop_org"] = str(org.pk)
+                if not self.is_bound:
+                    cr_field = self.fields.get("current_responsible")
+                    if cr_field is not None:
+                        current_val = self.initial.get("current_responsible") or getattr(
+                            self.instance, "current_responsible_id", None
+                        )
+                        if not current_val:
+                            self.initial["current_responsible"] = request.user.pk
+
+                for org_field_name in ("develop_org", "manufacturer_org_post"):
+                    field = self.fields.get(org_field_name)
+                    if field and not self.is_bound:
+                        current_name = (getattr(self.instance, org_field_name, "") or "").strip()
+                        if current_name:
+                            org = RKDDeveloper.objects.filter(name=current_name).only("pk").first()
+                            if org:
+                                self.initial[org_field_name] = str(org.pk)
 
         return _PostForm
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
-        if formfield is None or db_field.name != "develop_org":
+        if formfield is None:
             return formfield
 
-        org_items = list(
-            RKDDeveloper.objects.order_by("name").values_list("pk", "name")
-        )
-        choices = [("", "---------")] + [(str(pk), name) for pk, name in org_items if name]
-        formfield.widget = forms.Select(choices=choices)
-        formfield.choices = choices
-        rel = Shipment._meta.get_field("manufacturer_org").remote_field
-        formfield.widget = RelatedFieldWidgetWrapper(
-            formfield.widget,
-            rel,
-            self.admin_site,
-            can_add_related=True,
-            can_change_related=True,
-            can_delete_related=True,
-            can_view_related=True,
-        )
-        formfield.help_text = ""
+        if db_field.name == "order_article":
+            formfield.widget.attrs.update({"style": "width: 600px;"})
+            return formfield
+
+        if db_field.name in ("develop_org", "manufacturer_org_post"):
+            org_items = list(
+                RKDDeveloper.objects.order_by("name").values_list("pk", "name")
+            )
+            choices = [("", "---------")] + [(str(pk), name) for pk, name in org_items if name]
+            formfield.widget = forms.Select(choices=choices)
+            formfield.choices = choices
+            rel = Shipment._meta.get_field("manufacturer_org").remote_field
+            formfield.widget = RelatedFieldWidgetWrapper(
+                formfield.widget,
+                rel,
+                self.admin_site,
+                can_add_related=True,
+                can_change_related=True,
+                can_delete_related=True,
+                can_view_related=True,
+            )
+            formfield.help_text = ""
+            return formfield
+
         return formfield
 
     def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
@@ -921,6 +1082,25 @@ class PostAdmin(admin.ModelAdmin):
     def wa_code_column(self, obj):
         return obj.wa_code or "—"
 
+    @admin.display(description="Характерные особенности", ordering="group_modification_features")
+    def group_modification_features_short(self, obj):
+        v = obj.group_modification_features or ""
+        return (v[:80] + "…") if len(v) > 80 else (v or "—")
+
+    @admin.display(description="На производстве", ordering="in_production_date")
+    def in_production_column(self, obj):
+        if not obj.in_production:
+            return "—"
+        if obj.in_production_date:
+            return obj.in_production_date.strftime("%m.%Y")
+        return "✓"
+
+    _VERSION_SKIP_FIELDS = frozenset({
+        "id", "version", "version_diff", "wa_code",
+        "author", "last_editor",
+        "date_of_creation", "date_of_change",
+    })
+
     def save_model(self, request, obj, form, change):
         raw_value = form.cleaned_data.get("develop_org")
         if raw_value:
@@ -928,6 +1108,13 @@ class PostAdmin(admin.ModelAdmin):
             obj.develop_org = org.name if org else ""
         else:
             obj.develop_org = ""
+
+        raw_manufacturer = form.cleaned_data.get("manufacturer_org_post")
+        if raw_manufacturer:
+            org = RKDDeveloper.objects.filter(pk=raw_manufacturer).only("name").first()
+            obj.manufacturer_org_post = org.name if org else ""
+        else:
+            obj.manufacturer_org_post = ""
 
         if not obj.is_group_modification:
             obj.product_group = None
@@ -939,11 +1126,38 @@ class PostAdmin(admin.ModelAdmin):
             if not obj.current_responsible_id:
                 obj.current_responsible = request.user
 
+        if not change:
+            obj.version = "1"
+            obj.version_diff = "Стартовая версия"
+        else:
+            old = Post.objects.get(pk=obj.pk)
+            try:
+                new_version = str(int(old.version) + 1)
+            except (ValueError, TypeError):
+                new_version = old.version
+            block = _build_version_diff_block(
+                old_obj=old,
+                new_obj=obj,
+                model_cls=Post,
+                skip_fields=self._VERSION_SKIP_FIELDS,
+                user=request.user if request.user.is_authenticated else None,
+                version_to=new_version,
+            )
+            if block:
+                obj.version = new_version
+                obj.version_diff = ((old.version_diff or "").rstrip() + "\n\n" + block).strip()
+
         super().save_model(request, obj, form, change)
 
         if not obj.wa_code:
             from .helpers import assign_wa_code_to_post
             assign_wa_code_to_post(obj)
+
+    @admin.display(description="Сравнение версий")
+    def version_diff_display(self, obj):
+        if not obj:
+            return "—"
+        return mark_safe(_render_version_diff(obj.version_diff or ""))
 
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)
@@ -1094,6 +1308,15 @@ def _rkd_docs_section_header(title: str):
     )
 
 
+class UniversalRKDSignatureInline(admin.TabularInline):
+    model = UniversalRKDSignature
+    extra = 0
+    fields = ("role", "signed_by", "signature_file")
+    autocomplete_fields = ("signed_by",)
+    verbose_name = "Подпись"
+    verbose_name_plural = "Подписание документа"
+
+
 @admin.register(UniversalRKD)
 class UniversalRKDAdmin(admin.ModelAdmin):
     change_form_template = "admin/blog/universal_rkd_category_change_form.html"
@@ -1174,8 +1397,6 @@ class UniversalRKDAdmin(admin.ModelAdmin):
 
     autocomplete_fields = (
         "post",
-        "author",
-        "last_editor",
         "current_responsible",
         "checked_by",
         "approved_by",
@@ -1183,9 +1404,14 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         "internal_recipients",
         "external_recipients",
     )
+    inlines = [UniversalRKDSignatureInline]
     readonly_fields = (
+        "author",
+        "last_editor",
         "date_of_creation",
         "date_of_change",
+        "version",
+        "version_diff_display",
         "display_files_list",
     )
 
@@ -1213,7 +1439,7 @@ class UniversalRKDAdmin(admin.ModelAdmin):
                     "sheet_size",
                     "position",
                     "info_format",
-                    "validity_date",
+                    ("validity_date", "revision_criteria"),
                     "review_reminder_days",
                     "language",
                     "internal_recipients",
@@ -1255,17 +1481,6 @@ class UniversalRKDAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Согласование",
-            {
-                "fields": (
-                    "checked_by",
-                    "signature_checked",
-                    "approved_by",
-                    "signature_approved",
-                )
-            },
-        ),
-        (
             "Дополнительно",
             {
                 "fields": (
@@ -1277,13 +1492,14 @@ class UniversalRKDAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Ответственные",
+            "Системные данные",
             {
                 "fields": (
                     "author",
                     "current_responsible",
                     "last_editor",
                     "version",
+                    "version_diff_display",
                     "date_of_creation",
                     "date_of_change",
                 )
@@ -1425,23 +1641,20 @@ class UniversalRKDAdmin(admin.ModelAdmin):
             action_label="изменил",
         )
 
-        html += f'<div style="{section_title}">Подписи</div>'
-        html += _row(
-            "Подпись проверки",
-            getattr(obj, "signature_checked", None),
-            with_sep=True,
-            uploaded_by=last_editor,
-            uploaded_at=changed_at,
-            action_label="изменил",
-        )
-        html += _row(
-            "Подпись утверждения",
-            getattr(obj, "signature_approved", None),
-            with_sep=False,
-            uploaded_by=last_editor,
-            uploaded_at=changed_at,
-            action_label="изменил",
-        )
+        sigs = list(obj.signatures.select_related("signed_by").order_by("role")) if obj.pk else []
+        if sigs:
+            html += f'<div style="{section_title}">Подписи</div>'
+            for i, sig in enumerate(sigs):
+                label = sig.get_role_display()
+                if sig.signed_by:
+                    label += f" ({escape(sig.signed_by.get_username())})"
+                html += _row(
+                    label,
+                    sig.signature_file if sig.signature_file else None,
+                    with_sep=(i < len(sigs) - 1),
+                    uploaded_by=sig.signed_by,
+                    action_label="подписал",
+                )
 
         html += "</div>"
         return mark_safe(html)
@@ -1505,11 +1718,63 @@ class UniversalRKDAdmin(admin.ModelAdmin):
             "approved_by",
         )
 
+    _VERSION_SKIP_FIELDS = frozenset({
+        "id", "version", "version_diff",
+        "author", "last_editor",
+        "date_of_creation", "date_of_change",
+        "order_in_section", "section_sort_index",
+    })
+
     def save_model(self, request, obj, form, change):
         if not change:
             obj.author = request.user
+            obj.version = "1"
+            obj.version_diff = "Стартовая версия"
+        else:
+            old = UniversalRKD.objects.get(pk=obj.pk)
+            try:
+                new_version = str(int(old.version) + 1)[:3]
+            except (ValueError, TypeError):
+                new_version = old.version
+            block = _build_version_diff_block(
+                old_obj=old,
+                new_obj=obj,
+                model_cls=UniversalRKD,
+                skip_fields=self._VERSION_SKIP_FIELDS,
+                user=request.user if request.user.is_authenticated else None,
+                version_to=new_version,
+            )
+            if block:
+                obj.version = new_version
+                obj.version_diff = ((old.version_diff or "").rstrip() + "\n\n" + block).strip()
+
         obj.last_editor = request.user
+        if not obj.current_responsible_id:
+            obj.current_responsible = request.user
         super().save_model(request, obj, form, change)
+
+    @admin.display(description="Сравнение версий")
+    def version_diff_display(self, obj):
+        if not obj:
+            return "—"
+        return mark_safe(_render_version_diff(obj.version_diff or ""))
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _RKDForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                if not self.is_bound:
+                    cr_field = self.fields.get("current_responsible")
+                    if cr_field is not None:
+                        current_val = self.initial.get("current_responsible") or getattr(
+                            self.instance, "current_responsible_id", None
+                        )
+                        if not current_val:
+                            self.initial["current_responsible"] = request.user.pk
+
+        return _RKDForm
 
     _PDF_FILE_FIELDS = {
         "approval_document",

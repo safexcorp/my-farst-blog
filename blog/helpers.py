@@ -116,6 +116,7 @@ _CATEGORY_DOCUMENTATION: tuple[str, ...] = (
     "СБ",
     "ЭМИ",
     "ГЧ",
+    "МЧ",
     "Э3",
     "ПЭ3",
     "ТУ",
@@ -167,6 +168,10 @@ def section_has_category_choices(section: str) -> bool:
 
 
 def section_allows_position(section: str) -> bool:
+    return section in POSITION_EDITABLE_SECTIONS
+
+
+def section_allows_quantity_weight(section: str) -> bool:
     return section in POSITION_EDITABLE_SECTIONS
 
 

@@ -16,7 +16,7 @@
 {% if rkd_category_by_section_dict %}
 {{ rkd_category_by_section_dict|json_script:"rkd-category-by-section" }}
 {% endif %}
-<script src="{% static 'blog/js/universal_rkd_category.js' %}"></script>
+<script src="{% static 'blog/js/universal_rkd_category.js' %}?v=3"></script>
 {% if product_group_data_url_template %}
 <script>
 (function () {
@@ -30,12 +30,6 @@
         el.textContent = value && value.trim().length ? value : "—";
     }
 
-    function setMainPurposeIfEmpty(value) {
-        var el = document.getElementById("id_main_purpose");
-        if (!el || (el.value || "").trim()) { return; }
-        if (value) { el.value = value; }
-    }
-
     function fetchGroupAndFill(pk) {
         if (!pk) { return; }
         var url = DATA_URL_TPL.replace(/\/0\/?$/, "/" + pk + "/");
@@ -45,7 +39,7 @@
                 if (!data || !data.ok) { return; }
                 setSpan("pg_val_name", data.name);
                 setSpan("pg_val_designation", data.designation);
-                setMainPurposeIfEmpty(data.main_purpose);
+                setSpan("pg_val_main_purpose", data.main_purpose);
             })
             .catch(function () {});
     }
@@ -53,6 +47,7 @@
     function clearGroupSpans() {
         setSpan("pg_val_name", "");
         setSpan("pg_val_designation", "");
+        setSpan("pg_val_main_purpose", "");
     }
 
     function applyGroupSelectState(checked, $groupSelect) {
@@ -108,3 +103,4 @@
 </script>
 {% endif %}
 {% endblock %}
+
