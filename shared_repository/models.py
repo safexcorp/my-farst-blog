@@ -157,9 +157,16 @@ class SharedRepository(models.Model):
 
     related_documents = models.ManyToManyField(
         'QMSDocument',
-        verbose_name='Связанные документы СМК',
+        verbose_name='документы СМК',
         blank=True,
         help_text='Выбор из списка документов СМК. Можно выбрать несколько'
+    )
+
+    related_sharedrepository = models.ManyToManyField(
+        'SharedRepository',
+        verbose_name='отдельные документы',
+        blank=True,
+        help_text='Выбор из списка отдельных документов. Можно выбрать несколько'
     )
 
     # 17. Примечание документа
@@ -640,14 +647,14 @@ class QMSDocument(models.Model):
     # 18. Связанные документы
     related_documents = models.ManyToManyField(
         'SharedRepository',
-        verbose_name='Доступные отдельные документы',
+        verbose_name='отдельные документы',
         blank=True,
         help_text='Выбор из списка отдельных документов. Можно выбрать несколько'
     )
 
     related_qms_documents = models.ManyToManyField(
         'QMSDocument',
-        verbose_name='Выбранные документы СМК',
+        verbose_name='документы СМК',
         blank=True,
         help_text='Выбор из списка документов СМК. Можно выбрать несколько'
     )
