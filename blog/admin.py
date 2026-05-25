@@ -48,7 +48,8 @@ from enterprise_asset_management.models import (
 )
 from shared_repository.models import (SharedRepository, IndependentDocumentAcceptSignature,
 KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature, AdministrativeOrder,
-AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature, PSIDocument, GeneratedDocument, DocumentHistory)
+AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature, PSIDocument,
+GeneratedDocument, DocumentHistory)
 
 from .admin_forms import RescheduleAdminForm
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
@@ -99,6 +100,11 @@ from .models import (
     ShipmentAdditionalFile,
 )
 from .services import WorkAssignmentService
+
+from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.models import User
+from shared_repository.models import EmployeeProfile
 
 
 def _inject_rkd_category_json(extra_context):
@@ -6065,3 +6071,74 @@ class DocumentHistoryAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         """Запрещаем изменение истории"""
         return False
+
+#Модель пользовательского разделе с доп информацией
+class EmployeeProfileInline(admin.StackedInline):
+    model = EmployeeProfile
+    fk_name = 'user'
+    can_delete = False
+    verbose_name_plural = 'Дополнительная информация'
+    fieldsets = (
+        ('Личные данные', {
+            'fields': ('patronymic', 'inn', 'phone')
+        }),
+        ('Рабочие данные', {
+            'fields': ('department', 'position', 'supervisor', 'roles_responsibilities')
+        }),
+    )
+
+admin.site.unregister(User)
+
+@admin.register(User)
+class CustomUserAdmin(BaseUserAdmin):
+    inlines = [EmployeeProfileInline]
+
+    list_display = (
+        'username',
+        'get_full_name',
+        'get_patronymic',
+        'get_inn',
+        'get_phone',
+        'get_department',
+        'get_position',
+        'get_supervisor',
+        'is_active',
+    )
+
+    def get_patronymic(self, obj):
+        return obj.profile.patronymic if hasattr(obj, 'profile') else ''
+
+    get_patronymic.short_description = 'Отчество'
+    get_patronymic.admin_order_field = 'profile__patronymic'
+
+    def get_inn(self, obj):
+        return obj.profile.inn if hasattr(obj, 'profile') else ''
+
+    get_inn.short_description = 'ИНН'
+    get_inn.admin_order_field = 'profile__inn'
+
+    def get_phone(self, obj):
+        return obj.profile.phone if hasattr(obj, 'profile') else ''
+
+    get_phone.short_description = 'Телефон'
+    get_phone.admin_order_field = 'profile__phone'
+
+    def get_department(self, obj):
+        return obj.profile.department if hasattr(obj, 'profile') else ''
+
+    get_department.short_description = 'Отдел'
+    get_department.admin_order_field = 'profile__department'
+
+    def get_position(self, obj):
+        return obj.profile.position if hasattr(obj, 'profile') else ''
+
+    get_position.short_description = 'Должность'
+    get_position.admin_order_field = 'profile__position'
+
+    def get_supervisor(self, obj):
+        if hasattr(obj, 'profile') and obj.profile.supervisor:
+            return obj.profile.supervisor.get_full_name() or obj.profile.supervisor.username
+        return ''
+
+    get_supervisor.short_description = 'Непосредственное подчинение'
+    get_supervisor.admin_order_field = 'profile__supervisor'
