@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Лист утверждения — {{ rkd.desig_document }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 20mm 20mm 20mm 25mm;
+    }
+    body {
+      font-family: 'DejaVu Sans', 'Arial', sans-serif;
+      font-size: 11px;
+      color: #000;
+    }
+    h1 {
+      text-align: center;
+      font-size: 14px;
+      font-weight: bold;
+      margin: 0 0 6px 0;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .subtitle {
+      text-align: center;
+      font-size: 11px;
+      margin-bottom: 18px;
+      color: #333;
+    }
+    .doc-info {
+      margin-bottom: 16px;
+      border: 1px solid #aaa;
+      padding: 8px 12px;
+      background: #f9f9f9;
+    }
+    .doc-info p {
+      margin: 3px 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+    th, td {
+      border: 1px solid #555;
+      padding: 6px 8px;
+      vertical-align: middle;
+      text-align: left;
+    }
+    th {
+      background: #e8e8e8;
+      font-weight: bold;
+      font-size: 10px;
+      text-align: center;
+    }
+    td.role-col   { width: 32%; }
+    td.name-col   { width: 28%; }
+    td.sig-col    { width: 24%; text-align: center; }
+    td.date-col   { width: 16%; text-align: center; }
+    .sig-img {
+      max-height: 36px;
+      max-width: 90px;
+    }
+    .no-sig {
+      color: #aaa;
+      font-style: italic;
+      font-size: 10px;
+    }
+    .footer {
+      margin-top: 24px;
+      font-size: 9px;
+      color: #666;
+      border-top: 1px solid #ccc;
+      padding-top: 6px;
+      text-align: right;
+    }
+    .empty-row td {
+      color: #999;
+      font-style: italic;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Лист утверждения</h1>
+  <p class="subtitle">{{ rkd.desig_document }}{% if rkd.name %} — {{ rkd.name }}{% endif %}</p>
+
+  <div class="doc-info">
+    {% if rkd.post %}
+    <p><strong>Разработка / проект:</strong> {{ rkd.post }}</p>
+    {% endif %}
+    <p><strong>Обозначение документа:</strong> {{ rkd.desig_document|default:"—" }}</p>
+    <p><strong>Наименование:</strong> {{ rkd.name|default:"—" }}</p>
+    {% if rkd.litera %}
+    <p><strong>Литера:</strong> {{ rkd.litera }}</p>
+    {% endif %}
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="role-col">Роль</th>
+        <th class="name-col">ФИО</th>
+        <th class="sig-col">Подпись</th>
+        <th class="date-col">Дата</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for sig in signatures %}
+      <tr>
+        <td class="role-col">{{ sig.role }}</td>
+        <td class="name-col">{{ sig.signed_by }}</td>
+        <td class="sig-col">
+          {% if sig.img_b64 %}
+            <img class="sig-img" src="{{ sig.img_b64 }}" alt="подпись">
+          {% else %}
+            <span class="no-sig">нет файла</span>
+          {% endif %}
+        </td>
+        <td class="date-col">{{ sig.date|default:"" }}</td>
+      </tr>
+      {% empty %}
+      <tr class="empty-row">
+        <td colspan="4">Подписи не добавлены</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="footer">
+    Сгенерировано: {{ generated_at|date:"d.m.Y H:i" }}
+  </div>
+
+</body>
+</html>

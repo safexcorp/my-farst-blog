@@ -28,6 +28,12 @@ class WorkEquipment(models.Model):
     )
     measuring_device = models.BooleanField("Средство измерений", default=False)
     next_calibration_date = models.DateField("Дата плановой поверки", blank=True, null=True)
+    calibration_info = models.TextField(
+        "Сведения о поверке",
+        max_length=500,
+        blank=True,
+        null=True,
+    )
     calibration_required = models.BooleanField("Требуется калибровка", default=False)
     planned_calibration_date = models.DateField("Дата плановой калибровки", blank=True, null=True)
     workstation = models.CharField("Рабочее место", max_length=100, blank=True, null=True)
@@ -64,9 +70,9 @@ class WorkEquipment(models.Model):
         null=True,
     )
 
-    note = models.CharField(
+    note = models.TextField(
         "Примечание",
-        max_length=300,
+        max_length=2000,
         blank=True,
         null=True,
     )
@@ -126,15 +132,108 @@ class WorkEquipmentFile(models.Model):
         related_name="files",
         verbose_name="Рабочее оборудование",
     )
-    file = models.FileField("Файл", upload_to="work_equipment_files/", validators=[validate_file_size])
-    uploaded_at = models.DateTimeField("Дата загрузки", default=timezone.now)
+    title = models.CharField(
+        "Название и обозначение документа",
+        max_length=500,
+        blank=True,
+        default="",
+    )
+    file = models.FileField(
+        "Файл",
+        upload_to="work_equipment_files/",
+        validators=[validate_file_size],
+    )
+    note = models.TextField(
+        "Примечание",
+        max_length=5000,
+        blank=True,
+        default="",
+    )
 
     class Meta:
         verbose_name = "Сопроводительный документ"
         verbose_name_plural = "Сопроводительные документы"
+        ordering = ("pk",)
 
     def __str__(self):
-        return f"Файл для: {self.work_equipment}"
+        return self.title or (self.file.name.split("/")[-1] if self.file else f"Документ для: {self.work_equipment}")
+
+
+class WorkEquipmentRepair(models.Model):
+    """
+    Ремонты / ТО рабочего оборудования
+    """
+
+    work_equipment = models.ForeignKey(
+        WorkEquipment,
+        on_delete=models.CASCADE,
+        related_name="repairs",
+        verbose_name="Рабочее оборудование",
+    )
+    repair_date = models.DateField("Дата ремонта / ТО")
+    description = models.TextField("Описание выполненных работ", max_length=5000)
+
+    # --- Планово-предупредительные работы ---
+    next_planned_date = models.DateField(
+        "Дата следующих планово-предупредительных работ",
+        blank=True,
+        null=True,
+    )
+    planned_works_description = models.TextField(
+        "Описание планово-предупредительных работ",
+        max_length=500,
+        blank=True,
+        default="",
+    )
+
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="work_equipment_repair_author",
+        verbose_name="Автор",
+        null=True,
+        blank=True,
+    )
+    last_editor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="work_equipment_repair_last_editor",
+        verbose_name="Последний редактор",
+        null=True,
+        blank=True,
+    )
+    date_of_creation = models.DateTimeField("Дата и время создания", default=timezone.now)
+    date_of_change = models.DateTimeField("Дата и время последнего изменения", auto_now=True)
+
+    class Meta:
+        verbose_name = "Ремонт / ТО"
+        verbose_name_plural = "Ремонты / ТО"
+        ordering = ("-repair_date",)
+
+    def __str__(self):
+        return f"{self.work_equipment} — {self.repair_date}"
+
+
+class WorkEquipmentRepairFile(models.Model):
+    work_equipment_repair = models.ForeignKey(
+        WorkEquipmentRepair,
+        on_delete=models.CASCADE,
+        related_name="files",
+        verbose_name="Ремонт / ТО",
+    )
+    file = models.FileField(
+        "Файл",
+        upload_to="work_equipment_repair_files/",
+        validators=[validate_file_size],
+    )
+    uploaded_at = models.DateTimeField("Дата загрузки", default=timezone.now)
+
+    class Meta:
+        verbose_name = "Документ, чек"
+        verbose_name_plural = "Документы, чеки"
+
+    def __str__(self):
+        return f"Файл для: {self.work_equipment_repair}"
 
 
 class TransportVehicle(models.Model):
