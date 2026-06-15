@@ -1,0 +1,25 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main" style="max-width:700px;">
+
+  <div style="border:1px solid var(--hairline-color,#444);border-radius:10px;
+              padding:20px 24px;margin-bottom:20px;background:var(--darkened-bg,rgba(255,255,255,.02));">
+    <p style="font-size:16px;font-weight:600;margin:0 0 8px;">{{ message }}</p>
+  </div>
+
+  <form method="post" action="{{ action_url }}">
+    {% csrf_token %}
+    <div style="display:flex;gap:10px;">
+      <input type="submit" value="Подтвердить" class="default"
+             style="padding:10px 22px;font-size:14px;">
+      <a href="{{ back_url }}"
+         style="padding:10px 22px;font-size:14px;border-radius:4px;
+                border:1px solid #79aec8;color:#79aec8;text-decoration:none;">
+        ← Назад в кабинет
+      </a>
+    </div>
+  </form>
+
+</div>
+{% endblock %}

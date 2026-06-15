@@ -1,1 +1,2 @@
 Django==5.1.2
+asn1crypto

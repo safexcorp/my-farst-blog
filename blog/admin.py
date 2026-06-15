@@ -125,6 +125,30 @@ def _admin_warning_triangle_html(*, title: str, color: str = "#f0ad4e") -> str:
     )
 
 
+def _admin_lu_lo_sheets_column_html(obj) -> str:
+    """Ссылки на сгенерированные листы утверждения и ознакомления."""
+    parts = []
+    approval = getattr(obj, "approval_document", None)
+    if approval:
+        parts.append(
+            format_html(
+                '<a href="{}" target="_blank" rel="noopener noreferrer">Лист утверждения</a>',
+                approval.url,
+            )
+        )
+    acquaintance = getattr(obj, "acquaintance_document", None)
+    if acquaintance:
+        parts.append(
+            format_html(
+                '<a href="{}" target="_blank" rel="noopener noreferrer">Лист ознакомления</a>',
+                acquaintance.url,
+            )
+        )
+    if not parts:
+        return "—"
+    return mark_safe("<br>".join(str(p) for p in parts))
+
+
 def _universal_rkd_planned_review_show_warning(validity_date, *, days: int) -> bool:
     if not validity_date:
         return False
@@ -1340,7 +1364,7 @@ def _rkd_docs_section_header(title: str):
 class UniversalRKDSignatureInline(admin.TabularInline):
     model = UniversalRKDSignature
     extra = 0
-    fields = ("role", "signed_by", "signature_file")
+    fields = ("role", "signed_by", "signature_file", "signed_at")
     autocomplete_fields = ("signed_by",)
     verbose_name = "Подпись"
     verbose_name_plural = "Подписание документа"
@@ -1351,6 +1375,14 @@ class UniversalRKDAdmin(admin.ModelAdmin):
     change_form_template = "admin/blog/universal_rkd_category_change_form.html"
     change_list_template = "admin/blog/universalrkd/change_list.html"
     form = UniversalRKDForm
+    actions = ["send_to_approval_action"]
+
+    @admin.action(description="Отправить на согласование")
+    def send_to_approval_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=rkd&ids={ids}"
+        return redirect(url)
+
     list_display = (
         "rkd_post_column",
         "rkd_specification_section",
@@ -1359,6 +1391,7 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         "desig_document",
         "name",
         "rkd_documents_column",
+        "display_lu_lo_sheets",
         "quantity",
         "note",
         "rkd_planned_review_warning",
@@ -1389,13 +1422,6 @@ class UniversalRKDAdmin(admin.ModelAdmin):
                     obj.document_uploaded_file.url,
                 )
             )
-        if obj.approval_document:
-            parts.append(
-                format_html(
-                    '<a href="{}" target="_blank" rel="noopener noreferrer">Лист утверждения</a>',
-                    obj.approval_document.url,
-                )
-            )
         if obj.attestation_document:
             parts.append(
                 format_html(
@@ -1406,6 +1432,10 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         if not parts:
             return "—"
         return mark_safe("<br>".join(str(p) for p in parts))
+
+    @admin.display(description="ЛУ/ЛО")
+    def display_lu_lo_sheets(self, obj):
+        return _admin_lu_lo_sheets_column_html(obj)
 
     @admin.display(
         description="Оповещение о пересмотре",
@@ -1497,6 +1527,15 @@ class UniversalRKDAdmin(admin.ModelAdmin):
                 "fields": (
                     "approval_document",
                     "approval_source",
+                ),
+            },
+        ),
+        (
+            None,
+            {
+                "description": _rkd_docs_section_header("Лист ознакомления"),
+                "fields": (
+                    "acquaintance_document",
                 ),
             },
         ),
@@ -1648,6 +1687,14 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         html += _row(
             "Лист утверждения — исходник (DOCX)",
             getattr(obj, "approval_source", None),
+            with_sep=True,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+        html += _row(
+            "Лист ознакомления (PDF)",
+            getattr(obj, "acquaintance_document", None),
             with_sep=True,
             uploaded_by=last_editor,
             uploaded_at=changed_at,
@@ -1825,6 +1872,7 @@ class UniversalRKDAdmin(admin.ModelAdmin):
 
     _PDF_FILE_FIELDS = {
         "approval_document",
+        "acquaintance_document",
         "attestation_document",
     }
     _DOCX_FILE_FIELDS = {
@@ -4160,6 +4208,14 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         user = request.user
+        old_executor_id = None
+        if change:
+            old_executor_id = (
+                WorkAssignmentSubtask.objects
+                .filter(pk=obj.pk)
+                .values_list("executor_id", flat=True)
+                .first()
+            )
         if not change:
             if user.is_authenticated:
                 obj.author = user
@@ -4176,6 +4232,17 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
             )
 
         super().save_model(request, obj, form, change)
+
+        if obj.executor_id and obj.executor_id != old_executor_id and obj.executor_id != user.id:
+            from approvals.services import notify
+            from approvals.models import Notification
+            notify(
+                obj.executor,
+                "Вас назначили исполнителем подзадачи",
+                text=f"«{obj.task or obj}» (РЗ: {obj.work_assignment}).",
+                url=reverse("admin:blog_workassignmentsubtask_change", args=[obj.pk]),
+                kind=Notification.KIND_WORK,
+            )
 
 
 @admin.register(WorkAssignment)
@@ -4327,11 +4394,13 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         user = request.user
+        old_executor_id = None
 
         if change:
             try:
                 old = WorkAssignment.objects.get(pk=obj.pk)
                 old_status = old.control_status
+                old_executor_id = old.executor_id
                 cur = obj.version or "0"
                 try:
                     version_to = str(int(cur) + 1)
@@ -4373,6 +4442,17 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.wa_number = next_wa_number_for_post(obj.post, exclude_pk=obj.pk)
 
         super().save_model(request, obj, form, change)
+
+        if obj.executor_id and obj.executor_id != old_executor_id and obj.executor_id != user.id:
+            from approvals.services import notify
+            from approvals.models import Notification
+            notify(
+                obj.executor,
+                "Вас назначили исполнителем рабочего задания",
+                text=f"«{obj.name or obj.task or obj}» — срок: {obj.target_deadline:%d.%m.%Y}.",
+                url=reverse("admin:blog_workassignment_change", args=[obj.pk]),
+                kind=Notification.KIND_WORK,
+            )
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -4489,6 +4569,9 @@ class WorkAssignmentDeadlineChangeAdmin(admin.ModelAdmin):
 class ProcessAdmin(admin.ModelAdmin):
     list_display = ("name", "code")
     search_fields = ("name", "code")
+
+    def has_module_permission(self, request):
+        return False
 
 
 class RouteProcessInline(admin.TabularInline):
@@ -4745,6 +4828,13 @@ class IndependentDocumentAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(SharedRepository)
 class SharedRepositoryAdmin(admin.ModelAdmin):
+    actions = ["send_to_approval_action"]
+
+    @admin.action(description="Отправить на согласование")
+    def send_to_approval_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=independent&ids={ids}"
+        return redirect(url)
 
     list_display = [
         'display_document_title',
@@ -4755,6 +4845,7 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'display_date_of_change',
         'display_version',
         'display_uploaded_file',
+        'display_lu_lo_sheets',
         'display_document_purpose',
         'display_note',
         'display_related_documents',
@@ -4781,6 +4872,8 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'last_editor',
         'author',
         'display_related_qms_documents_list',
+        'approval_document',
+        'acquaintance_document',
     ]
 
     filter_horizontal = ['related_documents']
@@ -4805,6 +4898,8 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
                 'approval',
                 'signature_approval',
                 'date_approval',
+                'approval_document',
+                'acquaintance_document',
             )
         }),
         ('Ознакомление', {
@@ -4957,6 +5052,10 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         return "—"
 
     display_uploaded_file.short_description = 'Файл'
+
+    @admin.display(description="ЛУ/ЛО")
+    def display_lu_lo_sheets(self, obj):
+        return _admin_lu_lo_sheets_column_html(obj)
 
     def display_document_purpose(self, obj):
         """Отображение назначения документа"""
@@ -5331,6 +5430,14 @@ class QMSDocumentAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(QMSDocument)
 class QMSDocumentAdmin(admin.ModelAdmin):
+    actions = ["send_to_approval_action"]
+
+    @admin.action(description="Отправить на согласование")
+    def send_to_approval_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=qms&ids={ids}"
+        return redirect(url)
+
     list_display = [
         'display_document_title',
         'display_category',
@@ -5339,6 +5446,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'display_date_approval',
         'display_accept',
         'display_uploaded_file',
+        'display_lu_lo_sheets',
         'display_review_date',
         'display_review_status',
         'document_purpose',
@@ -5367,6 +5475,8 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'last_editor',
         'author',
         'display_related_shared_documents_list',
+        'approval_document',
+        'acquaintance_document',
     ]
 
     filter_horizontal = ['related_documents']
@@ -5387,6 +5497,8 @@ class QMSDocumentAdmin(admin.ModelAdmin):
                 'approval',
                 'approval_signature',
                 'date_approval',
+                'approval_document',
+                'acquaintance_document',
             )
         }),
         ('Ознакомление', {
@@ -5534,6 +5646,10 @@ class QMSDocumentAdmin(admin.ModelAdmin):
 
     display_uploaded_file.short_description = 'Файл'
 
+    @admin.display(description="ЛУ/ЛО")
+    def display_lu_lo_sheets(self, obj):
+        return _admin_lu_lo_sheets_column_html(obj)
+
     def display_review_date(self, obj):
         """Отображение даты планового пересмотра"""
         if obj.review_date:
@@ -5638,6 +5754,14 @@ class AdministrativeOrderAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(AdministrativeOrder)
 class AdministrativeOrderAdmin(admin.ModelAdmin):
+    actions = ["send_to_approval_action"]
+
+    @admin.action(description="Отправить на согласование")
+    def send_to_approval_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=order&ids={ids}"
+        return redirect(url)
+
     list_display = [
         'registration_number',
         'enterprise_display',
@@ -5647,7 +5771,8 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
         'scope_display',
         'status_display',
         'validity_date_warning',
-        'uploaded_file'
+        'uploaded_file',
+        'display_lu_lo_sheets',
     ]
 
     list_filter = [
@@ -5666,11 +5791,12 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
 
     readonly_fields = [
         'id',
-        #'registration_number',
         'author',
         'date_of_creation',
         'last_editor',
         'date_of_change',
+        'approval_document',
+        'acquaintance_document',
     ]
 
     inlines = [AdministrativeOrderAcceptSignatureInline]
@@ -5691,6 +5817,8 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
                 'approval',
                 'signature_approval',
                 'accept',
+                'approval_document',
+                'acquaintance_document',
             )
         }),
         ('Сроки', {
@@ -5848,6 +5976,10 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
         return "—"
 
     display_uploaded_file.short_description = 'Файл'
+
+    @admin.display(description="ЛУ/ЛО")
+    def display_lu_lo_sheets(self, obj):
+        return _admin_lu_lo_sheets_column_html(obj)
 
 class DocumentTemplateAcceptSignatureInline(admin.TabularInline):
     """Inline для множественных подписей ознакомления шаблонов"""

@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Лист утверждения — {{ rkd.desig_document }}</title>
+  <title>{{ sheet_title }} — {{ center_line }}</title>
   <style>
     @page {
       size: A4;
@@ -87,16 +87,14 @@
 
   <div class="company">ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ &quot;СИСТЕМА&quot;</div>
 
-  <h1>Лист утверждения</h1>
+  <h1>{{ sheet_title }}</h1>
 
-  <p class="desig-center">{{ rkd.desig_document|default:"—" }}</p>
+  <p class="desig-center">{{ center_line|default:"—" }}</p>
 
   <div class="doc-info">
-    {% if rkd.post %}
-    <p><strong>Разработка (модификация):</strong> {{ rkd.post }}</p>
-    {% endif %}
-    <p><strong>Обозначение документа:</strong> {{ rkd.desig_document|default:"—" }}</p>
-    <p><strong>Наименование:</strong> {{ rkd.name|default:"—" }}</p>
+    {% for label, value in doc_info_lines %}
+    <p><strong>{{ label }}:</strong> {{ value|default:"—" }}</p>
+    {% endfor %}
   </div>
 
   <table>
@@ -110,19 +108,19 @@
       </tr>
     </thead>
     <tbody>
-      {% for sig in signatures %}
+      {% for row in rows %}
       <tr>
-        <td class="num-col">{{ forloop.counter }}</td>
-        <td class="pos-col">{{ sig.role }}</td>
+        <td class="num-col">{{ row.number }}</td>
+        <td class="pos-col">{{ row.position }}</td>
         <td class="name-col">
-          {{ sig.fio }}
-          {% if sig.cert_issuer %}
-            <div class="cert-meta">УЦ: {{ sig.cert_issuer }}</div>
+          {{ row.fio }}
+          {% if row.cert_issuer %}
+            <div class="cert-meta">УЦ: {{ row.cert_issuer }}</div>
           {% endif %}
         </td>
-        <td class="date-col">{{ sig.date|default:"" }}</td>
+        <td class="date-col">{{ row.date|default:"" }}</td>
         <td class="sig-col">
-          {% if sig.cert_cn or sig.cert_issuer %}
+          {% if row.cert_cn or row.cert_issuer %}
             <span class="eds-badge">Подписано ЭЦП</span>
           {% else %}
             &nbsp;
@@ -131,7 +129,7 @@
       </tr>
       {% empty %}
       <tr class="empty-row">
-        <td colspan="5">Подписи не добавлены</td>
+        <td colspan="5">Записи не добавлены</td>
       </tr>
       {% endfor %}
     </tbody>

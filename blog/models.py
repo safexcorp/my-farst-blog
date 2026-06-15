@@ -2521,6 +2521,15 @@ class UniversalRKD(models.Model):
         verbose_name="Удостоверяющий лист: исходник (DOCX)",
         help_text="Допустимый формат: DOCX.",
     )
+    acquaintance_document = models.FileField(
+        upload_to="blog/universal_rkd/acquaintance/%Y/%m/",
+        max_length=500,
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(allowed_extensions=["pdf"])],
+        verbose_name="Лист ознакомления (PDF)",
+        help_text="Формируется автоматически при подписании шагов «Ознакомление».",
+    )
 
     checked_by = models.ForeignKey(
         User,
@@ -2752,6 +2761,9 @@ class UniversalRKDSignature(models.Model):
         null=True,
         verbose_name="Файл подписи",
     )
+    signed_at = models.DateField("Дата подписания", null=True, blank=True)
+    cert_cn = models.CharField("ФИО из сертификата ЭЦП", max_length=500, blank=True)
+    cert_issuer = models.CharField("Удостоверяющий центр (УЦ)", max_length=500, blank=True)
 
     class Meta:
         verbose_name = "Подпись документа"
@@ -2760,6 +2772,57 @@ class UniversalRKDSignature(models.Model):
 
     def __str__(self):
         return f"{self.get_role_display()} — {self.signed_by or '—'}"
+
+
+class UniversalRKDAcknowledgment(models.Model):
+    """Строка листа ознакомления по шагу маршрута с ЭЦП."""
+
+    rkd = models.ForeignKey(
+        UniversalRKD,
+        on_delete=models.CASCADE,
+        related_name="acknowledgments",
+        verbose_name="Документ РКД",
+    )
+    process = models.ForeignKey(
+        "approvals.ApprovalProcess",
+        on_delete=models.CASCADE,
+        related_name="acknowledgments",
+        verbose_name="Согласование",
+    )
+    task = models.OneToOneField(
+        "approvals.ApprovalTask",
+        on_delete=models.CASCADE,
+        related_name="acknowledgment",
+        verbose_name="Задача",
+    )
+    department = models.ForeignKey(
+        "approvals.Department",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="Отдел",
+    )
+    position = models.CharField("Должность", max_length=150, blank=True)
+    signed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rkd_acknowledgments",
+        verbose_name="Подписант",
+    )
+    signed_at = models.DateField("Дата", null=True, blank=True)
+    cert_cn = models.CharField("ФИО из сертификата ЭЦП", max_length=500, blank=True)
+    cert_issuer = models.CharField("Удостоверяющий центр (УЦ)", max_length=500, blank=True)
+    step_order = models.PositiveSmallIntegerField("Порядок в маршруте", default=0)
+
+    class Meta:
+        verbose_name = "Ознакомление (лист)"
+        verbose_name_plural = "Ознакомления (лист)"
+        ordering = ("step_order", "pk")
+
+    def __str__(self):
+        return f"{self.position or self.department or '—'} — {self.signed_by or '—'}"
 
 
 class Shipment(models.Model):

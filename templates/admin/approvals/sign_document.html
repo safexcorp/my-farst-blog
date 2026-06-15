@@ -1,0 +1,422 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrahead %}{{ block.super }}
+<script src="https://www.cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"
+        onerror="this.onerror=null;this.src='{% static 'approvals/js/cadesplugin_api.js' %}';"></script>
+<style>
+  .sign-wrap { max-width: 720px; }
+
+  .sign-doc-card {
+    border: 1px solid #79aec8;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    background: rgba(121,174,200,.07);
+  }
+  .sign-doc-card h3 { margin: 0 0 6px; font-size: 16px; font-weight: 700; }
+  .sign-doc-card p  { margin: 3px 0; font-size: 13px; color: var(--body-quiet-color, #aaa); }
+  .sign-doc-card .pill-recheck {
+    display: inline-block; margin-top: 6px;
+    background: #FB8C00; color: #fff;
+    border-radius: 12px; padding: 2px 10px; font-size: 11px; font-weight: 600;
+  }
+
+  .sign-status {
+    padding: 12px 16px; border-radius: 8px;
+    margin-bottom: 16px; font-size: 14px; display: none;
+  }
+  .sign-status.loading { background: rgba(33,150,243,.1);  color: #2196F3; display: block; }
+  .sign-status.error   { background: rgba(229,57,53,.1);   color: #E53935; display: block; }
+  .sign-status.success { background: rgba(76,175,80,.1);   color: #4CAF50; display: block; }
+
+  #cert-section { display: none; }
+  #cert-section h4 { margin: 0 0 10px; font-size: 14px; }
+
+  .cert-list { list-style: none; padding: 0; margin: 0 0 18px; }
+  .cert-item {
+    border: 1px solid var(--hairline-color, #444);
+    border-radius: 8px; padding: 10px 14px;
+    margin-bottom: 8px; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .cert-item:hover { border-color: #79aec8; }
+  .cert-item.selected { border-color: #79aec8; background: rgba(121,174,200,.09); }
+  .cert-item label { cursor: pointer; display: flex; align-items: flex-start; gap: 10px; margin: 0; }
+  .cert-item input[type=radio] { margin-top: 3px; accent-color: #79aec8; }
+  .cert-item .cert-cn   { font-weight: 700; font-size: 14px; }
+  .cert-item .cert-meta { font-size: 12px; color: var(--body-quiet-color, #aaa); margin-top: 2px; }
+
+  .sign-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .btn-sign {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 26px;
+    background: #4CAF50; color: #fff;
+    border: none; border-radius: 7px;
+    font-size: 15px; font-weight: 600; cursor: pointer;
+    transition: background .15s;
+  }
+  .btn-sign:hover:not(:disabled) { background: #388E3C; }
+  .btn-sign:disabled { background: #aaa; cursor: not-allowed; }
+  .btn-sign .spinner {
+    display: none; width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
+    border-radius: 50%; animation: spin .7s linear infinite;
+  }
+  .btn-sign.busy .spinner { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .btn-cancel { color: #79aec8; text-decoration: none; font-size: 14px; }
+  .btn-cancel:hover { text-decoration: underline; }
+
+  .sign-hint {
+    margin-top: 18px; padding: 10px 14px;
+    border: 1px dashed var(--hairline-color, #555);
+    border-radius: 8px; font-size: 12px;
+    color: var(--body-quiet-color, #aaa);
+  }
+  .sign-hint a { color: #79aec8; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main" class="sign-wrap">
+
+  <div class="sign-doc-card">
+    <p style="font-size:12px;font-weight:600;margin:0 0 6px;">{{ doc_type_label }}</p>
+    <h3>{{ doc_title }}</h3>
+    {% if doc_subtitle %}<p>{{ doc_subtitle }}</p>{% endif %}
+    <p>Отдел: <strong>{{ task.department }}</strong></p>
+    {% if is_ack %}<p>Тип шага: <strong>Ознакомление</strong></p>{% endif %}
+    <p>Маршрут: {{ task.process.route }}</p>
+    <p>Файл для подписи: <strong id="sign-filename">{{ sign_filename }}</strong></p>
+    <p style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
+      {% if doc_file_url %}
+      <a href="{{ doc_file_url }}" target="_blank"
+         style="color:#5c6bc0;font-weight:600;font-size:13px;text-decoration:none;">📄 Открыть документ</a>
+      {% endif %}
+      {% if doc_admin_url %}
+      <a href="{{ doc_admin_url }}" target="_blank"
+         style="color:#79aec8;font-weight:600;font-size:13px;text-decoration:none;">🗂 Карточка документа</a>
+      {% endif %}
+    </p>
+    {% if task.is_recheck %}<span class="pill-recheck">⟳ Повторная проверка</span>{% endif %}
+  </div>
+
+  <div id="sign-status" class="sign-status loading">⏳ Загружаю список сертификатов…</div>
+
+  <div id="cert-section">
+    <h4>Выберите сертификат ЭЦП:</h4>
+    <ul id="cert-list" class="cert-list"></ul>
+
+    <div class="sign-actions">
+      <button id="sign-btn" class="btn-sign" disabled>
+        <span class="spinner"></span>
+        {% if is_ack %}✍ Подтвердить ознакомление (ЭЦП){% else %}✍ Подписать документ{% endif %}
+      </button>
+      <a href="{{ back_url }}" class="btn-cancel">Отмена</a>
+      <a href="{{ reject_url }}" class="btn-cancel" style="color:#E53935;">Отклонить с замечанием</a>
+    </div>
+  </div>
+
+  <div class="sign-hint">
+    <strong>Как это работает:</strong> КриптоПро подпишет <strong>основной документ (итоговый)</strong>
+    из карточки РКД вашим сертификатом (CAdES-BES, ГОСТ Р 34.10-2012).
+    {% if is_ack %}
+    Подпись сохранится в системе и попадёт в <strong>Лист ознакомления</strong>.
+    {% else %}
+    Подпись сохранится в системе и попадёт в <strong>Лист утверждения</strong>.
+    {% endif %}<br><br>
+    Если браузер запросит PIN-код — введите PIN вашего токена/ключевого контейнера.<br><br>
+    <strong>Если плагин не видит сайт:</strong> в расширении КриптоПро →
+    «Настроить доверенные узлы» → добавьте полный адрес: http://188.120.244.46/admin/ .<br><br>
+    Нет расширения?
+    <a href="https://www.cryptopro.ru/products/cades/plugin" target="_blank">Загрузить КриптоПро Browser Plugin</a>.
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var CONTENT_URL = "{{ content_url }}";
+  var SUBMIT_URL  = "{{ submit_url }}";
+  var CSRF_TOKEN  = "{{ csrf_token }}";
+  var BACK_URL    = "{{ back_url }}";
+
+  var statusEl   = document.getElementById("sign-status");
+  var certSection = document.getElementById("cert-section");
+  var certListEl = document.getElementById("cert-list");
+  var signBtn    = document.getElementById("sign-btn");
+
+  var selectedCertIndex = 0;
+  var documentB64  = null;
+  var signTimeoutId  = null;
+
+  function setStatus(html, type) {
+    statusEl.style.display = "";
+    statusEl.className = "sign-status " + type;
+    statusEl.innerHTML = html;
+  }
+
+  function extractCN(subjectName) {
+    var m = subjectName.match(/(?:^|,\s*)CN=([^,]+)/i);
+    return m ? m[1].trim() : subjectName;
+  }
+
+  fetch(CONTENT_URL, { credentials: "same-origin" })
+    .then(function (r) {
+      return r.json().then(function (data) {
+        if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+        return data;
+      });
+    })
+    .then(function (data) {
+      documentB64 = data.content_b64;
+      if (data.filename) {
+        var el = document.getElementById("sign-filename");
+        if (el) el.textContent = data.filename;
+      }
+      initPlugin();
+    })
+    .catch(function (e) {
+      setStatus("❌ Не удалось загрузить основной документ: " + e.message, "error");
+    });
+
+  window.cadesplugin_untrusted_sites_disabled_callback = function (msg) {
+    setStatus(
+      "⚠️ <strong>Сайт не в списке доверенных узлов КриптоПро.</strong><br>" +
+      "Откройте расширение → «Настроить доверенные узлы» → добавьте " +
+      "<code>" + window.location.origin + "</code> (с портом!) и перезагрузите страницу.<br>" +
+      "<small>" + (msg || "") + "</small>",
+      "error"
+    );
+  };
+
+  function initPlugin(attempt) {
+    attempt = attempt || 0;
+    if (typeof cadesplugin === "undefined") {
+      if (attempt < 10) {
+        setTimeout(function () { initPlugin(attempt + 1); }, 300);
+        return;
+      }
+      setStatus(
+        "⚠️ <strong>Не загружен cadesplugin_api.js.</strong><br>" +
+        "Обновите страницу (Ctrl+F5). Проверьте интернет и что расширение КриптоПро включено.",
+        "error"
+      );
+      return;
+    }
+
+    cadesplugin.then(
+      function () { loadCertificates(); },
+      function (e) {
+        var err = (e && e.message) ? e.message : String(e || "неизвестная ошибка");
+        var hint = "";
+        if (/доверенн|untrusted|0xC2110F00/i.test(err)) {
+          hint = "<br><br>Добавьте <code>" + window.location.origin +
+                 "</code> (с портом!) в «Настроить доверенные узлы» расширения КриптоПро.";
+        } else {
+          hint = "<br><br>Убедитесь, что расширение включено: " +
+                 "<a href=\"https://www.cryptopro.ru/products/cades/plugin\" target=\"_blank\">cryptopro.ru</a>";
+        }
+        setStatus("❌ Ошибка инициализации КриптоПро: " + err + hint, "error");
+      }
+    );
+  }
+
+  function loadCertificates() {
+    cadesplugin.async_spawn(function *() {
+      try {
+        var oStore = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store");
+        yield oStore.Open(
+          cadesplugin.CAPICOM_CURRENT_USER_STORE,
+          cadesplugin.CAPICOM_MY_STORE,
+          cadesplugin.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED
+        );
+
+        var oCerts = yield oStore.Certificates;
+        var count  = yield oCerts.Count;
+
+        if (count === 0) {
+          setStatus(
+            "Сертификаты с закрытым ключом не найдены.<br>" +
+            "Убедитесь, что USB-токен подключён или ключевой контейнер установлен.",
+            "error"
+          );
+          yield oStore.Close();
+          return;
+        }
+
+        var items = [];
+        for (var i = 1; i <= count; i++) {
+          var cert        = yield oCerts.Item(i);
+          var subjectName = yield cert.SubjectName;
+          var validTo     = yield cert.ValidToDate;
+          items.push({ subjectName: subjectName, validTo: validTo, index: i });
+        }
+        yield oStore.Close();
+
+        statusEl.style.display = "none";
+        certSection.style.display = "block";
+        renderCerts(items);
+
+      } catch (e) {
+        setStatus("Ошибка при загрузке сертификатов: " + (e.message || e), "error");
+      }
+    });
+  }
+
+  function renderCerts(items) {
+    certListEl.innerHTML = "";
+    items.forEach(function (item) {
+      var cn    = extractCN(item.subjectName);
+      var until = new Date(item.validTo).toLocaleDateString("ru-RU");
+      var li    = document.createElement("li");
+      li.className = "cert-item";
+      li.innerHTML =
+        "<label>" +
+        "<input type=\"radio\" name=\"cert\">" +
+        "<div>" +
+        "<div class=\"cert-cn\">" + cn + "</div>" +
+        "<div class=\"cert-meta\">Действителен до: " + until + "</div>" +
+        "</div></label>";
+
+      li.addEventListener("click", function () {
+        document.querySelectorAll(".cert-item").forEach(function (el) {
+          el.classList.remove("selected");
+        });
+        li.classList.add("selected");
+        li.querySelector("input[type=radio]").checked = true;
+        selectedCertIndex = item.index;
+        signBtn.disabled = false;
+      });
+
+      certListEl.appendChild(li);
+    });
+
+    if (items.length === 1) {
+      certListEl.querySelector(".cert-item").click();
+    }
+  }
+
+  function clearSignTimeout() {
+    if (signTimeoutId) {
+      clearTimeout(signTimeoutId);
+      signTimeoutId = null;
+    }
+  }
+
+  function formatPluginError(err) {
+    try {
+      return cadesplugin.getLastError(err) || (err && err.message) || String(err);
+    } catch (e) {
+      return (err && err.message) || String(err);
+    }
+  }
+
+  function onSignComplete(err, sig) {
+    clearSignTimeout();
+    signBtn.classList.remove("busy");
+    if (err) {
+      setStatus("❌ Ошибка подписания: " + err, "error");
+      signBtn.disabled = false;
+      return;
+    }
+    submitSignature(sig);
+  }
+
+  signBtn.addEventListener("click", function () {
+    if (!selectedCertIndex || !documentB64) {
+      setStatus("⚠️ Выберите сертификат и дождитесь загрузки данных документа.", "error");
+      return;
+    }
+    signBtn.disabled = true;
+    signBtn.classList.add("busy");
+    setStatus(
+      "⏳ Подписываю документ…<br>" +
+      "Если появился запрос PIN — введите PIN токена (окно может быть за браузером).",
+      "loading"
+    );
+
+    clearSignTimeout();
+    signTimeoutId = setTimeout(function () {
+      signBtn.classList.remove("busy");
+      signBtn.disabled = false;
+      setStatus(
+        "⚠️ Подписание заняло слишком долго.<br>" +
+        "Проверьте, не ждёт ли система PIN-код (окно может быть за браузером). " +
+        "Попробуйте ещё раз.",
+        "error"
+      );
+    }, 60000);
+
+    var certIndex  = selectedCertIndex;
+    var contentB64 = documentB64;
+
+    cadesplugin.async_spawn(function *() {
+      var oStore = null;
+      try {
+        oStore = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store");
+        yield oStore.Open(
+          cadesplugin.CAPICOM_CURRENT_USER_STORE,
+          cadesplugin.CAPICOM_MY_STORE,
+          cadesplugin.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED
+        );
+
+        var oCerts = yield oStore.Certificates;
+        var oCert  = yield oCerts.Item(certIndex);
+
+        var oSigner = yield cadesplugin.CreateObjectAsync("CAdESCOM.CPSigner");
+        yield oSigner.propset_Certificate(oCert);
+        yield oSigner.propset_CheckCertificate(false);
+
+        var oData = yield cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+        yield oData.propset_ContentEncoding(cadesplugin.CADESCOM_BASE64_TO_BINARY);
+        yield oData.propset_Content(contentB64);
+
+        var sSig = yield oData.SignCades(oSigner, cadesplugin.CADESCOM_CADES_BES, true);
+        yield oStore.Close();
+        onSignComplete(null, sSig);
+
+      } catch (e) {
+        if (oStore) {
+          try { yield oStore.Close(); } catch (ignore) {}
+        }
+        onSignComplete(formatPluginError(e), null);
+      }
+    });
+  });
+
+  function submitSignature(sigB64) {
+    clearSignTimeout();
+    signBtn.classList.add("busy");
+    setStatus("⏳ Подпись создана, отправляю на сервер…", "loading");
+
+    var fd = new FormData();
+    fd.append("signature", sigB64);
+    fd.append("csrfmiddlewaretoken", CSRF_TOKEN);
+
+    fetch(SUBMIT_URL, { method: "POST", body: fd, credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        signBtn.classList.remove("busy");
+        if (data.ok) {
+          setStatus("✅ " + (data.message || "Документ успешно подписан!"), "success");
+          setTimeout(function () { window.location.href = BACK_URL; }, 2200);
+        } else {
+          setStatus("❌ " + (data.error || "Неизвестная ошибка сервера."), "error");
+          signBtn.disabled = false;
+        }
+      })
+      .catch(function (e) {
+        signBtn.classList.remove("busy");
+        setStatus("❌ Ошибка сети: " + e.message, "error");
+        signBtn.disabled = false;
+      });
+  }
+
+})();
+</script>
+{% endblock %}
