@@ -50,7 +50,8 @@ from enterprise_asset_management.models import (
 )
 from shared_repository.models import (SharedRepository, IndependentDocumentAcceptSignature,
 KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature, AdministrativeOrder,
-AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature, PSIDocument, GeneratedDocument, DocumentHistory)
+AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature, PSIDocument,
+GeneratedDocument, DocumentHistory)
 
 from .admin_forms import RescheduleAdminForm
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
@@ -101,6 +102,11 @@ from .models import (
     ShipmentAdditionalFile,
 )
 from .services import WorkAssignmentService
+
+from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.models import User
+from shared_repository.models import EmployeeProfile
 
 
 def _inject_rkd_category_json(extra_context):
@@ -4849,6 +4855,7 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'display_document_purpose',
         'display_note',
         'display_related_documents',
+        'display_related_sharedrepository',
     ]
 
     list_filter = [
@@ -4871,12 +4878,14 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'date_of_change',
         'last_editor',
         'author',
+        'display_file_list',
         'display_related_qms_documents_list',
+        'display_related_shared_documents_list',
         'approval_document',
         'acquaintance_document',
     ]
 
-    filter_horizontal = ['related_documents']
+    filter_horizontal = ['related_documents','related_sharedrepository']
 
     inlines = [IndependentDocumentAcceptSignatureInline]
 
@@ -4908,8 +4917,8 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
                 #'signature_accept',
             )
         }),
-        ('Связанные документы СМК', {
-            'fields': ('related_documents',),
+        ('Связанные документы', {
+            'fields': ('related_documents','related_sharedrepository'),
         }),
         ('Пользователи системы', {
             'fields': (
@@ -4923,6 +4932,9 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
                 'date_of_creation',
                 'date_of_change',
             )
+        }),
+        ('Файлы документа', {
+            'fields': ('display_file_list',),
         }),
     )
 
@@ -4965,6 +4977,46 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         return format_html(html)
 
     display_related_qms_documents_list.short_description = 'Связанные документы СМК'
+
+    def display_related_sharedrepository(self, obj):
+        """Отображение связанных отдельных документов в списке"""
+        docs = obj.related_documents.all()
+        if docs.exists():
+            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
+        return "—"
+
+    display_related_sharedrepository.short_description = 'Связанные отдельные документы'
+
+    def display_related_shared_documents(self, obj):
+        """Отображение количества связанных отдельных документов"""
+        count = obj.related_shared_documents.count()
+        if count:
+            return format_html(
+                '<span style="color: #79aec8;">📄 Отдельных документов: {}</span>',
+                count
+            )
+        return "—"
+
+    display_related_shared_documents.short_description = 'Связанные отдельные документы'
+
+    def display_related_shared_documents_list(self, obj):
+        """Список связанных отдельных документов для детального просмотра"""
+        docs = obj.related_shared_documents.all()
+        if not docs.exists():
+            return "Нет связанных отдельных документов"
+
+        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px;">'
+        html += '<h4>📄 СВЯЗАННЫЕ ОТДЕЛЬНЫХ ДОКУМЕНТЫ </h4>'
+        html += '<ul style="margin-top: 5px;">'
+
+        for doc in docs:
+            url = reverse('admin:shareddocument_shareddocument_change', args=[doc.pk])
+            html += f'<li style="margin-bottom: 5px;">🔗 <a href="{url}" target="_blank">{doc.document_title}</a></li>'
+
+        html += '</ul></div>'
+        return format_html(html)
+
+    display_related_qms_documents_list.short_description = 'Связанные отдельные документы'
 
     def display_id(self, obj):
         return obj.id
@@ -5141,7 +5193,7 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
 
         return form
 
-    def display_files_list(self, obj):
+    def display_file_list(self, obj):
         """Список всех файлов документа (аналогично QMSDocument)"""
         html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0;">'
 
@@ -5178,7 +5230,7 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         html += '</div>'
         return format_html(html)
 
-    display_files_list.short_description = 'Файлы документа'
+    display_file_list.short_description = 'Файлы документа'
 
 #@admin.register(IndependentDocumentAcceptSignature)
 #class IndependentDocumentAcceptSignatureAdmin(admin.ModelAdmin):
@@ -5270,6 +5322,7 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
                 'version',
                 'date_of_creation',
                 'date_of_change',
+                'display_files_list',
             )
         }),
     )
@@ -5451,6 +5504,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'display_review_status',
         'document_purpose',
         'display_related_documents',
+        'display_related_qms_documents',
         'remark_note'
     ]
 
@@ -5475,11 +5529,12 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'last_editor',
         'author',
         'display_related_shared_documents_list',
+        'display_related_qms_documents_list'
         'approval_document',
         'acquaintance_document',
     ]
 
-    filter_horizontal = ['related_documents']
+    filter_horizontal = ['related_documents','related_qms_documents']
 
     inlines = [QMSDocumentAcceptSignatureInline]
 
@@ -5513,7 +5568,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
             )
         }),
         ('Связанные отдельные документы', {
-            'fields': ('related_documents',),
+            'fields': ('related_documents','related_qms_documents'),
         }),
         ('Дата планового пересмотра', {
             'fields': (
@@ -5581,6 +5636,46 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         return format_html(html)
 
     display_related_shared_documents_list.short_description = 'Связанные отдельные документы'
+
+    def display_related_qms_documents(self, obj):
+        """Отображение связанных документов СМК в списке"""
+        docs = obj.qms_documents.all()
+        if docs.exists():
+            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
+        return "—"
+
+    display_related_qms_documents.short_description = 'Связанные документы СМК'
+
+    def display_related_qms_documents(self, obj):
+        """Отображение количества связанных документов СМК"""
+        count = obj.related_qms_documents.count()
+        if count:
+            return format_html(
+                '<span style="color: #79aec8;">📄 Документов СМК: {}</span>',
+                count
+            )
+        return "—"
+
+    display_related_qms_documents.short_description = 'Связанные документы СМК'
+
+    def display_related_qms_documents_list(self, obj):
+        """Список связанных документов СМК для детального просмотра"""
+        docs = obj.related_qms_documents.all()
+        if not docs.exists():
+            return "Нет связанных документов СМК"
+
+        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px;">'
+        html += '<h4>📄 СВЯЗАННЫЕ ДОКУМЕНТЫ СМК</h4>'
+        html += '<ul style="margin-top: 5px;">'
+
+        for doc in docs:
+            url = reverse('admin:qmsdocument_qmsdocument_change', args=[doc.pk])
+            html += f'<li style="margin-bottom: 5px;">🔗 <a href="{url}" target="_blank">{doc.document_title}</a></li>'
+
+        html += '</ul></div>'
+        return format_html(html)
+
+    display_related_qms_documents_list.short_description = 'Связанные документы СМК'
 
     def display_category(self, obj):
         """Отображение категории"""
@@ -6468,3 +6563,74 @@ class DocumentHistoryAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         """Запрещаем изменение истории"""
         return False
+
+#Модель пользовательского разделе с доп информацией
+class EmployeeProfileInline(admin.StackedInline):
+    model = EmployeeProfile
+    fk_name = 'user'
+    can_delete = False
+    verbose_name_plural = 'Дополнительная информация'
+    fieldsets = (
+        ('Личные данные', {
+            'fields': ('patronymic', 'inn', 'phone')
+        }),
+        ('Рабочие данные', {
+            'fields': ('department', 'position', 'supervisor', 'roles_responsibilities')
+        }),
+    )
+
+admin.site.unregister(User)
+
+@admin.register(User)
+class CustomUserAdmin(BaseUserAdmin):
+    inlines = [EmployeeProfileInline]
+
+    list_display = (
+        'username',
+        'get_full_name',
+        'get_patronymic',
+        'get_inn',
+        'get_phone',
+        'get_department',
+        'get_position',
+        'get_supervisor',
+        'is_active',
+    )
+
+    def get_patronymic(self, obj):
+        return obj.profile.patronymic if hasattr(obj, 'profile') else ''
+
+    get_patronymic.short_description = 'Отчество'
+    get_patronymic.admin_order_field = 'profile__patronymic'
+
+    def get_inn(self, obj):
+        return obj.profile.inn if hasattr(obj, 'profile') else ''
+
+    get_inn.short_description = 'ИНН'
+    get_inn.admin_order_field = 'profile__inn'
+
+    def get_phone(self, obj):
+        return obj.profile.phone if hasattr(obj, 'profile') else ''
+
+    get_phone.short_description = 'Телефон'
+    get_phone.admin_order_field = 'profile__phone'
+
+    def get_department(self, obj):
+        return obj.profile.department if hasattr(obj, 'profile') else ''
+
+    get_department.short_description = 'Отдел'
+    get_department.admin_order_field = 'profile__department'
+
+    def get_position(self, obj):
+        return obj.profile.position if hasattr(obj, 'profile') else ''
+
+    get_position.short_description = 'Должность'
+    get_position.admin_order_field = 'profile__position'
+
+    def get_supervisor(self, obj):
+        if hasattr(obj, 'profile') and obj.profile.supervisor:
+            return obj.profile.supervisor.get_full_name() or obj.profile.supervisor.username
+        return ''
+
+    get_supervisor.short_description = 'Непосредственное подчинение'
+    get_supervisor.admin_order_field = 'profile__supervisor'

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
+from django.core.validators import RegexValidator
 
 User = get_user_model()
 
@@ -174,9 +175,16 @@ class SharedRepository(models.Model):
 
     related_documents = models.ManyToManyField(
         'QMSDocument',
-        verbose_name='Связанные документы СМК',
+        verbose_name='документы СМК',
         blank=True,
         help_text='Выбор из списка документов СМК. Можно выбрать несколько'
+    )
+
+    related_sharedrepository = models.ManyToManyField(
+        'SharedRepository',
+        verbose_name='отдельные документы',
+        blank=True,
+        help_text='Выбор из списка отдельных документов. Можно выбрать несколько'
     )
 
     # 17. Примечание документа
@@ -674,14 +682,14 @@ class QMSDocument(models.Model):
     # 18. Связанные документы
     related_documents = models.ManyToManyField(
         'SharedRepository',
-        verbose_name='Доступные отдельные документы',
+        verbose_name='отдельные документы',
         blank=True,
         help_text='Выбор из списка отдельных документов. Можно выбрать несколько'
     )
 
     related_qms_documents = models.ManyToManyField(
         'QMSDocument',
-        verbose_name='Выбранные документы СМК',
+        verbose_name='документы СМК',
         blank=True,
         help_text='Выбор из списка документов СМК. Можно выбрать несколько'
     )
@@ -1291,3 +1299,40 @@ class DocumentHistory(models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="Пользователь")
     action = models.CharField("Действие", max_length=255)
     timestamp = models.DateTimeField(auto_now_add=True)
+
+
+# Модель для расширения стандартного пользователя Django
+
+class EmployeeProfile(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='profile',
+        verbose_name='Пользователь'
+    )
+    patronymic = models.CharField('Отчество', max_length=100, blank=True)
+    inn = models.CharField(
+        max_length=12,
+        blank=True,
+        null=True,
+        verbose_name='ИНН',
+    )
+    phone = models.CharField('Телефон', max_length=20, blank=True)
+    department = models.CharField('Отдел', max_length=100, blank=True)
+    position = models.CharField('Должность', max_length=100, blank=True)
+    supervisor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='subordinates',
+        verbose_name='Непосредственное подчинение'
+    )
+    roles_responsibilities = models.TextField('Роли / обязанности', blank=True)
+
+    class Meta:
+        verbose_name = 'Профиль сотрудника'
+        verbose_name_plural = 'Профили сотрудников'
+
+    def __str__(self):
+        return f"Профиль: {self.user.get_full_name() or self.user.username}"
