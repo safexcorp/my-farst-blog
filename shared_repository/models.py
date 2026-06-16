@@ -147,6 +147,23 @@ class SharedRepository(models.Model):
         help_text='Подгружаем только один файл'
     )
 
+    approval_document = models.FileField(
+        upload_to='shared_repository/approval/%Y/%m/',
+        verbose_name='Лист утверждения (PDF)',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+        help_text='Формируется автоматически при согласовании по маршруту.',
+    )
+    acquaintance_document = models.FileField(
+        upload_to='shared_repository/acquaintance/%Y/%m/',
+        verbose_name='Лист ознакомления (PDF)',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+        help_text='Формируется автоматически при ознакомлении по маршруту.',
+    )
+
     # 16. Назначение документа
     document_purpose = models.TextField(
         max_length=5000,
@@ -628,6 +645,23 @@ class QMSDocument(models.Model):
         help_text='Основной файл документа (только один файл)'
     )
 
+    approval_document = models.FileField(
+        upload_to='qms_documents/approval/%Y/%m/',
+        verbose_name='Лист утверждения (PDF)',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+        help_text='Формируется автоматически при согласовании по маршруту.',
+    )
+    acquaintance_document = models.FileField(
+        upload_to='qms_documents/acquaintance/%Y/%m/',
+        verbose_name='Лист ознакомления (PDF)',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+        help_text='Формируется автоматически при ознакомлении по маршруту.',
+    )
+
     # 16. Назначение документа
     document_purpose = models.TextField(
         max_length=5000,
@@ -850,6 +884,22 @@ class AdministrativeOrder(models.Model):
         verbose_name='Загружаемый файл',
         validators=[validate_file_size],
         help_text='Основной файл приказа (только один файл)'
+    )
+    approval_document = models.FileField(
+        upload_to='administrative_orders/approval/%Y/%m/',
+        verbose_name='Лист утверждения (PDF)',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+        help_text='Формируется автоматически при согласовании по маршруту.',
+    )
+    acquaintance_document = models.FileField(
+        upload_to='administrative_orders/acquaintance/%Y/%m/',
+        verbose_name='Лист ознакомления (PDF)',
+        blank=True,
+        null=True,
+        validators=[validate_file_size],
+        help_text='Формируется автоматически при ознакомлении по маршруту.',
     )
     app_uploaded_file = models.FileField(
         upload_to='administrative_orders/applications/%Y/%m/%d/',

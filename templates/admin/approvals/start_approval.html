@@ -1,0 +1,41 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main" style="max-width:750px;">
+
+  <div style="border:1px solid var(--hairline-color,#444);border-radius:10px;
+              padding:16px 20px;margin-bottom:20px;">
+    <div style="font-size:13px;font-weight:600;margin-bottom:10px;opacity:.75;">
+      {{ doc_type_label }} — документы для отправки на согласование:
+    </div>
+    <ul style="margin:0;padding-left:18px;">
+      {% for doc in documents %}
+      <li style="margin-bottom:4px;">
+        <strong>{{ doc }}</strong>
+      </li>
+      {% empty %}
+      <li style="color:#E53935;">Документы не выбраны.</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <p>Выберите маршрут согласования — документ пройдёт по всем его шагам по порядку.</p>
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="doc_type" value="{{ doc_type }}">
+    <input type="hidden" name="ids" value="{{ ids }}">
+    <table>{{ form.as_table }}</table>
+    <div style="display:flex;gap:10px;margin-top:16px;">
+      <input type="submit" value="Запустить согласование" class="default"
+             style="padding:10px 22px;font-size:14px;">
+      <a href="{% url 'admin:approvals_approvalprocess_changelist' %}"
+         style="padding:10px 22px;font-size:14px;border-radius:4px;
+                border:1px solid #79aec8;color:#79aec8;text-decoration:none;">
+        Отмена
+      </a>
+    </div>
+  </form>
+
+</div>
+{% endblock %}

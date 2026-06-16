@@ -179,5 +179,21 @@
       var li = link.closest("li");
       if (li) li.remove();
     });
+
+    // Автозаполнение даты фиксации при смене статуса
+    document.addEventListener("DOMContentLoaded", function () {
+      var statusField = document.getElementById("id_control_status");
+      var dateField   = document.getElementById("id_control_date");
+      if (!statusField || !dateField) return;
+
+      statusField.addEventListener("change", function () {
+        if (!statusField.value) return;
+        var today = new Date();
+        var yyyy  = today.getFullYear();
+        var mm    = String(today.getMonth() + 1).padStart(2, "0");
+        var dd    = String(today.getDate()).padStart(2, "0");
+        dateField.value = dd + "." + mm + "." + yyyy;
+      });
+    });
   </script>
 {% endblock %}

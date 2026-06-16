@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'crm',
     'shared_repository',
     'enterprise_asset_management',
+    'approvals',
 ]
 
 MIDDLEWARE = [
@@ -65,6 +66,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'approvals.context_processors.cabinet_badge',
             ],
         },
     },

@@ -38,6 +38,8 @@ from crm.forms import TicketCommentForm, SupportTicketForm
 from enterprise_asset_management.models import (
     WorkEquipment,
     WorkEquipmentFile,
+    WorkEquipmentRepair,
+    WorkEquipmentRepairFile,
     TransportVehicle,
     ProductionArea,
     ProductionAreaFile,
@@ -129,6 +131,30 @@ def _admin_warning_triangle_html(*, title: str, color: str = "#f0ad4e") -> str:
     )
 
 
+def _admin_lu_lo_sheets_column_html(obj) -> str:
+    """Ссылки на сгенерированные листы утверждения и ознакомления."""
+    parts = []
+    approval = getattr(obj, "approval_document", None)
+    if approval:
+        parts.append(
+            format_html(
+                '<a href="{}" target="_blank" rel="noopener noreferrer">Лист утверждения</a>',
+                approval.url,
+            )
+        )
+    acquaintance = getattr(obj, "acquaintance_document", None)
+    if acquaintance:
+        parts.append(
+            format_html(
+                '<a href="{}" target="_blank" rel="noopener noreferrer">Лист ознакомления</a>',
+                acquaintance.url,
+            )
+        )
+    if not parts:
+        return "—"
+    return mark_safe("<br>".join(str(p) for p in parts))
+
+
 def _universal_rkd_planned_review_show_warning(validity_date, *, days: int) -> bool:
     if not validity_date:
         return False
@@ -201,6 +227,10 @@ def _build_version_diff_block(*, old_obj, new_obj, model_cls, skip_fields,
         if str(old_val) != str(new_val):
             old_disp = old_val if old_val not in (None, "") else "—"
             new_disp = new_val if new_val not in (None, "") else "—"
+            if field.choices:
+                choices_map = dict(field.choices)
+                old_disp = choices_map.get(old_val, old_disp)
+                new_disp = choices_map.get(new_val, new_disp)
             diff_parts.append(f"- {field.verbose_name}: «{old_disp}» → «{new_disp}»")
 
     if not diff_parts:
@@ -230,6 +260,29 @@ def _render_version_diff(text: str) -> str:
         escaped,
     )
     return escaped.replace("\n", "<br>")
+
+
+_WA_STATUS_CIRCLE = {
+    'in_progress': ('#2196F3', None,      'В работе'),
+    'on_time':     ('#4CAF50', None,      'Выполнено в срок'),
+    'rescheduled': ('#4CAF50', '#FF9800', 'Выполнено с переносом сроков'),
+    'partial':     ('#9C27B0', None,      'Выполнено частично'),
+    'not_done':    ('#9E9E9E', None,      'Не выполнено (Отменено)'),
+}
+
+
+def _render_status_circle(status):
+    if not status:
+        return "—"
+    color1, color2, label = _WA_STATUS_CIRCLE.get(status, ('#cccccc', None, status))
+    bg = f"conic-gradient({color1} 50%, {color2} 50%)" if color2 else color1
+    return format_html(
+        '<span style="display:inline-flex;align-items:center;gap:6px;">'
+        '<span style="width:10px;height:10px;border-radius:50%;'
+        'background:{};flex-shrink:0;display:inline-block;"></span>'
+        '{}</span>',
+        bg, label,
+    )
 
 
 class RequiredFileGenericFormSet(BaseGenericInlineFormSet):
@@ -956,17 +1009,17 @@ class PostAdmin(admin.ModelAdmin):
         UniversalRKDInline,
     ]
 
-    @admin.display(description="Общее наименование группы изделий (продуктов)")
+    @admin.display(description="Наименование группы разработок")
     def group_name_display(self, obj):
         value = (obj.product_group.name if obj and obj.product_group_id else "") or ""
         return format_html('<span id="pg_val_name">{}</span>', value or "—")
 
-    @admin.display(description="Общее обозначение группы изделий (продуктов)")
+    @admin.display(description="Обозначение группы разработок")
     def group_designation_display(self, obj):
         value = (obj.product_group.designation if obj and obj.product_group_id else "") or ""
         return format_html('<span id="pg_val_designation">{}</span>', value or "—")
 
-    @admin.display(description="Основное назначение изделия (продукта)")
+    @admin.display(description="Основное назначение группы разработок")
     def group_main_purpose_display(self, obj):
         value = (obj.product_group.main_purpose if obj and obj.product_group_id else "") or ""
         return format_html('<span id="pg_val_main_purpose">{}</span>', value or "—")
@@ -1073,7 +1126,7 @@ class PostAdmin(admin.ModelAdmin):
         qs = super().get_queryset(request)
         return qs.select_related("product_group")
 
-    @admin.display(description="Общая группа разработок", ordering="product_group__name")
+    @admin.display(description="Группа разработок", ordering="product_group__name")
     def product_group_link(self, obj):
         if not obj or not obj.product_group_id:
             return "—"
@@ -1317,7 +1370,7 @@ def _rkd_docs_section_header(title: str):
 class UniversalRKDSignatureInline(admin.TabularInline):
     model = UniversalRKDSignature
     extra = 0
-    fields = ("role", "signed_by", "signature_file")
+    fields = ("role", "signed_by", "signature_file", "signed_at")
     autocomplete_fields = ("signed_by",)
     verbose_name = "Подпись"
     verbose_name_plural = "Подписание документа"
@@ -1328,6 +1381,14 @@ class UniversalRKDAdmin(admin.ModelAdmin):
     change_form_template = "admin/blog/universal_rkd_category_change_form.html"
     change_list_template = "admin/blog/universalrkd/change_list.html"
     form = UniversalRKDForm
+    actions = ["send_to_approval_action"]
+
+    @admin.action(description="Отправить на согласование")
+    def send_to_approval_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=rkd&ids={ids}"
+        return redirect(url)
+
     list_display = (
         "rkd_post_column",
         "rkd_specification_section",
@@ -1336,6 +1397,7 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         "desig_document",
         "name",
         "rkd_documents_column",
+        "display_lu_lo_sheets",
         "quantity",
         "note",
         "rkd_planned_review_warning",
@@ -1366,13 +1428,6 @@ class UniversalRKDAdmin(admin.ModelAdmin):
                     obj.document_uploaded_file.url,
                 )
             )
-        if obj.approval_document:
-            parts.append(
-                format_html(
-                    '<a href="{}" target="_blank" rel="noopener noreferrer">Лист утверждения</a>',
-                    obj.approval_document.url,
-                )
-            )
         if obj.attestation_document:
             parts.append(
                 format_html(
@@ -1383,6 +1438,10 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         if not parts:
             return "—"
         return mark_safe("<br>".join(str(p) for p in parts))
+
+    @admin.display(description="ЛУ/ЛО")
+    def display_lu_lo_sheets(self, obj):
+        return _admin_lu_lo_sheets_column_html(obj)
 
     @admin.display(
         description="Оповещение о пересмотре",
@@ -1453,6 +1512,7 @@ class UniversalRKDAdmin(admin.ModelAdmin):
                     "status",
                     "related_documents",
                     "develop_org",
+                    "comment",
                 )
             },
         ),
@@ -1479,6 +1539,15 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         (
             None,
             {
+                "description": _rkd_docs_section_header("Лист ознакомления"),
+                "fields": (
+                    "acquaintance_document",
+                ),
+            },
+        ),
+        (
+            None,
+            {
                 "description": _rkd_docs_section_header("Удостоверяющий лист"),
                 "fields": (
                     "attestation_document",
@@ -1487,13 +1556,12 @@ class UniversalRKDAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Дополнительно",
+            "Данные для спецификации",
             {
                 "fields": (
                     "quantity",
                     "note",
                     "weight",
-                    "comment",
                 )
             },
         ),
@@ -1631,6 +1699,14 @@ class UniversalRKDAdmin(admin.ModelAdmin):
             action_label="изменил",
         )
         html += _row(
+            "Лист ознакомления (PDF)",
+            getattr(obj, "acquaintance_document", None),
+            with_sep=True,
+            uploaded_by=last_editor,
+            uploaded_at=changed_at,
+            action_label="изменил",
+        )
+        html += _row(
             "Удостоверяющий лист — итоговый (PDF)",
             getattr(obj, "attestation_document", None),
             with_sep=True,
@@ -1759,6 +1835,24 @@ class UniversalRKDAdmin(admin.ModelAdmin):
             obj.current_responsible = request.user
         super().save_model(request, obj, form, change)
 
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        obj = form.instance
+        if not obj.pk:
+            return
+        if obj.attestation_document or obj.attestation_source:
+            return
+        if not obj.signatures.exists():
+            return
+        try:
+            from blog.services import UniversalRKDService
+            UniversalRKDService.generate_approval_sheet(obj, request.user)
+        except Exception as e:
+            messages.warning(
+                request,
+                f"Лист утверждения не обновлён: {e}",
+            )
+
     @admin.display(description="Сравнение версий")
     def version_diff_display(self, obj):
         if not obj:
@@ -1784,6 +1878,7 @@ class UniversalRKDAdmin(admin.ModelAdmin):
 
     _PDF_FILE_FIELDS = {
         "approval_document",
+        "acquaintance_document",
         "attestation_document",
     }
     _DOCX_FILE_FIELDS = {
@@ -3188,7 +3283,9 @@ admin.site.register(Call, CallAdmin)
 # EAM (СИСТЕМА УПРАВЛЕНИЕ АКТИВАМИ)
 class WorkEquipmentFileInline(admin.TabularInline):
     model = WorkEquipmentFile
-    extra = 1
+    extra = 0
+    fields = ("title", "file", "note")
+    verbose_name_plural = "Сопроводительные документы"
 
 class TransportVehicleFileInline(admin.TabularInline):
     model = TransportVehicleFile
@@ -3198,6 +3295,30 @@ class ProductionAreaFileInline(admin.TabularInline):
     model = ProductionAreaFile
     extra = 1
 
+class WorkEquipmentRepairFileInline(admin.TabularInline):
+    model = WorkEquipmentRepairFile
+    extra = 1
+    verbose_name_plural = "Документы, чеки"
+
+
+class WorkEquipmentRepairInline(admin.StackedInline):
+    model = WorkEquipmentRepair
+    extra = 0
+    show_change_link = True
+    verbose_name = "Ремонт / ТО"
+    verbose_name_plural = "РЕМОНТЫ / ТО"
+    fields = (
+        "repair_date",
+        "description",
+        "next_planned_date",
+        "planned_works_description",
+    )
+    readonly_fields = ()
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("work_equipment")
+
+
 class TransportRepairFileInline(admin.TabularInline):
     model = TransportRepairFile
     extra = 1
@@ -3205,19 +3326,41 @@ class TransportRepairFileInline(admin.TabularInline):
 # Рабочее оборудование
 @admin.register(WorkEquipment)
 class WorkEquipmentAdmin(admin.ModelAdmin):
-    list_display = ("name_type", "serial_number_link", "measuring_device_display", "next_calibration_date_display", "calibration_warning", "calibration_date_warning", "workstation", "status")
+    list_display = (
+        "name_type",
+        "serial_number_link",
+        "measuring_device_display",
+        "next_calibration_date_display",
+        "calibration_warning",
+        "calibration_date_warning",
+        "workstation",
+        "status",
+        "documents_column",
+        "repairs_link",
+    )
     list_filter = ("measuring_device",)
     search_fields = ("name_type", "serial_number", "workstation")
-    readonly_fields = ("date_of_creation", "date_of_change")
-    exclude = ("version_diff",)
-    inlines = [WorkEquipmentFileInline]
+    readonly_fields = ("author", "last_editor", "date_of_creation", "date_of_change", "version_diff_display")
+    inlines = [WorkEquipmentFileInline, WorkEquipmentRepairInline]
+
+    _VERSION_SKIP_FIELDS = frozenset({
+        "id", "version", "version_diff",
+        "author", "last_editor",
+        "date_of_creation", "date_of_change",
+    })
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("files", "repairs")
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if db_field.name == "calibration_info":
+            kwargs["widget"] = forms.Textarea(attrs={"rows": 3})
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
 
     @admin.display(description="Средство измерений")
     def measuring_device_display(self, obj):
         if obj.measuring_device:
-            return mark_safe(
-                '<img src="/static/admin/img/icon-yes.svg" alt="Да">'
-            )
+            return mark_safe('<img src="/static/admin/img/icon-yes.svg" alt="Да">')
         return "—"
 
     def next_calibration_date_display(self, obj):
@@ -3228,12 +3371,44 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
     next_calibration_date_display.short_description = "Дата плановой поверки"
     next_calibration_date_display.admin_order_field = "next_calibration_date"
 
+    @admin.display(description="Сопроводительные документы")
+    def documents_column(self, obj):
+        docs = [d for d in obj.files.all() if d.file and d.file.name]
+        if not docs:
+            return "—"
+        parts = []
+        for d in docs:
+            label = d.title or d.file.name.split("/")[-1]
+            parts.append(format_html(
+                '<div style="margin:0 0 4px 0;line-height:1.35;">'
+                '<a href="{}" target="_blank" rel="noopener noreferrer">{}</a>'
+                '</div>',
+                d.file.url,
+                label,
+            ))
+        return mark_safe("".join(str(p) for p in parts))
+
+    @admin.display(description="Сравнение версий")
+    def version_diff_display(self, obj):
+        if not obj:
+            return "—"
+        return mark_safe(_render_version_diff(obj.version_diff or ""))
+
+    @admin.display(description="Ремонты / ТО")
+    def repairs_link(self, obj):
+        url = (
+            reverse("admin:enterprise_asset_management_workequipmentrepair_changelist")
+            + f"?work_equipment__id__exact={obj.pk}"
+        )
+        return format_html('<a href="{}">{} ({})</a>', url, "Ремонты / ТО", obj.repairs.count())
+
     def get_fieldsets(self, request, obj=None):
         main_fields = (
             "name_type",
             "serial_number",
             "measuring_device",
             "next_calibration_date",
+            "calibration_info",
             "calibration_required",
             "planned_calibration_date",
             "workstation",
@@ -3243,27 +3418,88 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
         if obj is None:
             return (
                 (None, {"fields": main_fields}),
-                ("Ответственные", {"fields": ("current_responsible",)}),
-                ("Версия", {"fields": ("version",)}),
-                ("Системная информация", {"fields": ("date_of_creation", "date_of_change", "note")}),
+                ("Сопроводительные документы", {"fields": ("note",)}),
+                ("Системные данные", {"fields": (
+                    "current_responsible",
+                    "version",
+                    "version_diff_display",
+                    "date_of_creation",
+                    "date_of_change",
+                )}),
             )
         return (
             (None, {"fields": main_fields}),
-            ("Ответственные", {"fields": ("author", "last_editor", "current_responsible")}),
-            ("Версия", {"fields": ("version",)}),
-            ("Системная информация", {"fields": ("date_of_creation", "date_of_change", "note")}),
+            ("Сопроводительные документы", {"fields": ("note",)}),
+            ("Ремонты / ТО", {"fields": ("repairs_all_link",)}),
+            ("Системные данные", {"fields": (
+                "author",
+                "last_editor",
+                "current_responsible",
+                "version",
+                "version_diff_display",
+                "date_of_creation",
+                "date_of_change",
+            )}),
         )
 
     def get_readonly_fields(self, request, obj=None):
+        base = ("date_of_creation", "date_of_change", "version_diff_display")
         if obj is None:
-            return self.readonly_fields
-        return ("author", "last_editor") + tuple(self.readonly_fields)
+            return base
+        return ("author", "last_editor", "repairs_all_link") + base
+
+    @admin.display(description="")
+    def repairs_all_link(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        url = (
+            reverse("admin:enterprise_asset_management_workequipmentrepair_changelist")
+            + f"?work_equipment__id__exact={obj.pk}"
+        )
+        count = obj.repairs.count()
+        return format_html(
+            '<a href="{}" class="button" style="'
+            'display:inline-block;padding:4px 12px;border-radius:4px;'
+            'background:#417690;color:#fff;text-decoration:none;font-size:12px;">'
+            '📋 Открыть все ремонты / ТО ({})</a>',
+            url, count,
+        )
 
     def save_model(self, request, obj, form, change):
         if not change:
             obj.author = request.user
+            obj.version = "1"
+            obj.version_diff = "Стартовая версия"
+        else:
+            old = WorkEquipment.objects.get(pk=obj.pk)
+            try:
+                new_version = str(int(old.version) + 1)[:3]
+            except (ValueError, TypeError):
+                new_version = old.version
+            block = _build_version_diff_block(
+                old_obj=old,
+                new_obj=obj,
+                model_cls=WorkEquipment,
+                skip_fields=self._VERSION_SKIP_FIELDS,
+                user=request.user if request.user.is_authenticated else None,
+                version_to=new_version,
+            )
+            if block:
+                obj.version = new_version
+                obj.version_diff = ((old.version_diff or "").rstrip() + "\n\n" + block).strip()
         obj.last_editor = request.user
         super().save_model(request, obj, form, change)
+
+    def save_formset(self, request, form, formset, change):
+        instances = formset.save(commit=False)
+        for obj in instances:
+            if not obj.pk:
+                obj.author = request.user
+            obj.last_editor = request.user
+            obj.save()
+        for obj in formset.deleted_objects:
+            obj.delete()
+        formset.save_m2m()
 
 # Кастомные колонки
     def _warning_triangle_svg(self, *, title: str, color: str) -> str:
@@ -3317,6 +3553,68 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
         return "—"
 
     calibration_date_warning.short_description = "Срок калибровки истекает"
+
+# Ремонты / ТО рабочего оборудования
+@admin.register(WorkEquipmentRepair)
+class WorkEquipmentRepairAdmin(admin.ModelAdmin):
+
+    list_display = (
+        "work_equipment",
+        "repair_date",
+        "description",
+        "next_planned_date",
+        "author",
+        "date_of_creation",
+    )
+
+    list_filter = (
+        "repair_date",
+        "work_equipment",
+    )
+
+    search_fields = (
+        "work_equipment__name_type",
+        "work_equipment__serial_number",
+        "description",
+    )
+
+    readonly_fields = ("author", "last_editor", "date_of_creation", "date_of_change")
+
+    inlines = [WorkEquipmentRepairFileInline]
+
+    fieldsets = (
+        ("Основная информация", {
+            "fields": (
+                "work_equipment",
+                "repair_date",
+                "description",
+            )
+        }),
+        ("Планово-предупредительные работы", {
+            "fields": (
+                "next_planned_date",
+                "planned_works_description",
+            )
+        }),
+        ("Системная информация", {
+            "fields": (
+                "author",
+                "last_editor",
+                "date_of_creation",
+                "date_of_change",
+            )
+        }),
+    )
+
+    def has_module_permission(self, request):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
 
 # Транспорт
 @admin.register(TransportVehicle)
@@ -3665,6 +3963,13 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
     extra = 0
     can_delete = True
     show_change_link = False
+    verbose_name = "Подзадача"
+    verbose_name_plural = mark_safe(
+        'ПОДЗАДАЧИ'
+        '<div style="font-weight:normal;font-size:12px;color:#c8c8c8;margin-top:4px;">'
+        '💡 Для добавления сохраните основную задачу через «Сохранить и продолжить редактировать»'
+        '</div>'
+    )
     fields = (
         "parent_rz_display",
         "subtask_code_link",
@@ -3672,6 +3977,9 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
         "target_deadline",
         "task_preview",
         "criteria_preview",
+        "control_status_colored",
+        "overdue_flag",
+        "comment_preview",
     )
     readonly_fields = (
         "parent_rz_display",
@@ -3680,6 +3988,9 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
         "target_deadline",
         "task_preview",
         "criteria_preview",
+        "control_status_colored",
+        "overdue_flag",
+        "comment_preview",
     )
 
     def has_add_permission(self, request, obj=None):
@@ -3722,6 +4033,29 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
             '<div class="subtask-inline-cell">' + linebreaksbr(t) + "</div>"
         )
 
+    @admin.display(description="Статус")
+    def control_status_colored(self, obj):
+        return _render_status_circle(obj.control_status)
+
+    @admin.display(description="Просрочено?")
+    def overdue_flag(self, obj):
+        active = obj.control_status in (None, 'in_progress')
+        if not active:
+            return "—"
+        deadline = obj.hard_deadline or obj.target_deadline
+        if deadline and timezone.localdate() > deadline:
+            return "⚠️"
+        return "—"
+
+    @admin.display(description="Комментарий")
+    def comment_preview(self, obj):
+        t = (obj.comment or "").strip()
+        if not t:
+            return "—"
+        return mark_safe(
+            '<div class="subtask-inline-cell">' + linebreaksbr(t) + "</div>"
+        )
+
 
 @admin.register(WorkAssignmentSubtask)
 class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
@@ -3733,7 +4067,11 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
         extra["title"] = "Добавить подзадачу рабочего задания"
         return super().add_view(request, form_url, extra_context=extra)
 
-    list_display = ("id", "work_assignment", "task_short", "target_deadline", "executor")
+    list_display = (
+        "id", "work_assignment", "task_short",
+        "target_deadline", "executor",
+        "control_status_colored", "comment_short",
+    )
     search_fields = ("task", "work_assignment__name")
     readonly_fields = ("date_of_creation", "date_of_change")
 
@@ -3763,11 +4101,12 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Контроль и результат",
+            "Статус выполнения / Результат",
             {
                 "fields": (
                     "control_status",
                     "control_date",
+                    "comment",
                     "result_description",
                     "uploaded_file",
                 )
@@ -3844,6 +4183,15 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
         t = (obj.task or "").strip().replace("\n", " ")
         return (t[:60] + "...") if len(t) > 60 else (t or "—")
 
+    @admin.display(description="Статус выполнения / Результат", ordering="control_status")
+    def control_status_colored(self, obj):
+        return _render_status_circle(obj.control_status)
+
+    @admin.display(description="Комментарий")
+    def comment_short(self, obj):
+        t = (obj.comment or "").strip().replace("\n", " ")
+        return (t[:60] + "...") if len(t) > 60 else (t or "—")
+
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
         if request.user.is_authenticated:
@@ -3866,6 +4214,14 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         user = request.user
+        old_executor_id = None
+        if change:
+            old_executor_id = (
+                WorkAssignmentSubtask.objects
+                .filter(pk=obj.pk)
+                .values_list("executor_id", flat=True)
+                .first()
+            )
         if not change:
             if user.is_authenticated:
                 obj.author = user
@@ -3883,6 +4239,17 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
 
         super().save_model(request, obj, form, change)
 
+        if obj.executor_id and obj.executor_id != old_executor_id and obj.executor_id != user.id:
+            from approvals.services import notify
+            from approvals.models import Notification
+            notify(
+                obj.executor,
+                "Вас назначили исполнителем подзадачи",
+                text=f"«{obj.task or obj}» (РЗ: {obj.work_assignment}).",
+                url=reverse("admin:blog_workassignmentsubtask_change", args=[obj.pk]),
+                kind=Notification.KIND_WORK,
+            )
+
 
 @admin.register(WorkAssignment)
 class WorkAssignmentAdmin(admin.ModelAdmin):
@@ -3891,12 +4258,12 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     list_display = (
         'wa_code_column',
         'name', 'author', 'executor', 'post',
-        'effective_deadline_readonly',
         'overdue_flag',
-        'version',
+        'control_status_colored',
+        'control_date',
         'target_deadline', 'hard_deadline',
-        'control_status', 'control_date',
-        'deadline_version', 'reschedule_count', # служебные
+        'version',
+        'deadline_version', 'reschedule_count',
     )
     list_display_links = ('wa_code_column', 'name')
     ordering = ('post__wa_code', 'wa_number', 'pk')
@@ -3912,8 +4279,12 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def wa_code_column(self, obj):
         return obj.wa_full_code or '—'
 
-    readonly_fields = ('date_of_creation','date_of_change',
-                       'effective_deadline_readonly','deadline_version','reschedule_count')
+    readonly_fields = (
+        'author', 'last_editor',
+        'date_of_creation', 'date_of_change',
+        'version', 'version_diff_display',
+        'deadline_version', 'reschedule_count',
+    )
 
     inlines = [DeadlineChangeInline, WorkAssignmentSubtaskInline, WorkAssignmentAttachmentInline]
 
@@ -3921,7 +4292,6 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         ('Основная информация', {
             'fields': (
                 'name', 'executor', 'category', 'post',
-                'author', 'current_responsible', 'version',
                 'task', 'acceptance_criteria',
             )
         }),
@@ -3930,15 +4300,18 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 'target_deadline', 'hard_deadline',
                 ('time_window_start', 'time_window_end'),
                 'conditional_deadline',
-                'effective_deadline_readonly',
             )
         }),
-        ('Контроль выполнения', {
+        ('Статус выполнения / Результат', {
             'fields': ('control_status', 'control_date', 'result_description')
         }),
-        ('Системная информация', {
-            'fields': ('route', 'date_of_creation', 'date_of_change', 'last_editor',
-                       'deadline_version','reschedule_count')
+        ('Системные данные', {
+            'fields': (
+                'author', 'last_editor', 'current_responsible',
+                'version', 'version_diff_display',
+                'date_of_creation', 'date_of_change',
+                'route', 'deadline_version', 'reschedule_count',
+            )
         }),
     )
 
@@ -4015,22 +4388,77 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         post_id = request.GET.get("post")
         if post_id:
             initial["post"] = post_id
-        if request.user.is_authenticated:
-            initial.setdefault("author", request.user.pk)
-            initial.setdefault("last_editor", request.user.pk)
         return initial
+
+    _VERSION_SKIP_FIELDS = frozenset({
+        "id", "version", "version_diff",
+        "author_id", "last_editor_id",
+        "date_of_creation", "date_of_change",
+        "wa_number", "deadline_version", "reschedule_count",
+        "name",
+    })
 
     def save_model(self, request, obj, form, change):
         user = request.user
-        if not change and user.is_authenticated:
+        old_executor_id = None
+
+        if change:
+            try:
+                old = WorkAssignment.objects.get(pk=obj.pk)
+                old_status = old.control_status
+                old_executor_id = old.executor_id
+                cur = obj.version or "0"
+                try:
+                    version_to = str(int(cur) + 1)
+                except ValueError:
+                    version_to = cur + "+"
+                diff = _build_version_diff_block(
+                    old_obj=old,
+                    new_obj=obj,
+                    model_cls=WorkAssignment,
+                    skip_fields=self._VERSION_SKIP_FIELDS,
+                    user=user,
+                    version_to=version_to,
+                )
+                if diff:
+                    existing = (obj.version_diff or "").strip()
+                    obj.version_diff = (existing + "\n\n" + diff).strip() if existing else diff
+                    obj.version = version_to
+            except WorkAssignment.DoesNotExist:
+                old_status = None
+
+            obj.last_editor = user
+
+            # Автоматически проставляем control_date при смене статуса
+            if obj.control_status and obj.control_status != old_status:
+                obj.control_date = timezone.localdate()
+        else:
             obj.author = user
             obj.last_editor = user
+            # Для новых записей: статус "В работе" и дата фиксации = сегодня
+            if not obj.control_status:
+                obj.control_status = "in_progress"
+            if not obj.control_date:
+                obj.control_date = timezone.localdate()
+
         if obj.post_id:
             from .helpers import assign_wa_code_to_post, next_wa_number_for_post
             assign_wa_code_to_post(obj.post)
             if not obj.wa_number:
                 obj.wa_number = next_wa_number_for_post(obj.post, exclude_pk=obj.pk)
+
         super().save_model(request, obj, form, change)
+
+        if obj.executor_id and obj.executor_id != old_executor_id and obj.executor_id != user.id:
+            from approvals.services import notify
+            from approvals.models import Notification
+            notify(
+                obj.executor,
+                "Вас назначили исполнителем рабочего задания",
+                text=f"«{obj.name or obj.task or obj}» — срок: {obj.target_deadline:%d.%m.%Y}.",
+                url=reverse("admin:blog_workassignment_change", args=[obj.pk]),
+                kind=Notification.KIND_WORK,
+            )
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -4045,11 +4473,16 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             )
         )
 
+        # Просрочено: нет статуса ИЛИ статус «В работе» + срок прошёл
         qs = qs.annotate(
             is_overdue=Case(
                 When(
-                    Q(control_status__isnull=True) & Q(effective_deadline_db__lt=today),
-                    then=True
+                    Q(control_status__isnull=True) | Q(control_status="in_progress"),
+                    then=Case(
+                        When(effective_deadline_db__lt=today, then=True),
+                        default=False,
+                        output_field=BooleanField(),
+                    ),
                 ),
                 default=False,
                 output_field=BooleanField(),
@@ -4058,13 +4491,20 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
 
         return qs
 
-    def effective_deadline_readonly(self, obj):
-        return obj.effective_deadline
-    effective_deadline_readonly.short_description = "Эффективный срок"
+    @admin.display(description="Статус выполнения / Результат", ordering="control_status")
+    def control_status_colored(self, obj):
+        return _render_status_circle(obj.control_status)
 
+    @admin.display(description="Просрочено?")
     def overdue_flag(self, obj):
-        return "—" if obj.control_status else ("⚠️" if obj.is_overdue else "—")
-    overdue_flag.short_description = "Просрочено?"
+        active = obj.control_status in (None, 'in_progress')
+        return "⚠️" if (active and obj.is_overdue) else "—"
+
+    @admin.display(description="История изменений")
+    def version_diff_display(self, obj):
+        if not obj:
+            return "—"
+        return mark_safe(_render_version_diff(obj.version_diff or ""))
 
     def get_urls(self):
         urls = super().get_urls()
@@ -4135,6 +4575,9 @@ class WorkAssignmentDeadlineChangeAdmin(admin.ModelAdmin):
 class ProcessAdmin(admin.ModelAdmin):
     list_display = ("name", "code")
     search_fields = ("name", "code")
+
+    def has_module_permission(self, request):
+        return False
 
 
 class RouteProcessInline(admin.TabularInline):
@@ -4391,6 +4834,13 @@ class IndependentDocumentAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(SharedRepository)
 class SharedRepositoryAdmin(admin.ModelAdmin):
+    actions = ["send_to_approval_action"]
+
+    @admin.action(description="Отправить на согласование")
+    def send_to_approval_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=independent&ids={ids}"
+        return redirect(url)
 
     list_display = [
         'display_document_title',
@@ -4401,6 +4851,7 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'display_date_of_change',
         'display_version',
         'display_uploaded_file',
+        'display_lu_lo_sheets',
         'display_document_purpose',
         'display_note',
         'display_related_documents',
@@ -4430,6 +4881,8 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         'display_file_list',
         'display_related_qms_documents_list',
         'display_related_shared_documents_list',
+        'approval_document',
+        'acquaintance_document',
     ]
 
     filter_horizontal = ['related_documents','related_sharedrepository']
@@ -4454,6 +4907,8 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
                 'approval',
                 'signature_approval',
                 'date_approval',
+                'approval_document',
+                'acquaintance_document',
             )
         }),
         ('Ознакомление', {
@@ -4649,6 +5104,10 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         return "—"
 
     display_uploaded_file.short_description = 'Файл'
+
+    @admin.display(description="ЛУ/ЛО")
+    def display_lu_lo_sheets(self, obj):
+        return _admin_lu_lo_sheets_column_html(obj)
 
     def display_document_purpose(self, obj):
         """Отображение назначения документа"""
@@ -5024,6 +5483,14 @@ class QMSDocumentAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(QMSDocument)
 class QMSDocumentAdmin(admin.ModelAdmin):
+    actions = ["send_to_approval_action"]
+
+    @admin.action(description="Отправить на согласование")
+    def send_to_approval_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=qms&ids={ids}"
+        return redirect(url)
+
     list_display = [
         'display_document_title',
         'display_category',
@@ -5032,6 +5499,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'display_date_approval',
         'display_accept',
         'display_uploaded_file',
+        'display_lu_lo_sheets',
         'display_review_date',
         'display_review_status',
         'document_purpose',
@@ -5062,6 +5530,8 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'author',
         'display_related_shared_documents_list',
         'display_related_qms_documents_list'
+        'approval_document',
+        'acquaintance_document',
     ]
 
     filter_horizontal = ['related_documents','related_qms_documents']
@@ -5082,6 +5552,8 @@ class QMSDocumentAdmin(admin.ModelAdmin):
                 'approval',
                 'approval_signature',
                 'date_approval',
+                'approval_document',
+                'acquaintance_document',
             )
         }),
         ('Ознакомление', {
@@ -5269,6 +5741,10 @@ class QMSDocumentAdmin(admin.ModelAdmin):
 
     display_uploaded_file.short_description = 'Файл'
 
+    @admin.display(description="ЛУ/ЛО")
+    def display_lu_lo_sheets(self, obj):
+        return _admin_lu_lo_sheets_column_html(obj)
+
     def display_review_date(self, obj):
         """Отображение даты планового пересмотра"""
         if obj.review_date:
@@ -5373,6 +5849,14 @@ class AdministrativeOrderAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(AdministrativeOrder)
 class AdministrativeOrderAdmin(admin.ModelAdmin):
+    actions = ["send_to_approval_action"]
+
+    @admin.action(description="Отправить на согласование")
+    def send_to_approval_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=order&ids={ids}"
+        return redirect(url)
+
     list_display = [
         'registration_number',
         'enterprise_display',
@@ -5382,7 +5866,8 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
         'scope_display',
         'status_display',
         'validity_date_warning',
-        'uploaded_file'
+        'uploaded_file',
+        'display_lu_lo_sheets',
     ]
 
     list_filter = [
@@ -5401,11 +5886,12 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
 
     readonly_fields = [
         'id',
-        #'registration_number',
         'author',
         'date_of_creation',
         'last_editor',
         'date_of_change',
+        'approval_document',
+        'acquaintance_document',
     ]
 
     inlines = [AdministrativeOrderAcceptSignatureInline]
@@ -5426,6 +5912,8 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
                 'approval',
                 'signature_approval',
                 'accept',
+                'approval_document',
+                'acquaintance_document',
             )
         }),
         ('Сроки', {
@@ -5583,6 +6071,10 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
         return "—"
 
     display_uploaded_file.short_description = 'Файл'
+
+    @admin.display(description="ЛУ/ЛО")
+    def display_lu_lo_sheets(self, obj):
+        return _admin_lu_lo_sheets_column_html(obj)
 
 class DocumentTemplateAcceptSignatureInline(admin.TabularInline):
     """Inline для множественных подписей ознакомления шаблонов"""

@@ -1,0 +1,22 @@
+{% extends "admin/base.html" %}
+
+{% block title %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block branding %}
+<h1 id="site-name"><a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a></h1>
+{% endblock %}
+
+{% block nav-global %}
+{% if cabinet_url %}
+<a href="{{ cabinet_url }}"
+   style="display:inline-flex;align-items:center;gap:6px;margin-left:16px;
+          padding:5px 12px;border-radius:16px;background:#417690;color:#fff;
+          text-decoration:none;font-weight:600;font-size:13px;">
+  🔔 Личный кабинет
+  {% if cabinet_total_count %}
+  <span style="background:#E53935;color:#fff;border-radius:10px;
+               padding:1px 7px;font-size:11px;line-height:1.4;">{{ cabinet_total_count }}</span>
+  {% endif %}
+</a>
+{% endif %}
+{% endblock %}
