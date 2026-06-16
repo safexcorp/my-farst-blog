@@ -5529,7 +5529,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
         'last_editor',
         'author',
         'display_related_shared_documents_list',
-        'display_related_qms_documents_list'
+        'display_related_qms_documents_list',
         'approval_document',
         'acquaintance_document',
     ]
