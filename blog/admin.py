@@ -2400,7 +2400,7 @@ class CustomerAdmin(admin.ModelAdmin):
     # Объедини фильтры в один список
     list_filter = ('name_of_company', 'revenue_for_last_year')
     list_filter = (RevenueRangeFilter,)
-    search_fields = ('name_of_company__icontains', 'address__icontains')  # Поиск по этим полям
+    search_fields = ('name_of_company', 'address', 'name_of_company_ci')
 
     def support_tickets_link(self, obj):
         """Отображение ссылки на обращения контрагента"""
@@ -2418,8 +2418,9 @@ class CustomerAdmin(admin.ModelAdmin):
 class SupportTicketInline(admin.TabularInline):
     model = SupportTicket
     extra = 0
-    fields = ('problem', 'status', 'created_date')
+    fields = ('created_date', 'category', 'problem', 'status', 'intake_channel')
     readonly_fields = ('created_date',)
+    show_change_link = True
 
 inlines = [SupportTicketInline]
 
@@ -3177,6 +3178,8 @@ class TicketCommentInline(admin.TabularInline):
     extra = 1
     fields = ['author', 'text', 'file', 'created_date']
     readonly_fields = ['created_date']
+    verbose_name = 'Запись взаимодействия'
+    verbose_name_plural = 'Взаимодействие по обработке обращений'
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('author')
@@ -3186,30 +3189,38 @@ class TicketCommentInline(admin.TabularInline):
 @admin.register(SupportTicket)
 class SupportTicketAdmin(admin.ModelAdmin):
     form = SupportTicketForm
+    autocomplete_fields = ('customer', 'product', 'assigned_to')
     list_display = [
         'id', 'created_date', 'customer', 'product', 'get_category_display',
-        'truncated_problem', 'status_badge', 'status_changed_date',
-        'created_by', 'assigned_to', 'custom_actions'
+        'get_intake_channel_display', 'truncated_problem', 'status_badge',
+        'claim_type_display', 'status_changed_date',
+        'created_by', 'assigned_to', 'custom_actions',
     ]
     list_filter = [
-        'status', 'category', 'created_date', 'customer',
-        'product', 'assigned_to'
+        'status', 'category', 'intake_channel', 'claim_type',
+        'created_date', 'customer', 'product', 'assigned_to',
     ]
     search_fields = [
-        'problem', 'description', 'customer__name_of_company',
-        'id', 'created_by__username'
+        'problem', 'description', 'resolution', 'customer__name_of_company',
+        'id', 'created_by__username',
     ]
-    readonly_fields = ['created_date', 'status_changed_date', 'created_by']
+    readonly_fields = ['status_changed_date', 'created_by']
     inlines = [TicketCommentInline]
     date_hierarchy = 'created_date'
     list_per_page = 25
 
     fieldsets = (
-        ('Основная информация', {
-            'fields': ('customer', 'product', 'category', 'problem', 'description')
+        ('Обращение', {
+            'fields': (
+                'customer', 'product', 'category', 'problem', 'description',
+                'created_date', 'intake_channel',
+            ),
         }),
-        ('Статус и назначение', {
-            'fields': ('status', 'assigned_to', 'created_by', 'created_date', 'status_changed_date')
+        ('Обработка', {
+            'fields': (
+                'status', 'resolution', 'claim_type', 'claim_attachment',
+                'assigned_to', 'created_by', 'status_changed_date',
+            ),
         }),
     )
 
@@ -3233,6 +3244,12 @@ class SupportTicketAdmin(admin.ModelAdmin):
 
     status_badge.short_description = 'Статус'
 
+    @admin.display(description='Претензия', ordering='claim_type')
+    def claim_type_display(self, obj):
+        if not obj.claim_type:
+            return '—'
+        return obj.get_claim_type_display()
+
     def custom_actions(self, obj):
         view_url = reverse('admin:crm_supportticket_change', args=[obj.id])
         return format_html(
@@ -3242,9 +3259,16 @@ class SupportTicketAdmin(admin.ModelAdmin):
 
     custom_actions.short_description = 'Действия'
 
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        initial.setdefault('created_date', timezone.localdate())
+        return initial
+
     def save_model(self, request, obj, form, change):
-        if not obj.pk:
+        if not change:
             obj.created_by = request.user
+            if not obj.created_date:
+                obj.created_date = timezone.localdate()
         super().save_model(request, obj, form, change)
 
     def get_queryset(self, request):
@@ -3263,7 +3287,7 @@ class TicketCommentAdmin(admin.ModelAdmin):
     def truncated_text(self, obj):
         return obj.text[:100] + '...' if len(obj.text) > 100 else obj.text
 
-    truncated_text.short_description = 'Комментарий'
+    truncated_text.short_description = 'Текст'
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('ticket', 'author')
