@@ -6645,6 +6645,8 @@ admin.site.unregister(User)
 class CustomUserAdmin(BaseUserAdmin):
     inlines = [EmployeeProfileInline]
 
+    list_filter = BaseUserAdmin.list_filter + ('profile__org_department',)
+
     list_display = (
         'username',
         'get_full_name',
@@ -6685,7 +6687,7 @@ class CustomUserAdmin(BaseUserAdmin):
             return obj.profile.org_department.name
         return ''
 
-    get_department.short_description = 'Отдел'
+    get_department.short_description = 'Структурное подразделение (Отдел)'
     get_department.admin_order_field = 'profile__org_department__name'
 
     def get_position(self, obj):

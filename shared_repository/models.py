@@ -1342,7 +1342,7 @@ class EmployeeProfile(models.Model):
         null=True,
         blank=True,
         related_name='employees',
-        verbose_name='Отдел',
+        verbose_name='Структурное подразделение (Отдел)',
     )
     is_head = models.BooleanField('Руководитель отдела', default=False)
     position = models.CharField('Должность', max_length=100, blank=True)
