@@ -106,7 +106,7 @@ from .services import WorkAssignmentService
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
-from shared_repository.models import EmployeeProfile
+from shared_repository.models import Department, EmployeeProfile
 
 
 def _inject_rkd_category_json(extra_context):
@@ -1381,12 +1381,18 @@ class UniversalRKDAdmin(admin.ModelAdmin):
     change_form_template = "admin/blog/universal_rkd_category_change_form.html"
     change_list_template = "admin/blog/universalrkd/change_list.html"
     form = UniversalRKDForm
-    actions = ["send_to_approval_action"]
+    actions = ["send_to_approval_action", "send_to_acknowledgment_action"]
 
     @admin.action(description="Отправить на согласование")
     def send_to_approval_action(self, request, queryset):
         ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
-        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=rkd&ids={ids}"
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=rkd&mode=approval&ids={ids}"
+        return redirect(url)
+
+    @admin.action(description="Отправить на ознакомление")
+    def send_to_acknowledgment_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=rkd&mode=ack&ids={ids}"
         return redirect(url)
 
     list_display = (
@@ -4858,12 +4864,18 @@ class IndependentDocumentAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(SharedRepository)
 class SharedRepositoryAdmin(admin.ModelAdmin):
-    actions = ["send_to_approval_action"]
+    actions = ["send_to_approval_action", "send_to_acknowledgment_action"]
 
     @admin.action(description="Отправить на согласование")
     def send_to_approval_action(self, request, queryset):
         ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
-        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=independent&ids={ids}"
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=independent&mode=approval&ids={ids}"
+        return redirect(url)
+
+    @admin.action(description="Отправить на ознакомление")
+    def send_to_acknowledgment_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=independent&mode=ack&ids={ids}"
         return redirect(url)
 
     list_display = [
@@ -5507,12 +5519,18 @@ class QMSDocumentAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(QMSDocument)
 class QMSDocumentAdmin(admin.ModelAdmin):
-    actions = ["send_to_approval_action"]
+    actions = ["send_to_approval_action", "send_to_acknowledgment_action"]
 
     @admin.action(description="Отправить на согласование")
     def send_to_approval_action(self, request, queryset):
         ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
-        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=qms&ids={ids}"
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=qms&mode=approval&ids={ids}"
+        return redirect(url)
+
+    @admin.action(description="Отправить на ознакомление")
+    def send_to_acknowledgment_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=qms&mode=ack&ids={ids}"
         return redirect(url)
 
     list_display = [
@@ -5873,12 +5891,18 @@ class AdministrativeOrderAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(AdministrativeOrder)
 class AdministrativeOrderAdmin(admin.ModelAdmin):
-    actions = ["send_to_approval_action"]
+    actions = ["send_to_approval_action", "send_to_acknowledgment_action"]
 
     @admin.action(description="Отправить на согласование")
     def send_to_approval_action(self, request, queryset):
         ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
-        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=order&ids={ids}"
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=order&mode=approval&ids={ids}"
+        return redirect(url)
+
+    @admin.action(description="Отправить на ознакомление")
+    def send_to_acknowledgment_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=order&mode=ack&ids={ids}"
         return redirect(url)
 
     list_display = [
@@ -6599,9 +6623,21 @@ class EmployeeProfileInline(admin.StackedInline):
             'fields': ('patronymic', 'inn', 'phone')
         }),
         ('Рабочие данные', {
-            'fields': ('department', 'position', 'supervisor', 'roles_responsibilities')
+            'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities')
         }),
     )
+
+
+@admin.register(Department)
+class DepartmentAdmin(admin.ModelAdmin):
+    """Справочник отделов. Скрыт из бокового меню — заполняется через «плюсик»
+    в карточке пользователя (поле «Отдел»)."""
+    list_display = ('name', 'is_active')
+    search_fields = ('name',)
+
+    def get_model_perms(self, request):
+        return {}
+
 
 admin.site.unregister(User)
 
@@ -6616,10 +6652,15 @@ class CustomUserAdmin(BaseUserAdmin):
         'get_inn',
         'get_phone',
         'get_department',
+        'get_is_head',
         'get_position',
         'get_supervisor',
         'is_active',
     )
+
+    @admin.display(description='Руководитель', boolean=True, ordering='profile__is_head')
+    def get_is_head(self, obj):
+        return obj.profile.is_head if hasattr(obj, 'profile') else False
 
     def get_patronymic(self, obj):
         return obj.profile.patronymic if hasattr(obj, 'profile') else ''
@@ -6640,10 +6681,12 @@ class CustomUserAdmin(BaseUserAdmin):
     get_phone.admin_order_field = 'profile__phone'
 
     def get_department(self, obj):
-        return obj.profile.department if hasattr(obj, 'profile') else ''
+        if hasattr(obj, 'profile') and obj.profile.org_department:
+            return obj.profile.org_department.name
+        return ''
 
     get_department.short_description = 'Отдел'
-    get_department.admin_order_field = 'profile__department'
+    get_department.admin_order_field = 'profile__org_department__name'
 
     def get_position(self, obj):
         return obj.profile.position if hasattr(obj, 'profile') else ''

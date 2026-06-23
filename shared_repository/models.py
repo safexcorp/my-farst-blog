@@ -1303,6 +1303,24 @@ class DocumentHistory(models.Model):
 
 # Модель для расширения стандартного пользователя Django
 
+class Department(models.Model):
+    """Организационный отдел (подразделение) компании.
+
+    Используется как справочник: в профиле сотрудника выбирается из списка,
+    а в маршрутах ознакомления можно разослать документ всему отделу разом.
+    """
+    name = models.CharField('Название отдела', max_length=150, unique=True)
+    is_active = models.BooleanField('Активен', default=True)
+
+    class Meta:
+        verbose_name = 'Отдел'
+        verbose_name_plural = 'Отделы'
+        ordering = ('name',)
+
+    def __str__(self):
+        return self.name
+
+
 class EmployeeProfile(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -1318,7 +1336,15 @@ class EmployeeProfile(models.Model):
         verbose_name='ИНН',
     )
     phone = models.CharField('Телефон', max_length=20, blank=True)
-    department = models.CharField('Отдел', max_length=100, blank=True)
+    org_department = models.ForeignKey(
+        'Department',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='employees',
+        verbose_name='Отдел',
+    )
+    is_head = models.BooleanField('Руководитель отдела', default=False)
     position = models.CharField('Должность', max_length=100, blank=True)
     supervisor = models.ForeignKey(
         settings.AUTH_USER_MODEL,

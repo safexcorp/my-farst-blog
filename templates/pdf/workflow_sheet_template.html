@@ -58,11 +58,12 @@
       text-align: center;
       background: #fff;
     }
-    td.num-col   { width: 7%; text-align: center; }
-    td.pos-col   { width: 24%; text-align: left; }
-    td.name-col  { width: 34%; text-align: left; }
-    td.date-col  { width: 13%; text-align: center; }
-    td.sig-col   { width: 22%; text-align: center; }
+    td.num-col   { width: 6%; text-align: center; }
+    td.role-col  { width: 20%; text-align: left; }
+    td.pos-col   { width: 18%; text-align: left; }
+    td.name-col  { width: 28%; text-align: left; }
+    td.date-col  { width: 12%; text-align: center; }
+    td.sig-col   { width: 16%; text-align: center; }
     .eds-badge {
       font-size: 9.5pt;
       font-weight: bold;
@@ -101,7 +102,8 @@
     <thead>
       <tr>
         <th class="num-col">№<br>п/п</th>
-        <th class="pos-col">Должность</th>
+        {% if show_role %}<th class="role-col">Роль</th>{% endif %}
+        <th class="pos-col">Отдел</th>
         <th class="name-col">Ф.И.О.</th>
         <th class="date-col">Дата</th>
         <th class="sig-col">Подпись</th>
@@ -111,6 +113,7 @@
       {% for row in rows %}
       <tr>
         <td class="num-col">{{ row.number }}</td>
+        {% if show_role %}<td class="role-col">{{ row.role|default:"—" }}</td>{% endif %}
         <td class="pos-col">{{ row.position }}</td>
         <td class="name-col">
           {{ row.fio }}
@@ -129,7 +132,7 @@
       </tr>
       {% empty %}
       <tr class="empty-row">
-        <td colspan="5">Записи не добавлены</td>
+        <td colspan="{% if show_role %}6{% else %}5{% endif %}">Записи не добавлены</td>
       </tr>
       {% endfor %}
     </tbody>

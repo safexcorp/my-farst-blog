@@ -1,33 +1,114 @@
 {% extends "admin/base_site.html" %}
 
 {% block content %}
-<div id="content-main" style="max-width:750px;">
+<div id="content-main" style="max-width:800px;">
+
+  <div style="margin-bottom:14px;">
+    <span style="display:inline-block;padding:4px 12px;border-radius:14px;font-size:12px;
+                 font-weight:700;color:#fff;
+                 background:{% if mode == 'ack' %}#7E57C2{% else %}#1E88E5{% endif %};">
+      {% if mode == 'ack' %}ОЗНАКОМЛЕНИЕ{% else %}СОГЛАСОВАНИЕ / ПОДПИСЬ{% endif %}
+    </span>
+  </div>
 
   <div style="border:1px solid var(--hairline-color,#444);border-radius:10px;
               padding:16px 20px;margin-bottom:20px;">
     <div style="font-size:13px;font-weight:600;margin-bottom:10px;opacity:.75;">
-      {{ doc_type_label }} — документы для отправки на согласование:
+      {{ doc_type_label }} — документы для отправки на {{ mode_label }}:
     </div>
     <ul style="margin:0;padding-left:18px;">
       {% for doc in documents %}
-      <li style="margin-bottom:4px;">
-        <strong>{{ doc }}</strong>
-      </li>
+      <li style="margin-bottom:4px;"><strong>{{ doc }}</strong></li>
       {% empty %}
       <li style="color:#E53935;">Документы не выбраны.</li>
       {% endfor %}
     </ul>
   </div>
 
+  {% if mode == 'ack' %}
+  <p>Выберите маршрут ознакомления. Документ получат указанные адресаты
+     (роль / весь отдел / все сотрудники / руководители).</p>
+  {% else %}
   <p>Выберите маршрут согласования — документ пройдёт по всем его шагам по порядку.</p>
+  {% endif %}
+
+  {% if routes_info %}
+  <div style="margin-bottom:18px;">
+    <button type="button" onclick="document.getElementById('routes-dialog').showModal();"
+            style="padding:8px 16px;font-size:13px;border-radius:6px;cursor:pointer;
+                   color:#fff;border:none;
+                   background:{% if mode == 'ack' %}#7E57C2{% else %}#1E88E5{% endif %};">
+      📋 Посмотреть маршруты {% if mode == 'ack' %}ознакомления{% else %}согласования{% endif %}
+      ({{ routes_info|length }})
+    </button>
+  </div>
+
+  <dialog id="routes-dialog"
+          style="max-width:640px;width:90%;border:1px solid var(--hairline-color,#444);
+                 border-radius:10px;padding:0;background:var(--body-bg,#1b1b1b);
+                 color:var(--body-fg,#eee);">
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                padding:14px 18px;border-bottom:1px solid var(--hairline-color,#444);">
+      <strong style="font-size:14px;">
+        Маршруты {% if mode == 'ack' %}ознакомления{% else %}согласования{% endif %}
+      </strong>
+      <button type="button" onclick="document.getElementById('routes-dialog').close();"
+              style="background:none;border:none;color:inherit;font-size:20px;
+                     cursor:pointer;line-height:1;">&times;</button>
+    </div>
+    <div style="padding:14px 18px;max-height:65vh;overflow:auto;">
+      {% for item in routes_info %}
+      <div onclick="pickRoute('{{ item.route.pk }}');"
+           title="Нажмите, чтобы выбрать этот маршрут"
+           style="border:1px solid var(--hairline-color,#444);
+                  border-left:3px solid {% if mode == 'ack' %}#7E57C2{% else %}#1E88E5{% endif %};
+                  border-radius:6px;padding:8px 12px;margin-bottom:8px;cursor:pointer;"
+           onmouseover="this.style.background='rgba(125,125,125,.15)';"
+           onmouseout="this.style.background='';">
+        <div style="display:flex;align-items:baseline;gap:6px;">
+          <span style="font-weight:700;font-size:13px;
+                       color:{% if mode == 'ack' %}#9575CD{% else %}#64B5F6{% endif %};">
+            {{ forloop.counter }}.
+          </span>
+          <span style="font-weight:700;font-size:13px;">{{ item.route.name }}</span>
+          <span style="margin-left:auto;font-size:11px;opacity:.6;">выбрать →</span>
+        </div>
+        <div style="font-size:12px;line-height:1.5;opacity:.85;margin-top:3px;padding-left:14px;">
+          {{ item.preview }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </dialog>
+
+  <script>
+    function pickRoute(pk) {
+      var sel = document.getElementById("id_route");
+      if (sel) {
+        sel.value = pk;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      var dlg = document.getElementById("routes-dialog");
+      if (dlg && dlg.open) {
+        dlg.close();
+      }
+    }
+  </script>
+  {% else %}
+  <p style="color:#E53935;">
+    Нет активных маршрутов {% if mode == 'ack' %}ознакомления{% else %}согласования{% endif %}.
+    Создайте их в разделе «{% if mode == 'ack' %}Маршруты ознакомления{% else %}Маршруты согласования{% endif %}».
+  </p>
+  {% endif %}
 
   <form method="post">
     {% csrf_token %}
     <input type="hidden" name="doc_type" value="{{ doc_type }}">
+    <input type="hidden" name="mode" value="{{ mode }}">
     <input type="hidden" name="ids" value="{{ ids }}">
     <table>{{ form.as_table }}</table>
     <div style="display:flex;gap:10px;margin-top:16px;">
-      <input type="submit" value="Запустить согласование" class="default"
+      <input type="submit" value="Запустить на {{ mode_label }}" class="default"
              style="padding:10px 22px;font-size:14px;">
       <a href="{% url 'admin:approvals_approvalprocess_changelist' %}"
          style="padding:10px 22px;font-size:14px;border-radius:4px;

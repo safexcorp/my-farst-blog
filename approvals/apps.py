@@ -10,11 +10,8 @@ GROUP_EMPLOYEE = "Согласование: Сотрудник"
 def _ensure_departments(sender, **kwargs):
     from .models import Department, SIGNATURE_ROLE_CHOICES
 
-    for role_key, role_label in SIGNATURE_ROLE_CHOICES:
-        Department.objects.get_or_create(
-            name=role_label,
-            defaults={"signature_role": role_key},
-        )
+    for _role_key, role_label in SIGNATURE_ROLE_CHOICES:
+        Department.objects.get_or_create(name=role_label)
 
 
 def _ensure_groups(sender, **kwargs):

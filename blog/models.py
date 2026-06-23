@@ -2800,9 +2800,9 @@ class UniversalRKDAcknowledgment(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        verbose_name="Отдел",
+        verbose_name="Роль",
     )
-    position = models.CharField("Должность", max_length=150, blank=True)
+    position = models.CharField("Отдел", max_length=150, blank=True)
     signed_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,

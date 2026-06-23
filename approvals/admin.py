@@ -27,12 +27,13 @@ from .models import (
     DepartmentMember,
     Vacation,
     ApprovalRoute,
+    AcknowledgmentRoute,
     ApprovalRouteStep,
     ApprovalProcess,
     ApprovalTask,
     Notification,
 )
-from .services import ApprovalEngine
+from .services import ApprovalEngine, resolve_assignee, _resolve_step_users
 
 
 def is_approval_admin(user):
@@ -119,8 +120,11 @@ class DepartmentMemberInline(admin.TabularInline):
     model = DepartmentMember
     extra = 1
     autocomplete_fields = ("user",)
-    verbose_name = "Сотрудник отдела"
-    verbose_name_plural = "Сотрудники (главный + заместители по очереди)"
+    verbose_name = "Сотрудник роли"
+    verbose_name_plural = "Сотрудники роли (главный + заместители по очереди)"
+
+    class Media:
+        js = ("approvals/js/inline_order.js",)
 
 
 @admin.register(Department)
@@ -141,17 +145,115 @@ class DepartmentAdmin(_AdminOnlyMixin, admin.ModelAdmin):
 
 @admin.register(Vacation)
 class VacationAdmin(_AdminOnlyMixin, admin.ModelAdmin):
-    list_display = ("user", "start_date", "end_date", "reason")
-    list_filter = ("start_date", "end_date")
+    list_display = (
+        "user", "absence_type", "start_date", "end_date",
+        "days_display", "reason",
+    )
+    list_filter = ("absence_type", "start_date", "end_date")
     search_fields = ("user__username", "user__last_name", "reason")
     autocomplete_fields = ("user",)
+    date_hierarchy = "start_date"
+    fields = ("user", "absence_type", ("start_date", "end_date"), "reason")
+
+    @admin.display(description="Дней", ordering="start_date")
+    def days_display(self, obj):
+        return obj.days if obj.days is not None else "—"
+
+
+def _route_steps_preview(obj):
+    steps = obj.steps.select_related("department", "org_department").order_by("order")
+    if not steps:
+        return "—"
+    lines = []
+    for s in steps:
+        if s.target_type == ApprovalRouteStep.TARGET_ALL:
+            lines.append(format_html("<div><b>{}.</b> {}</div>", s.order, s.target_label))
+            continue
+
+        people = [u for u in _resolve_step_users(s) if u]
+        names = [u.get_full_name() or u.username for u in people]
+        if names:
+            who = ", ".join(names[:8])
+            if len(names) > 8:
+                who += f" и ещё {len(names) - 8}"
+        else:
+            who = "не назначен"
+        lines.append(format_html("<div><b>{}.</b> {} — {}</div>", s.order, s.target_label, who))
+    return format_html_join("", "{}", ((line,) for line in lines))
+
+
+def _collect_responsible_items(user, limit_per_model=200):
+    """Все объекты во всех моделях, где пользователь — «Текущий ответственный»."""
+    from django.apps import apps
+    from django.contrib.auth import get_user_model
+    from django.core.exceptions import FieldDoesNotExist
+    from django.db.models import ForeignKey
+    from django.urls import NoReverseMatch
+
+    user_model = get_user_model()
+    # Рабочие задания и подзадачи показываются в отдельных вкладках ЛК.
+    excluded_labels = {"blog.workassignment", "blog.workassignmentsubtask"}
+    items = []
+    for model in apps.get_models():
+        if model._meta.label_lower in excluded_labels:
+            continue
+        try:
+            field = model._meta.get_field("current_responsible")
+        except FieldDoesNotExist:
+            continue
+        if not isinstance(field, ForeignKey):
+            continue
+        if field.remote_field.model is not user_model:
+            continue
+        try:
+            objs = list(
+                model.objects.filter(current_responsible=user).order_by("-pk")[:limit_per_model]
+            )
+        except Exception:
+            # Пропускаем модель, если её таблица недоступна / рассинхронизирована со схемой.
+            continue
+        for obj in objs:
+            try:
+                url = reverse(
+                    f"admin:{model._meta.app_label}_{model._meta.model_name}_change",
+                    args=[obj.pk],
+                )
+            except NoReverseMatch:
+                url = ""
+            items.append({
+                "title": str(obj),
+                "model_label": str(model._meta.verbose_name),
+                "admin_url": url,
+            })
+    items.sort(key=lambda x: (x["model_label"], x["title"]))
+    return items
 
 
 class ApprovalRouteStepInline(admin.TabularInline):
+    """Шаги маршрута согласования — только по роли, последовательно."""
     model = ApprovalRouteStep
     extra = 1
+    fields = ("order", "department")
     verbose_name = "Шаг маршрута"
     verbose_name_plural = "Шаги маршрута (по порядку)"
+
+    class Media:
+        js = ("approvals/js/inline_order.js",)
+
+
+class AckRouteStepInline(admin.StackedInline):
+    """Шаги маршрута ознакомления — по роли, отделу, всем или руководителям."""
+    model = ApprovalRouteStep
+    extra = 1
+    fields = ("order", "target_type", "department", "org_department")
+    verbose_name = "Шаг маршрута"
+    verbose_name_plural = "Шаги маршрута (по порядку)"
+
+    class Media:
+        js = (
+            "approvals/js/inline_order.js",
+            "approvals/js/ack_step_target.js",
+        )
 
 
 @admin.register(ApprovalRoute)
@@ -159,14 +261,69 @@ class ApprovalRouteAdmin(_AdminOnlyMixin, admin.ModelAdmin):
     list_display = ("name", "steps_preview", "is_active")
     list_filter = ("is_active",)
     search_fields = ("name", "description")
+    fields = ("name", "description", "is_active")
     inlines = [ApprovalRouteStepInline]
 
-    @admin.display(description="Маршрут")
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(kind=ApprovalRoute.KIND_APPROVAL)
+
+    def save_model(self, request, obj, form, change):
+        obj.kind = ApprovalRoute.KIND_APPROVAL
+        super().save_model(request, obj, form, change)
+
+    def save_formset(self, request, form, formset, change):
+        if formset.model is ApprovalRouteStep:
+            instances = formset.save(commit=False)
+            for obj in formset.deleted_objects:
+                obj.delete()
+            for obj in instances:
+                obj.action_type = ApprovalRouteStep.ACTION_SIGN
+                obj.target_type = ApprovalRouteStep.TARGET_ROLE
+                obj.org_department = None
+                obj.save()
+            formset.save_m2m()
+        else:
+            super().save_formset(request, form, formset, change)
+
+    @admin.display(description="Маршрут (роли → ответственные)")
     def steps_preview(self, obj):
-        steps = obj.steps.select_related("department").order_by("order")
-        if not steps:
-            return "—"
-        return " → ".join(str(s.department) for s in steps)
+        return _route_steps_preview(obj)
+
+
+@admin.register(AcknowledgmentRoute)
+class AcknowledgmentRouteAdmin(_AdminOnlyMixin, admin.ModelAdmin):
+    list_display = ("name", "steps_preview", "is_active")
+    list_filter = ("is_active",)
+    search_fields = ("name", "description")
+    fields = ("name", "description", "is_active")
+    inlines = [AckRouteStepInline]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(kind=ApprovalRoute.KIND_ACK)
+
+    def save_model(self, request, obj, form, change):
+        obj.kind = ApprovalRoute.KIND_ACK
+        super().save_model(request, obj, form, change)
+
+    def save_formset(self, request, form, formset, change):
+        if formset.model is ApprovalRouteStep:
+            instances = formset.save(commit=False)
+            for obj in formset.deleted_objects:
+                obj.delete()
+            for obj in instances:
+                obj.action_type = ApprovalRouteStep.ACTION_ACK
+                if obj.target_type != ApprovalRouteStep.TARGET_ROLE:
+                    obj.department = None
+                if obj.target_type != ApprovalRouteStep.TARGET_DEPARTMENT:
+                    obj.org_department = None
+                obj.save()
+            formset.save_m2m()
+        else:
+            super().save_formset(request, form, formset, change)
+
+    @admin.display(description="Маршрут (адресаты ознакомления)")
+    def steps_preview(self, obj):
+        return _route_steps_preview(obj)
 
 
 class ApprovalTaskInline(admin.TabularInline):
@@ -333,7 +490,7 @@ class ApprovalProcessAdmin(admin.ModelAdmin):
         return format_html(
             "<table style='width:100%;border-collapse:collapse;margin-top:4px;'>"
             "<thead><tr style='background:#f0f0f0;'>"
-            "<th style='padding:8px;border:1px solid #ccc;text-align:left;'>Отдел</th>"
+            "<th style='padding:8px;border:1px solid #ccc;text-align:left;'>Роль</th>"
             "<th style='padding:8px;border:1px solid #ccc;text-align:left;'>Подписант</th>"
             "<th style='padding:8px;border:1px solid #ccc;text-align:left;'>Дата</th>"
             "<th style='padding:8px;border:1px solid #ccc;text-align:left;'>Сертификат</th>"
@@ -447,6 +604,12 @@ class ApprovalProcessAdmin(admin.ModelAdmin):
         )
 
     def start_view(self, request):
+        mode = request.GET.get("mode") or request.POST.get("mode") or "approval"
+        if mode not in ("approval", "ack"):
+            mode = "approval"
+        kind = ApprovalRoute.KIND_ACK if mode == "ack" else ApprovalRoute.KIND_APPROVAL
+        action_label = "ознакомление" if mode == "ack" else "согласование"
+
         doc_type = (
             request.GET.get("doc_type")
             or request.POST.get("doc_type")
@@ -468,32 +631,41 @@ class ApprovalProcessAdmin(admin.ModelAdmin):
         documents = resolve_documents(doc_type, ids)
 
         if request.method == "POST":
-            form = StartApprovalForm(request.POST)
+            form = StartApprovalForm(request.POST, kind=kind)
             if form.is_valid():
                 route = form.cleaned_data["route"]
+                comment = form.cleaned_data.get("comment", "")
                 started, errors = 0, []
                 for document in documents:
                     try:
-                        ApprovalEngine.start(document, route, request.user)
+                        ApprovalEngine.start(document, route, request.user, comment=comment)
                         started += 1
                     except ValueError as e:
                         errors.append(f"{document}: {e}")
                 if started:
-                    self.message_user(request, f"Запущено согласований: {started}.")
+                    self.message_user(request, f"Запущено ({action_label}): {started}.")
                 for err in errors:
                     self.message_user(request, err, level=messages.ERROR)
                 return redirect("admin:approvals_approvalprocess_changelist")
         else:
-            form = StartApprovalForm()
+            form = StartApprovalForm(kind=kind)
+
+        routes_info = [
+            {"route": r, "preview": _route_steps_preview(r)}
+            for r in ApprovalRoute.objects.filter(is_active=True, kind=kind).order_by("name")
+        ]
 
         context = {
             **self.admin_site.each_context(request),
-            "title": f"Отправить на согласование — {cfg.label}",
+            "title": f"Отправить на {action_label} — {cfg.label}",
             "form": form,
             "documents": documents,
             "doc_type": doc_type,
             "doc_type_label": cfg.label,
             "ids": raw_ids,
+            "mode": mode,
+            "mode_label": action_label,
+            "routes_info": routes_info,
             "opts": self.model._meta,
         }
         return render(request, "admin/approvals/start_approval.html", context)
@@ -686,7 +858,7 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
     def cabinet_view(self, request):
         from django.db.models import Count
 
-        from blog.models import WorkAssignment
+        from blog.models import WorkAssignment, WorkAssignmentSubtask
 
         user = request.user
         pending = list(
@@ -724,6 +896,26 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             Q(control_status__isnull=True) | Q(control_status="in_progress")
         ).count()
 
+        my_subtasks = list(
+            WorkAssignmentSubtask.objects
+            .filter(executor=user)
+            .filter(Q(control_status__isnull=True) | Q(control_status="in_progress"))
+            .select_related("work_assignment", "work_assignment__post")
+            .order_by("work_assignment_id", "subtask_number", "pk")
+        )
+        subtask_groups, _cur = [], None
+        for st in my_subtasks:
+            if _cur is None or _cur["wa_id"] != st.work_assignment_id:
+                _cur = {
+                    "wa_id": st.work_assignment_id,
+                    "wa": st.work_assignment,
+                    "subtasks": [],
+                }
+                subtask_groups.append(_cur)
+            _cur["subtasks"].append(st)
+
+        assigned_items = _collect_responsible_items(user)
+
         notifications = list(Notification.objects.filter(recipient=user)[:50])
         unread_count = sum(1 for n in notifications if not n.is_read)
 
@@ -750,6 +942,9 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             "ack_tasks": ack_tasks,
             "fix_tasks": fix_tasks,
             "my_work": my_work,
+            "my_subtasks": my_subtasks,
+            "subtask_groups": subtask_groups,
+            "assigned_items": assigned_items,
             "issued_work": issued_work,
             "issued_work_active": issued_work_active,
             "my_docs": my_docs,
@@ -812,7 +1007,7 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             **self.admin_site.each_context(request),
             "title": "Отправить на доработку",
             "message": f"Отправить исправленный документ «{task_doc_context(task)['title']}» "
-                       f"на повторную проверку в отдел «{task.department}»?",
+                       f"на повторную проверку в роль «{task.department}»?",
             "action_url": request.path,
             "back_url": self._back_url(),
             "opts": self.model._meta,

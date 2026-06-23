@@ -86,7 +86,7 @@
     <p style="font-size:12px;font-weight:600;margin:0 0 6px;">{{ doc_type_label }}</p>
     <h3>{{ doc_title }}</h3>
     {% if doc_subtitle %}<p>{{ doc_subtitle }}</p>{% endif %}
-    <p>Отдел: <strong>{{ task.department }}</strong></p>
+    <p>Роль: <strong>{{ task.target_label }}</strong></p>
     {% if is_ack %}<p>Тип шага: <strong>Ознакомление</strong></p>{% endif %}
     <p>Маршрут: {{ task.process.route }}</p>
     <p>Файл для подписи: <strong id="sign-filename">{{ sign_filename }}</strong></p>

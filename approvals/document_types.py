@@ -269,9 +269,14 @@ def task_doc_context(task) -> dict:
     }
 
 
-def role_label_for_department(department) -> str:
-    if not department:
-        return "—"
-    if department.signature_role:
-        return department.get_signature_role_display()
-    return str(department)
+def signer_department_label(user) -> str:
+    """Отдел подписанта берём из его профиля (EmployeeProfile.org_department).
+
+    В ЛУ/ЛО пишем именно отдел текущего пользователя, который подписывает,
+    а не роль из маршрута.
+    """
+    if not user:
+        return ""
+    profile = getattr(user, "profile", None)
+    department = getattr(profile, "org_department", None)
+    return str(department) if department else ""
