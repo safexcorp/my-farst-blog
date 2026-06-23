@@ -1,3 +1,5 @@
+from django.contrib.auth import get_user_model
+
 from django.contrib.contenttypes.models import ContentType
 
 from django.db import transaction
@@ -14,7 +16,7 @@ from .document_types import (
 
     get_document_from_process,
 
-    role_label_for_department,
+    signer_department_label,
 
 )
 
@@ -57,6 +59,27 @@ def notify(recipient, title, *, text="", url="", kind=Notification.KIND_INFO):
 def _cabinet_url():
 
     return reverse("admin:approvals_cabinet")
+
+
+
+
+def _rkd_role_for_department(department):
+    """Подбираем код роли для подписи РКД (UniversalRKDSignature.role).
+
+    Роль РКД нужна только как ключ строки подписи в ГОСТ-листе РКД.
+    Берём из совпадения названия роли (Department.name) со справочником ролей;
+    если совпадения нет — используем код/усечённое имя роли, чтобы строки
+    разных ролей не перезаписывали друг друга.
+    """
+    from .models import SIGNATURE_ROLE_CHOICES
+
+    if not department:
+        return "agreed"
+    key_by_label = {label: key for key, label in SIGNATURE_ROLE_CHOICES}
+    name = (department.name or "").strip()
+    if name in key_by_label:
+        return key_by_label[name]
+    return (department.code or name or "agreed")[:20]
 
 
 
@@ -109,6 +132,56 @@ def resolve_assignee(department, on_date=None):
 
 
 
+def _step_target_label(step):
+    """Текстовое описание адресата шага для уведомлений/журнала."""
+    from .models import ApprovalRouteStep
+
+    if step.target_type == ApprovalRouteStep.TARGET_ALL:
+        return "все сотрудники"
+    if step.target_type == ApprovalRouteStep.TARGET_HEADS:
+        return "руководители отделов"
+    if step.target_type == ApprovalRouteStep.TARGET_DEPARTMENT:
+        return f"отдел «{step.org_department}»" if step.org_department_id else "отдел (не указан)"
+    return f"роль «{step.department}»" if step.department_id else "роль (не указана)"
+
+
+def _resolve_step_users(step, on_date=None):
+    """Список пользователей-адресатов шага.
+
+    - По роли: один ответственный с учётом отпусков (как раньше).
+    - Весь отдел / Все / Руководители: рассылка всем сразу (для ознакомления).
+    """
+    from .models import ApprovalRouteStep
+
+    on_date = on_date or timezone.localdate()
+    User = get_user_model()
+
+    if step.target_type == ApprovalRouteStep.TARGET_ALL:
+        return list(User.objects.filter(is_active=True).order_by("last_name", "username"))
+
+    if step.target_type == ApprovalRouteStep.TARGET_HEADS:
+        return list(
+            User.objects.filter(is_active=True, profile__is_head=True)
+            .order_by("last_name", "username")
+        )
+
+    if step.target_type == ApprovalRouteStep.TARGET_DEPARTMENT:
+        if not step.org_department_id:
+            return []
+        return list(
+            User.objects.filter(is_active=True, profile__org_department_id=step.org_department_id)
+            .order_by("last_name", "username")
+        )
+
+    # TARGET_ROLE
+    if not step.department_id:
+        return []
+    assignee = resolve_assignee(step.department, on_date)
+    return [assignee] if assignee else []
+
+
+
+
 
 def _document_label(document) -> str:
 
@@ -128,7 +201,7 @@ class ApprovalEngine:
 
     @transaction.atomic
 
-    def start(document, route, user):
+    def start(document, route, user, comment=""):
 
         cfg = get_config_for_document(document)
 
@@ -158,19 +231,19 @@ class ApprovalEngine:
 
 
 
-        empty_depts = []
+        empty_targets = []
 
-        for step in route.steps.select_related("department").order_by("order"):
+        for step in route.steps.order_by("order"):
 
-            if not DepartmentMember.objects.filter(department=step.department).exists():
+            if not _resolve_step_users(step):
 
-                empty_depts.append(str(step.department))
+                empty_targets.append(step.target_label)
 
-        if empty_depts:
+        if empty_targets:
 
             raise ValueError(
 
-                f"В отделах нет сотрудников, задача некому назначить: {', '.join(empty_depts)}."
+                f"Для шагов маршрута не найдено адресатов: {', '.join(empty_targets)}."
 
             )
 
@@ -202,7 +275,7 @@ class ApprovalEngine:
 
         process = ApprovalProcess.objects.create(**process_kwargs)
 
-        ApprovalEngine._create_review_task(process, first_step)
+        ApprovalEngine._create_step_tasks(process, first_step, launch_comment=comment)
 
 
 
@@ -232,63 +305,63 @@ class ApprovalEngine:
 
     @staticmethod
 
-    def _create_review_task(process, step, *, is_recheck=False, parent=None):
+    def _create_step_tasks(process, step, *, is_recheck=False, parent=None, launch_comment=""):
+        """Создаёт задачи для шага маршрута.
 
-        assignee = resolve_assignee(step.department)
-
+        Для адресата «по роли» — одна задача (с учётом отпусков).
+        Для «весь отдел / все / руководители» — задачи всем сразу (параллельно).
+        """
         process.current_order = step.order
-
         process.save(update_fields=["current_order"])
 
-
-
         document = get_document_from_process(process)
-
         cfg = get_config_for_document(document)
-
         doc_label = _document_label(document)
 
-
-
-        task = ApprovalTask.objects.create(
-
-            process=process,
-
-            step=step,
-
-            department=step.department,
-
-            kind=ApprovalTask.KIND_REVIEW,
-
-            assigned_to=assignee,
-
-            is_recheck=is_recheck,
-
-            parent=parent,
-
-        )
-
         is_sign = step.action_type == step.ACTION_SIGN
-
         prefix = "Повторно: " if is_recheck else ""
-
         action = "на согласование / подпись" if is_sign else "на ознакомление"
+        target_label = _step_target_label(step)
+        note_text = f"«{doc_label}» — {target_label}."
+        if launch_comment.strip():
+            note_text += f" Комментарий: {launch_comment.strip()}"
 
-        notify(
+        seen, first_task = set(), None
+        for assignee in _resolve_step_users(step):
+            if assignee is None or assignee.pk in seen:
+                continue
+            seen.add(assignee.pk)
+            task = ApprovalTask.objects.create(
+                process=process,
+                step=step,
+                department=step.department,
+                kind=ApprovalTask.KIND_REVIEW,
+                assigned_to=assignee,
+                is_recheck=is_recheck,
+                parent=parent,
+            )
+            first_task = first_task or task
+            notify(
+                assignee,
+                f"{prefix}{cfg.label} {action}",
+                text=note_text,
+                url=_cabinet_url(),
+                kind=Notification.KIND_SIGN if is_sign else Notification.KIND_ACK,
+            )
 
-            assignee,
-
-            f"{prefix}{cfg.label} {action}",
-
-            text=f"«{doc_label}» — отдел «{step.department}».",
-
-            url=_cabinet_url(),
-
-            kind=Notification.KIND_SIGN if is_sign else Notification.KIND_ACK,
-
-        )
-
-        return task
+        if first_task is None:
+            # Никого не удалось определить — создаём незанятую задачу,
+            # чтобы шаг был виден администратору, а не «пропал» молча.
+            first_task = ApprovalTask.objects.create(
+                process=process,
+                step=step,
+                department=step.department,
+                kind=ApprovalTask.KIND_REVIEW,
+                assigned_to=None,
+                is_recheck=is_recheck,
+                parent=parent,
+            )
+        return first_task
 
 
 
@@ -330,6 +403,34 @@ class ApprovalEngine:
 
 
 
+        siblings_pending = (
+
+            ApprovalTask.objects
+
+            .filter(
+
+                process=process,
+
+                step=task.step,
+
+                kind=ApprovalTask.KIND_REVIEW,
+
+                status=ApprovalTask.STATUS_PENDING,
+
+            )
+
+            .exclude(pk=task.pk)
+
+            .exists()
+
+        )
+
+        if siblings_pending:
+
+            return process
+
+
+
         next_step = (
 
             process.route.steps
@@ -344,7 +445,7 @@ class ApprovalEngine:
 
         if next_step:
 
-            ApprovalEngine._create_review_task(process, next_step)
+            ApprovalEngine._create_step_tasks(process, next_step)
 
         else:
 
@@ -480,7 +581,7 @@ class ApprovalEngine:
 
 
 
-        ApprovalEngine._create_review_task(
+        ApprovalEngine._create_step_tasks(
 
             fix_task.process, fix_task.step, is_recheck=True, parent=fix_task
 
@@ -556,9 +657,7 @@ class ApprovalEngine:
 
         cert_issuer = cert_info.get("issuer_cn", "") if cert_info else ""
 
-        role_label = role_label_for_department(task.department)
-
-        position = str(task.department) if task.department else role_label
+        position = signer_department_label(user)
 
 
 
@@ -568,7 +667,7 @@ class ApprovalEngine:
 
 
 
-            role = (task.department and task.department.signature_role) or "agreed"
+            role = _rkd_role_for_department(task.department)
 
             UniversalRKDSignature.objects.update_or_create(
 
@@ -610,9 +709,9 @@ class ApprovalEngine:
 
                     "department": task.department,
 
-                    "position": role_label,
+                    "position": position,
 
-                    "role_label": role_label,
+                    "role_label": str(task.department) if task.department else "",
 
                     "signed_by": user,
 
@@ -656,7 +755,7 @@ class ApprovalEngine:
 
         cert_issuer = cert_info.get("issuer_cn", "") if cert_info else ""
 
-        position = str(task.department) if task.department else ""
+        position = signer_department_label(user)
 
 
 

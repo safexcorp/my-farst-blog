@@ -106,7 +106,7 @@ from .services import WorkAssignmentService
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
-from shared_repository.models import EmployeeProfile
+from shared_repository.models import Department, EmployeeProfile
 
 
 def _inject_rkd_category_json(extra_context):
@@ -1381,12 +1381,18 @@ class UniversalRKDAdmin(admin.ModelAdmin):
     change_form_template = "admin/blog/universal_rkd_category_change_form.html"
     change_list_template = "admin/blog/universalrkd/change_list.html"
     form = UniversalRKDForm
-    actions = ["send_to_approval_action"]
+    actions = ["send_to_approval_action", "send_to_acknowledgment_action"]
 
     @admin.action(description="Отправить на согласование")
     def send_to_approval_action(self, request, queryset):
         ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
-        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=rkd&ids={ids}"
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=rkd&mode=approval&ids={ids}"
+        return redirect(url)
+
+    @admin.action(description="Отправить на ознакомление")
+    def send_to_acknowledgment_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=rkd&mode=ack&ids={ids}"
         return redirect(url)
 
     list_display = (
@@ -2400,7 +2406,7 @@ class CustomerAdmin(admin.ModelAdmin):
     # Объедини фильтры в один список
     list_filter = ('name_of_company', 'revenue_for_last_year')
     list_filter = (RevenueRangeFilter,)
-    search_fields = ('name_of_company__icontains', 'address__icontains')  # Поиск по этим полям
+    search_fields = ('name_of_company', 'address', 'name_of_company_ci')
 
     def support_tickets_link(self, obj):
         """Отображение ссылки на обращения контрагента"""
@@ -2418,8 +2424,9 @@ class CustomerAdmin(admin.ModelAdmin):
 class SupportTicketInline(admin.TabularInline):
     model = SupportTicket
     extra = 0
-    fields = ('problem', 'status', 'created_date')
+    fields = ('created_date', 'category', 'problem', 'status', 'intake_channel')
     readonly_fields = ('created_date',)
+    show_change_link = True
 
 inlines = [SupportTicketInline]
 
@@ -3177,6 +3184,8 @@ class TicketCommentInline(admin.TabularInline):
     extra = 1
     fields = ['author', 'text', 'file', 'created_date']
     readonly_fields = ['created_date']
+    verbose_name = 'Запись взаимодействия'
+    verbose_name_plural = 'Взаимодействие по обработке обращений'
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('author')
@@ -3186,30 +3195,38 @@ class TicketCommentInline(admin.TabularInline):
 @admin.register(SupportTicket)
 class SupportTicketAdmin(admin.ModelAdmin):
     form = SupportTicketForm
+    autocomplete_fields = ('customer', 'product', 'assigned_to')
     list_display = [
         'id', 'created_date', 'customer', 'product', 'get_category_display',
-        'truncated_problem', 'status_badge', 'status_changed_date',
-        'created_by', 'assigned_to', 'custom_actions'
+        'get_intake_channel_display', 'truncated_problem', 'status_badge',
+        'claim_type_display', 'status_changed_date',
+        'created_by', 'assigned_to', 'custom_actions',
     ]
     list_filter = [
-        'status', 'category', 'created_date', 'customer',
-        'product', 'assigned_to'
+        'status', 'category', 'intake_channel', 'claim_type',
+        'created_date', 'customer', 'product', 'assigned_to',
     ]
     search_fields = [
-        'problem', 'description', 'customer__name_of_company',
-        'id', 'created_by__username'
+        'problem', 'description', 'resolution', 'customer__name_of_company',
+        'id', 'created_by__username',
     ]
-    readonly_fields = ['created_date', 'status_changed_date', 'created_by']
+    readonly_fields = ['status_changed_date', 'created_by']
     inlines = [TicketCommentInline]
     date_hierarchy = 'created_date'
     list_per_page = 25
 
     fieldsets = (
-        ('Основная информация', {
-            'fields': ('customer', 'product', 'category', 'problem', 'description')
+        ('Обращение', {
+            'fields': (
+                'customer', 'product', 'category', 'problem', 'description',
+                'created_date', 'intake_channel',
+            ),
         }),
-        ('Статус и назначение', {
-            'fields': ('status', 'assigned_to', 'created_by', 'created_date', 'status_changed_date')
+        ('Обработка', {
+            'fields': (
+                'status', 'resolution', 'claim_type', 'claim_attachment',
+                'assigned_to', 'created_by', 'status_changed_date',
+            ),
         }),
     )
 
@@ -3233,6 +3250,12 @@ class SupportTicketAdmin(admin.ModelAdmin):
 
     status_badge.short_description = 'Статус'
 
+    @admin.display(description='Претензия', ordering='claim_type')
+    def claim_type_display(self, obj):
+        if not obj.claim_type:
+            return '—'
+        return obj.get_claim_type_display()
+
     def custom_actions(self, obj):
         view_url = reverse('admin:crm_supportticket_change', args=[obj.id])
         return format_html(
@@ -3242,9 +3265,16 @@ class SupportTicketAdmin(admin.ModelAdmin):
 
     custom_actions.short_description = 'Действия'
 
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        initial.setdefault('created_date', timezone.localdate())
+        return initial
+
     def save_model(self, request, obj, form, change):
-        if not obj.pk:
+        if not change:
             obj.created_by = request.user
+            if not obj.created_date:
+                obj.created_date = timezone.localdate()
         super().save_model(request, obj, form, change)
 
     def get_queryset(self, request):
@@ -3263,7 +3293,7 @@ class TicketCommentAdmin(admin.ModelAdmin):
     def truncated_text(self, obj):
         return obj.text[:100] + '...' if len(obj.text) > 100 else obj.text
 
-    truncated_text.short_description = 'Комментарий'
+    truncated_text.short_description = 'Текст'
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('ticket', 'author')
@@ -4834,12 +4864,18 @@ class IndependentDocumentAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(SharedRepository)
 class SharedRepositoryAdmin(admin.ModelAdmin):
-    actions = ["send_to_approval_action"]
+    actions = ["send_to_approval_action", "send_to_acknowledgment_action"]
 
     @admin.action(description="Отправить на согласование")
     def send_to_approval_action(self, request, queryset):
         ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
-        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=independent&ids={ids}"
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=independent&mode=approval&ids={ids}"
+        return redirect(url)
+
+    @admin.action(description="Отправить на ознакомление")
+    def send_to_acknowledgment_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=independent&mode=ack&ids={ids}"
         return redirect(url)
 
     list_display = [
@@ -5483,12 +5519,18 @@ class QMSDocumentAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(QMSDocument)
 class QMSDocumentAdmin(admin.ModelAdmin):
-    actions = ["send_to_approval_action"]
+    actions = ["send_to_approval_action", "send_to_acknowledgment_action"]
 
     @admin.action(description="Отправить на согласование")
     def send_to_approval_action(self, request, queryset):
         ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
-        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=qms&ids={ids}"
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=qms&mode=approval&ids={ids}"
+        return redirect(url)
+
+    @admin.action(description="Отправить на ознакомление")
+    def send_to_acknowledgment_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=qms&mode=ack&ids={ids}"
         return redirect(url)
 
     list_display = [
@@ -5849,12 +5891,18 @@ class AdministrativeOrderAcceptSignatureInline(admin.TabularInline):
 
 @admin.register(AdministrativeOrder)
 class AdministrativeOrderAdmin(admin.ModelAdmin):
-    actions = ["send_to_approval_action"]
+    actions = ["send_to_approval_action", "send_to_acknowledgment_action"]
 
     @admin.action(description="Отправить на согласование")
     def send_to_approval_action(self, request, queryset):
         ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
-        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=order&ids={ids}"
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=order&mode=approval&ids={ids}"
+        return redirect(url)
+
+    @admin.action(description="Отправить на ознакомление")
+    def send_to_acknowledgment_action(self, request, queryset):
+        ids = ",".join(str(pk) for pk in queryset.values_list("pk", flat=True))
+        url = reverse("admin:approvals_approvalprocess_start") + f"?doc_type=order&mode=ack&ids={ids}"
         return redirect(url)
 
     list_display = [
@@ -6575,15 +6623,29 @@ class EmployeeProfileInline(admin.StackedInline):
             'fields': ('patronymic', 'inn', 'phone')
         }),
         ('Рабочие данные', {
-            'fields': ('department', 'position', 'supervisor', 'roles_responsibilities')
+            'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities')
         }),
     )
+
+
+@admin.register(Department)
+class DepartmentAdmin(admin.ModelAdmin):
+    """Справочник отделов. Скрыт из бокового меню — заполняется через «плюсик»
+    в карточке пользователя (поле «Отдел»)."""
+    list_display = ('name', 'is_active')
+    search_fields = ('name',)
+
+    def get_model_perms(self, request):
+        return {}
+
 
 admin.site.unregister(User)
 
 @admin.register(User)
 class CustomUserAdmin(BaseUserAdmin):
     inlines = [EmployeeProfileInline]
+
+    list_filter = BaseUserAdmin.list_filter + ('profile__org_department',)
 
     list_display = (
         'username',
@@ -6592,10 +6654,15 @@ class CustomUserAdmin(BaseUserAdmin):
         'get_inn',
         'get_phone',
         'get_department',
+        'get_is_head',
         'get_position',
         'get_supervisor',
         'is_active',
     )
+
+    @admin.display(description='Руководитель', boolean=True, ordering='profile__is_head')
+    def get_is_head(self, obj):
+        return obj.profile.is_head if hasattr(obj, 'profile') else False
 
     def get_patronymic(self, obj):
         return obj.profile.patronymic if hasattr(obj, 'profile') else ''
@@ -6616,10 +6683,12 @@ class CustomUserAdmin(BaseUserAdmin):
     get_phone.admin_order_field = 'profile__phone'
 
     def get_department(self, obj):
-        return obj.profile.department if hasattr(obj, 'profile') else ''
+        if hasattr(obj, 'profile') and obj.profile.org_department:
+            return obj.profile.org_department.name
+        return ''
 
-    get_department.short_description = 'Отдел'
-    get_department.admin_order_field = 'profile__department'
+    get_department.short_description = 'Структурное подразделение (Отдел)'
+    get_department.admin_order_field = 'profile__org_department__name'
 
     def get_position(self, obj):
         return obj.profile.position if hasattr(obj, 'profile') else ''
