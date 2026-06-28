@@ -900,19 +900,15 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             WorkAssignmentSubtask.objects
             .filter(executor=user)
             .filter(Q(control_status__isnull=True) | Q(control_status="in_progress"))
+            # Если основная задача закрыта (есть финальный статус) — её подзадачи
+            # считаем завершёнными и не показываем (никакой просрочки).
+            .filter(
+                Q(work_assignment__control_status__isnull=True)
+                | Q(work_assignment__control_status="in_progress")
+            )
             .select_related("work_assignment", "work_assignment__post")
             .order_by("work_assignment_id", "subtask_number", "pk")
         )
-        subtask_groups, _cur = [], None
-        for st in my_subtasks:
-            if _cur is None or _cur["wa_id"] != st.work_assignment_id:
-                _cur = {
-                    "wa_id": st.work_assignment_id,
-                    "wa": st.work_assignment,
-                    "subtasks": [],
-                }
-                subtask_groups.append(_cur)
-            _cur["subtasks"].append(st)
 
         assigned_items = _collect_responsible_items(user)
 
@@ -943,7 +939,6 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             "fix_tasks": fix_tasks,
             "my_work": my_work,
             "my_subtasks": my_subtasks,
-            "subtask_groups": subtask_groups,
             "assigned_items": assigned_items,
             "issued_work": issued_work,
             "issued_work_active": issued_work_active,

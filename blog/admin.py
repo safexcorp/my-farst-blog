@@ -105,6 +105,7 @@ from .services import WorkAssignmentService
 
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.forms import UserChangeForm
 from django.contrib.auth.models import User
 from shared_repository.models import Department, EmployeeProfile
 
@@ -1406,6 +1407,7 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         "display_lu_lo_sheets",
         "quantity",
         "note",
+        "rkd_planned_review_date",
         "rkd_planned_review_warning",
     )
     list_display_links = ("name",)
@@ -1450,7 +1452,16 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         return _admin_lu_lo_sheets_column_html(obj)
 
     @admin.display(
-        description="Оповещение о пересмотре",
+        description="Дата планового пересмотра",
+        ordering="validity_date",
+    )
+    def rkd_planned_review_date(self, obj):
+        if not obj.validity_date:
+            return "—"
+        return obj.validity_date.strftime("%d.%m.%Y")
+
+    @admin.display(
+        description="Срок пересмотра истекает",
         ordering="validity_date",
     )
     def rkd_planned_review_warning(self, obj):
@@ -4007,7 +4018,7 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
         "target_deadline",
         "task_preview",
         "criteria_preview",
-        "control_status_colored",
+        "control_status",
         "overdue_flag",
         "comment_preview",
     )
@@ -4018,7 +4029,6 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
         "target_deadline",
         "task_preview",
         "criteria_preview",
-        "control_status_colored",
         "overdue_flag",
         "comment_preview",
     )
@@ -6613,19 +6623,49 @@ class DocumentHistoryAdmin(admin.ModelAdmin):
         return False
 
 #Модель пользовательского разделе с доп информацией
-class EmployeeProfileInline(admin.StackedInline):
-    model = EmployeeProfile
-    fk_name = 'user'
-    can_delete = False
-    verbose_name_plural = 'Дополнительная информация'
-    fieldsets = (
-        ('Личные данные', {
-            'fields': ('patronymic', 'inn', 'phone')
-        }),
-        ('Рабочие данные', {
-            'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities')
-        }),
+class UserWithProfileForm(UserChangeForm):
+    """Поля профиля сотрудника (EmployeeProfile) """
+    patronymic = forms.CharField(label='Отчество', max_length=100, required=False)
+    phone = forms.CharField(label='Телефон', max_length=20, required=False)
+    org_department = forms.ModelChoiceField(
+        label='Структурное подразделение (Отдел)',
+        queryset=Department.objects.all(),
+        required=False,
     )
+    is_head = forms.BooleanField(label='Руководитель отдела', required=False)
+    position = forms.CharField(label='Должность', max_length=100, required=False)
+    supervisor = forms.ModelChoiceField(
+        label='Непосредственное подчинение',
+        queryset=User.objects.all(),
+        required=False,
+    )
+    roles_responsibilities = forms.CharField(
+        label='Роли / обязанности',
+        widget=forms.Textarea(attrs={'rows': 3}),
+        required=False,
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        profile = getattr(self.instance, 'profile', None) if self.instance.pk else None
+        if profile:
+            self.fields['patronymic'].initial = profile.patronymic
+            self.fields['phone'].initial = profile.phone
+            self.fields['org_department'].initial = profile.org_department_id
+            self.fields['is_head'].initial = profile.is_head
+            self.fields['position'].initial = profile.position
+            self.fields['supervisor'].initial = profile.supervisor_id
+            self.fields['roles_responsibilities'].initial = profile.roles_responsibilities
+
+        # Кнопка «+» для добавления нового подразделения прямо из карточки.
+        dep_rel = EmployeeProfile._meta.get_field('org_department').remote_field
+        self.fields['org_department'].widget = RelatedFieldWidgetWrapper(
+            self.fields['org_department'].widget,
+            dep_rel,
+            admin.site,
+            can_add_related=True,
+            can_change_related=True,
+        )
 
 
 @admin.register(Department)
@@ -6643,7 +6683,43 @@ admin.site.unregister(User)
 
 @admin.register(User)
 class CustomUserAdmin(BaseUserAdmin):
-    inlines = [EmployeeProfileInline]
+    form = UserWithProfileForm
+
+    _PROFILE_FIELDS = (
+        'patronymic', 'phone', 'org_department',
+        'is_head', 'position', 'supervisor', 'roles_responsibilities',
+    )
+
+    fieldsets = (
+        (None, {'fields': ('username', 'password')}),
+        ('Персональные данные', {
+            'fields': ('first_name', 'last_name', 'patronymic', 'phone', 'email'),
+        }),
+        ('Профиль сотрудника', {
+            'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities'),
+        }),
+        ('Права доступа', {
+            'classes': ('collapse',),
+            'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions'),
+        }),
+        ('Важные даты', {
+            'classes': ('collapse',),
+            'fields': ('last_login', 'date_joined'),
+        }),
+    )
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if any(f in form.cleaned_data for f in self._PROFILE_FIELDS):
+            profile, _ = EmployeeProfile.objects.get_or_create(user=obj)
+            profile.patronymic = form.cleaned_data.get('patronymic', '')
+            profile.phone = form.cleaned_data.get('phone', '')
+            profile.org_department = form.cleaned_data.get('org_department')
+            profile.is_head = form.cleaned_data.get('is_head', False)
+            profile.position = form.cleaned_data.get('position', '')
+            profile.supervisor = form.cleaned_data.get('supervisor')
+            profile.roles_responsibilities = form.cleaned_data.get('roles_responsibilities', '')
+            profile.save()
 
     list_filter = BaseUserAdmin.list_filter + ('profile__org_department',)
 
@@ -6651,7 +6727,7 @@ class CustomUserAdmin(BaseUserAdmin):
         'username',
         'get_full_name',
         'get_patronymic',
-        'get_inn',
+        'email',
         'get_phone',
         'get_department',
         'get_is_head',
@@ -6659,6 +6735,11 @@ class CustomUserAdmin(BaseUserAdmin):
         'get_supervisor',
         'is_active',
     )
+
+    @admin.display(description='Фамилия. Имя', ordering='last_name')
+    def get_full_name(self, obj):
+        name = f"{obj.last_name} {obj.first_name}".strip()
+        return name or obj.username
 
     @admin.display(description='Руководитель', boolean=True, ordering='profile__is_head')
     def get_is_head(self, obj):
@@ -6669,12 +6750,6 @@ class CustomUserAdmin(BaseUserAdmin):
 
     get_patronymic.short_description = 'Отчество'
     get_patronymic.admin_order_field = 'profile__patronymic'
-
-    def get_inn(self, obj):
-        return obj.profile.inn if hasattr(obj, 'profile') else ''
-
-    get_inn.short_description = 'ИНН'
-    get_inn.admin_order_field = 'profile__inn'
 
     def get_phone(self, obj):
         return obj.profile.phone if hasattr(obj, 'profile') else ''

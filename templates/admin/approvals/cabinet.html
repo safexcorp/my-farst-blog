@@ -105,6 +105,19 @@
     background:#417690; color:#fff; border-radius:999px;
     padding:1px 9px; font-size:11px; font-weight:700;
   }
+  details.cab-group { margin-bottom:10px; }
+  details.cab-group > summary {
+    cursor:pointer; user-select:none; list-style:none;
+    margin-bottom:0; padding-bottom:8px;
+  }
+  details.cab-group > summary::-webkit-details-marker { display:none; }
+  details.cab-group > summary::after {
+    content:"▸"; margin-left:auto; font-size:13px; opacity:.7;
+    transition:transform .15s;
+  }
+  details.cab-group[open] > summary::after { transform:rotate(90deg); }
+  details.cab-group > summary:hover { color:var(--body-fg,#9ec5d8); }
+  .cab-group-body { padding-top:12px; }
   .cab-group-sub {
     font-size:12px; font-weight:600; text-transform:none; letter-spacing:0;
     color:var(--body-quiet-color,#aaa); margin-left:auto;
@@ -120,19 +133,49 @@
   .cab-st-group {
     margin-bottom:18px; border:1px solid var(--hairline-color,#444);
     border-radius:12px; overflow:hidden;
-    border-left:4px solid #5c6bc0;
+    border-left:4px solid #417690;
   }
-  .cab-st-parent { padding:12px 16px; background:rgba(92,107,192,.12); }
+  .cab-st-parent { padding:12px 16px; background:rgba(65,118,144,.12); }
   .cab-st-parent-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .cab-st-code { font-size:15px; font-weight:800; color:#5c6bc0; letter-spacing:.02em; }
+  .cab-st-code { font-size:15px; font-weight:800; color:var(--link-fg,#417690); letter-spacing:.02em; }
   .cab-st-pill {
-    background:#5c6bc0; color:#fff; border-radius:999px;
+    background:#417690; color:#fff; border-radius:999px;
     padding:2px 10px; font-size:11px; font-weight:700;
   }
   .cab-st-parent-task {
     margin-top:6px; font-size:12px; line-height:1.4;
     color:var(--body-quiet-color,#9a9a9a);
   }
+  .cab-st-parent-meta { margin-top:6px; font-size:12px; color:var(--body-quiet-color,#999); }
+  .cab-section { margin-bottom:8px; }
+  .cab-section + .cab-section { margin-top:22px; }
+  .cab-section > summary.cab-section-title {
+    font-size:13px; font-weight:800; letter-spacing:.03em;
+    color:var(--body-fg,#ddd); margin:6px 0 14px;
+    padding-bottom:6px; border-bottom:2px solid #417690;
+    display:flex; align-items:center; gap:8px;
+    cursor:pointer; user-select:none; list-style:none;
+  }
+  .cab-section > summary.cab-section-title::-webkit-details-marker { display:none; }
+  .cab-section > summary.cab-section-title::after {
+    content:"▾"; margin-left:auto; opacity:.7; font-size:12px; transition:transform .15s;
+  }
+  .cab-section:not([open]) > summary.cab-section-title::after { transform:rotate(-90deg); }
+  .cab-section-count {
+    background:#417690; color:#fff; border-radius:999px;
+    padding:1px 9px; font-size:11px; font-weight:700;
+  }
+  details.cab-subtasks > summary {
+    cursor:pointer; user-select:none; list-style:none;
+    padding:9px 16px; font-size:12px; font-weight:700; color:var(--link-fg,#417690);
+    display:flex; align-items:center; gap:6px;
+    border-top:1px dashed var(--hairline-color,#444);
+  }
+  details.cab-subtasks > summary::-webkit-details-marker { display:none; }
+  details.cab-subtasks > summary::after {
+    content:"▸"; margin-left:6px; opacity:.7; transition:transform .15s;
+  }
+  details.cab-subtasks[open] > summary::after { transform:rotate(90deg); }
   .cab-st-caption {
     font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
     color:var(--body-quiet-color,#888); padding:10px 16px 4px;
@@ -320,25 +363,27 @@
   <div class="cab-panel" data-panel="assigned">
     {% regroup assigned_items by model_label as assigned_groups %}
     {% for group in assigned_groups %}
-    <div class="cab-group">
-      <div class="cab-group-head">
+    <details class="cab-group">
+      <summary class="cab-group-head">
         <span class="cab-group-icon" aria-hidden="true">📦</span>
         {{ group.grouper }}
         <span class="cab-group-count">{{ group.list|length }}</span>
-      </div>
-      {% for it in group.list %}
-      <div class="cab-card cab-card--compact">
-        <div class="cab-info">
-          <div class="title">{{ it.title }}</div>
+      </summary>
+      <div class="cab-group-body">
+        {% for it in group.list %}
+        <div class="cab-card cab-card--compact">
+          <div class="cab-info">
+            <div class="title">{{ it.title }}</div>
+          </div>
+          <div class="cab-actions">
+            {% if it.admin_url %}
+            <a class="btn btn-gray btn-sm" href="{{ it.admin_url }}">Открыть</a>
+            {% endif %}
+          </div>
         </div>
-        <div class="cab-actions">
-          {% if it.admin_url %}
-          <a class="btn btn-gray btn-sm" href="{{ it.admin_url }}">Открыть</a>
-          {% endif %}
-        </div>
+        {% endfor %}
       </div>
-      {% endfor %}
-    </div>
+    </details>
     {% empty %}
     <div class="cab-empty">Нет объектов, где вы — текущий ответственный.</div>
     {% endfor %}
@@ -348,13 +393,24 @@
     {% for wa in my_work %}
     <div class="cab-card">
       <div class="cab-info">
-        <div class="title">{{ wa.name|default:wa }}</div>
+        <div class="title">
+          {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
+        </div>
+        {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
         <div class="meta">
-          {% if wa.post %}{{ wa.post }} · {% endif %}
+          {% if wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
+          {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
+          {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
+          {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+          {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
+          {% if wa.post %}{{ wa.post }}{% endif %}
+        </div>
+        <div class="meta">
           Срок:
-          <span {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>
-            {{ wa.target_deadline|date:"d.m.Y" }}{% if wa.target_deadline < today %} (просрочено){% endif %}
-          </span>
+          <strong {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>
+            {{ wa.target_deadline|date:"d.m.Y" }}
+          </strong>
+          {% if wa.target_deadline < today %} (просрочено){% endif %}
         </div>
       </div>
       <div class="cab-actions">
@@ -362,31 +418,29 @@
       </div>
     </div>
     {% empty %}
-    <div class="cab-empty">Нет активных заданий, назначенных вам.</div>
+    <div class="cab-empty">Нет активных задач, где вы исполнитель.</div>
     {% endfor %}
   </div>
 
   <div class="cab-panel" data-panel="subtasks">
+    {% regroup my_subtasks by work_assignment as subtask_groups %}
     {% for group in subtask_groups %}
     <div class="cab-st-group">
       <div class="cab-st-parent">
         <div class="cab-st-parent-head">
           <span class="cab-st-code">
-            📋 {% if group.wa %}{{ group.wa.wa_full_code|default:"Рабочее задание" }}{% else %}Без рабочего задания{% endif %}
+            📋 {{ group.grouper.wa_full_code|default:group.grouper.name|default:"Рабочее задание" }}
           </span>
-          <span class="cab-st-pill">Подзадач: {{ group.subtasks|length }}</span>
-          {% if group.wa %}
+          <span class="cab-st-pill">Мои подзадачи: {{ group.list|length }}</span>
           <a class="btn btn-ghost btn-sm" style="margin-left:auto;"
-             href="{% url 'admin:blog_workassignment_change' group.wa.pk %}">Открыть РЗ</a>
-          {% endif %}
+             href="{% url 'admin:blog_workassignment_change' group.grouper.pk %}">Открыть РЗ</a>
         </div>
-        {% if group.wa.task %}
-        <div class="cab-st-parent-task clamp2" title="{{ group.wa.task }}">{{ group.wa.task }}</div>
+        {% if group.grouper.task %}
+        <div class="cab-st-parent-task clamp2" title="{{ group.grouper.task }}">{{ group.grouper.task }}</div>
         {% endif %}
       </div>
-      <div class="cab-st-caption">Подзадачи ↓</div>
       <div class="cab-st-children">
-        {% for st in group.subtasks %}
+        {% for st in group.list %}
         <div class="cab-st-child">
           <div class="cab-info">
             <div class="task-text clamp2" title="{{ st.task }}">
@@ -408,7 +462,7 @@
       </div>
     </div>
     {% empty %}
-    <div class="cab-empty">Нет активных подзадач, назначенных вам.</div>
+    <div class="cab-empty">У вас нет активных подзадач.</div>
     {% endfor %}
   </div>
 

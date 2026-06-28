@@ -1329,12 +1329,6 @@ class EmployeeProfile(models.Model):
         verbose_name='Пользователь'
     )
     patronymic = models.CharField('Отчество', max_length=100, blank=True)
-    inn = models.CharField(
-        max_length=12,
-        blank=True,
-        null=True,
-        verbose_name='ИНН',
-    )
     phone = models.CharField('Телефон', max_length=20, blank=True)
     org_department = models.ForeignKey(
         'Department',
