@@ -11,7 +11,7 @@
     display:flex; flex-direction:column; gap:0;
   }
   .cab-nav-row {
-    display:grid; grid-template-columns:108px 1fr; gap:12px 16px;
+    display:grid; grid-template-columns:130px 1fr; gap:12px 26px;
     align-items:center; padding:10px 0;
   }
   .cab-nav-row + .cab-nav-row { border-top:1px solid rgba(121,174,200,.12); }
@@ -82,6 +82,7 @@
   .pill-gray { background:#9E9E9E; } .pill-orange { background:#FB8C00; }
   .pill-purple { background:#9C27B0; }
   .pill-type { background:#607D8B; }
+  .pill-amber { background:#FFA000; } .pill-cyan { background:#00ACC1; }
 
   .cab-actions { display:flex; gap:8px; flex-wrap:wrap; }
   .btn { padding:7px 15px; border-radius:6px; color:#fff; font-weight:600; font-size:13px; text-decoration:none; border:none; cursor:pointer; }
@@ -92,6 +93,70 @@
   .cab-wrap a.btn:link, .cab-wrap a.btn:visited { color:#fff; }
   .cab-wrap a.btn-ghost:link, .cab-wrap a.btn-ghost:visited { color:#417690; }
   .cab-wrap a.btn-ghost { border-color:#417690; }
+
+  /* Фильтр по статусам и секции внутри «Мои задачи» / «Выданные задачи» */
+  .cab-wfilter { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px; }
+  .cab-wfilter button {
+    border:1px solid rgba(121,174,200,.45); background:transparent;
+    color:var(--body-fg); border-radius:999px; padding:5px 14px;
+    font-size:12px; font-weight:600; cursor:pointer;
+  }
+  .cab-wfilter button.active { background:#417690; color:#fff; border-color:#417690; }
+  .cab-wstatus-section { margin-bottom:14px; }
+  .cab-wstatus-head {
+    display:flex; align-items:center; gap:10px; margin:0; padding:10px 14px;
+    border-radius:9px; border:1px solid rgba(128,128,128,.20);
+    background:rgba(128,128,128,.10);
+    font-size:13px; font-weight:700; color:var(--body-fg);
+  }
+  details.cab-wstatus-section > summary.cab-wstatus-head {
+    cursor:pointer; user-select:none; list-style:none;
+    transition:background .12s;
+  }
+  details.cab-wstatus-section > summary.cab-wstatus-head:hover {
+    background:rgba(128,128,128,.18);
+  }
+  details.cab-wstatus-section > summary::-webkit-details-marker { display:none; }
+  .cab-wstatus-head .cab-group-count { font-size:11px; }
+  details.cab-wstatus-section > summary.cab-wstatus-head::after {
+    content:"▾"; margin-left:auto; font-size:12px; opacity:.6;
+    transition:transform .15s;
+  }
+  details.cab-wstatus-section:not([open]) > summary.cab-wstatus-head::after {
+    transform:rotate(-90deg);
+  }
+  details.cab-wstatus-section[open] > summary.cab-wstatus-head { margin-bottom:12px; }
+  .cab-wform { margin:0; display:inline; }
+  .cab-wa-btn {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:7px 15px; border-radius:6px; font-size:13px; font-weight:600;
+    white-space:nowrap; font-family:inherit; text-decoration:none;
+    border:1px solid transparent; box-sizing:border-box;
+  }
+  button.cab-wa-btn { cursor:pointer; appearance:none; -webkit-appearance:none; }
+  a.cab-wa-btn:hover { text-decoration:none; }
+  .cab-wa-btn--amber {
+    color:#f57c00; background:rgba(255,160,0,.12);
+    border-color:rgba(255,160,0,.45);
+  }
+  .cab-wa-btn--amber:hover { background:rgba(255,160,0,.22); }
+  .cab-wa-btn--cyan {
+    color:#0097a7; background:rgba(0,172,193,.12);
+    border-color:rgba(0,172,193,.45);
+  }
+  .cab-wa-btn--cyan:hover { background:rgba(0,172,193,.22); }
+  .cab-wa-btn--green {
+    color:#2e7d32; background:rgba(76,175,80,.12);
+    border-color:rgba(76,175,80,.45);
+  }
+  .cab-wa-btn--green:hover { background:rgba(76,175,80,.22); }
+  .cab-wa-btn--outline {
+    color:#417690; background:transparent;
+    border-color:rgba(65,118,144,.55);
+  }
+  .cab-wa-btn--outline:hover { background:rgba(65,118,144,.10); }
+  .cab-wrap a.cab-wa-btn--outline:link,
+  .cab-wrap a.cab-wa-btn--outline:visited { color:#417690; }
 
   .cab-group { margin-bottom:24px; }
   .cab-group-head {
@@ -213,37 +278,32 @@
 
   <nav class="cab-nav" aria-label="Разделы личного кабинета">
     <div class="cab-nav-row">
-      <span class="cab-nav-label"><span class="cab-nav-label-icon">📑</span> Согласование</span>
+      <span class="cab-nav-label"><span class="cab-nav-label-icon">📑</span> Согласование/ознакомление</span>
       <div class="cab-tabs cab-tabs--3">
         <button type="button" class="cab-tab active" data-tab="sign">
           <span class="cab-tab-icon" aria-hidden="true">✍️</span>
-          <span class="cab-tab-label">Подпись</span>
+          <span class="cab-tab-label">Согласование документа (подпись)</span>
           {% if sign_tasks %}<span class="cab-badge">{{ sign_tasks|length }}</span>{% endif %}
         </button>
         <button type="button" class="cab-tab" data-tab="ack">
           <span class="cab-tab-icon" aria-hidden="true">👁️</span>
-          <span class="cab-tab-label">Ознакомление</span>
+          <span class="cab-tab-label">Ознакомление с документом (подпись)</span>
           {% if ack_tasks %}<span class="cab-badge">{{ ack_tasks|length }}</span>{% endif %}
         </button>
         <button type="button" class="cab-tab" data-tab="fix">
           <span class="cab-tab-icon" aria-hidden="true">✏️</span>
-          <span class="cab-tab-label">Доработка</span>
+          <span class="cab-tab-label">Доработка (по итогам согласования)</span>
           {% if fix_tasks %}<span class="cab-badge">{{ fix_tasks|length }}</span>{% endif %}
         </button>
       </div>
     </div>
     <div class="cab-nav-row">
-      <span class="cab-nav-label"><span class="cab-nav-label-icon">📋</span> Задания</span>
-      <div class="cab-tabs cab-tabs--4">
-        <button type="button" class="cab-tab" data-tab="assigned">
-          <span class="cab-tab-icon" aria-hidden="true">🎯</span>
-          <span class="cab-tab-label">Мне назначено (Текущий ответственный)</span>
-          {% if assigned_items %}<span class="cab-badge muted">{{ assigned_items|length }}</span>{% endif %}
-        </button>
+      <span class="cab-nav-label"><span class="cab-nav-label-icon">📋</span> Рабочие задания</span>
+      <div class="cab-tabs cab-tabs--3">
         <button type="button" class="cab-tab" data-tab="work">
           <span class="cab-tab-icon" aria-hidden="true">📥</span>
           <span class="cab-tab-label">Мои задачи</span>
-          {% if my_work %}<span class="cab-badge muted">{{ my_work|length }}</span>{% endif %}
+          {% if my_work_active_count %}<span class="cab-badge muted">{{ my_work_active_count }}</span>{% endif %}
         </button>
         <button type="button" class="cab-tab" data-tab="subtasks">
           <span class="cab-tab-icon" aria-hidden="true">🧩</span>
@@ -259,7 +319,12 @@
     </div>
     <div class="cab-nav-row">
       <span class="cab-nav-label"><span class="cab-nav-label-icon">📌</span> Прочее</span>
-      <div class="cab-tabs cab-tabs--2">
+      <div class="cab-tabs cab-tabs--3">
+        <button type="button" class="cab-tab" data-tab="assigned">
+          <span class="cab-tab-icon" aria-hidden="true">🎯</span>
+          <span class="cab-tab-label">Мне назначено (Текущий ответственный)</span>
+          {% if assigned_items %}<span class="cab-badge muted">{{ assigned_items|length }}</span>{% endif %}
+        </button>
         <button type="button" class="cab-tab" data-tab="docs">
           <span class="cab-tab-icon" aria-hidden="true">📄</span>
           <span class="cab-tab-label">Мои документы</span>
@@ -390,36 +455,67 @@
   </div>
 
   <div class="cab-panel" data-panel="work">
-    {% for wa in my_work %}
-    <div class="cab-card">
-      <div class="cab-info">
-        <div class="title">
-          {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
-        </div>
-        {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
-        <div class="meta">
-          {% if wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
-          {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
-          {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
-          {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
-          {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
-          {% if wa.post %}{{ wa.post }}{% endif %}
-        </div>
-        <div class="meta">
-          Срок:
-          <strong {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>
-            {{ wa.target_deadline|date:"d.m.Y" }}
-          </strong>
-          {% if wa.target_deadline < today %} (просрочено){% endif %}
-        </div>
-      </div>
-      <div class="cab-actions">
-        <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
-      </div>
+    {% if my_work %}
+    <div class="cab-wfilter" data-wfilter-for="work">
+      <button type="button" class="active" data-wfilter="all">Все</button>
+      {% for g in my_work_groups %}{% if g.count %}
+      <button type="button" data-wfilter="{{ g.key }}">{{ g.label }} ({{ g.count }})</button>
+      {% endif %}{% endfor %}
     </div>
-    {% empty %}
-    <div class="cab-empty">Нет активных задач, где вы исполнитель.</div>
-    {% endfor %}
+    {% for g in my_work_groups %}{% if g.count %}
+    <details class="cab-wstatus-section" data-wgroup="{{ g.key }}">
+      <summary class="cab-wstatus-head">
+        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+        <span class="cab-group-count">{{ g.count }}</span>
+      </summary>
+      {% for wa in g.items %}
+      <div class="cab-card">
+        <div class="cab-info">
+          <div class="title">
+            {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
+          </div>
+          {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
+          <div class="meta">
+            {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
+            {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
+            {% elif wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
+            {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
+            {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
+            {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+            {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
+            {% if wa.post %}{{ wa.post }}{% endif %}
+          </div>
+          <div class="meta">
+            Срок:
+            {% if g.key == "done" %}
+              <strong>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
+            {% else %}
+              <strong {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
+              {% if wa.target_deadline < today %} (просрочено){% endif %}
+            {% endif %}
+          </div>
+        </div>
+        <div class="cab-actions">
+          {% if wa.control_status == "assigned" %}
+          <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_acknowledge' wa.pk %}">
+            {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--amber">Принять в работу</button>
+          </form>
+          {% elif wa.control_status == "review" %}
+          <span class="cab-wa-btn cab-wa-btn--cyan">⏳ На проверке у автора</span>
+          {% elif wa.control_status == "in_progress" or not wa.control_status %}
+          <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_submit_review' wa.pk %}">
+            {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--cyan">Сдать на проверку</button>
+          </form>
+          {% endif %}
+          <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
+        </div>
+      </div>
+      {% endfor %}
+    </details>
+    {% endif %}{% endfor %}
+    {% else %}
+    <div class="cab-empty">Задач, где вы исполнитель, пока нет.</div>
+    {% endif %}
   </div>
 
   <div class="cab-panel" data-panel="subtasks">
@@ -467,47 +563,66 @@
   </div>
 
   <div class="cab-panel" data-panel="issued">
-    {% for wa in issued_work %}
-    <div class="cab-card">
-      <div class="cab-info">
-        <div class="title">
-          {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
-        </div>
-        {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
-        <div class="meta">
-          {% if wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
-          {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
-          {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
-          {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
-          {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
-          {% if wa.executor %}
-            Исполнитель: <strong>{{ wa.executor }}</strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
-          {% endif %}
-          {% if wa.current_responsible_id != wa.executor_id %}
-            · Ответственный: <strong>{{ wa.current_responsible }}</strong>
-          {% endif %}
-          {% if wa.post %} · {{ wa.post }}{% endif %}
-        </div>
-        <div class="meta">
-          Срок:
-          <strong {% if not wa.control_status or wa.control_status == "in_progress" %}{% if wa.target_deadline < today %}class="cab-overdue"{% endif %}{% endif %}>
-            {{ wa.target_deadline|date:"d.m.Y" }}
-          </strong>
-          {% if not wa.control_status or wa.control_status == "in_progress" %}
-            {% if wa.target_deadline < today %} (просрочено){% endif %}
-          {% endif %}
-          · Создано: {{ wa.date_of_creation|date:"d.m.Y" }}
-          {% if wa.subtask_total %} · Подзадач: {{ wa.subtask_total }}{% endif %}
-          {% if wa.reschedule_count %} · Переносов: {{ wa.reschedule_count }}{% endif %}
-        </div>
-      </div>
-      <div class="cab-actions">
-        <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
-      </div>
+    {% if issued_work %}
+    <div class="cab-wfilter" data-wfilter-for="issued">
+      <button type="button" class="active" data-wfilter="all">Все</button>
+      {% for g in issued_work_groups %}{% if g.count %}
+      <button type="button" data-wfilter="{{ g.key }}">{{ g.label }} ({{ g.count }})</button>
+      {% endif %}{% endfor %}
     </div>
-    {% empty %}
+    {% for g in issued_work_groups %}{% if g.count %}
+    <details class="cab-wstatus-section" data-wgroup="{{ g.key }}">
+      <summary class="cab-wstatus-head">
+        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+        <span class="cab-group-count">{{ g.count }}</span>
+      </summary>
+      {% for wa in g.items %}
+      <div class="cab-card">
+        <div class="cab-info">
+          <div class="title">
+            {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
+          </div>
+          {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
+          <div class="meta">
+            {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
+            {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
+            {% elif wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
+            {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
+            {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
+            {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+            {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
+            {% if wa.executor %}
+              Исполнитель: <strong>{{ wa.executor }}</strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
+            {% endif %}
+            {% if wa.post %} · {{ wa.post }}{% endif %}
+          </div>
+          <div class="meta">
+            Срок:
+            {% if g.key == "done" %}
+              <strong>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
+            {% else %}
+              <strong {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
+              {% if wa.target_deadline < today %} (просрочено){% endif %}
+            {% endif %}
+            · Создано: {{ wa.date_of_creation|date:"d.m.Y" }}
+            {% if wa.subtask_total %} · Подзадач: {{ wa.subtask_total }}{% endif %}
+            {% if wa.reschedule_count %} · Переносов: {{ wa.reschedule_count }}{% endif %}
+          </div>
+        </div>
+        <div class="cab-actions">
+          {% if wa.control_status == "review" %}
+          <a class="cab-wa-btn cab-wa-btn--green" href="{% url 'admin:blog_workassignment_close' wa.pk %}">Проверить и закрыть</a>
+          <a class="cab-wa-btn cab-wa-btn--outline" href="{% url 'admin:blog_workassignment_return' wa.pk %}">Вернуть на доработку</a>
+          {% endif %}
+          <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
+        </div>
+      </div>
+      {% endfor %}
+    </details>
+    {% endif %}{% endfor %}
+    {% else %}
     <div class="cab-empty">У вас пока нет выданных заданий.</div>
-    {% endfor %}
+    {% endif %}
   </div>
 
   <div class="cab-panel" data-panel="docs">
@@ -582,6 +697,27 @@
     try { saved = localStorage.getItem("cabinetTab"); } catch (e) {}
     var exists = saved && document.querySelector('.cab-panel[data-panel="' + saved + '"]');
     if (exists) activate(saved);
+  })();
+
+  // Фильтр задач по статусу внутри панелей «Мои задачи» / «Выданные задачи».
+  (function () {
+    document.querySelectorAll(".cab-wfilter").forEach(function (bar) {
+      var panel = bar.closest(".cab-panel");
+      if (!panel) return;
+      bar.querySelectorAll("button[data-wfilter]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var key = btn.dataset.wfilter;
+          bar.querySelectorAll("button").forEach(function (b) {
+            b.classList.toggle("active", b === btn);
+          });
+          panel.querySelectorAll(".cab-wstatus-section").forEach(function (sec) {
+            var show = (key === "all" || sec.dataset.wgroup === key);
+            sec.style.display = show ? "" : "none";
+            if (show && key !== "all" && sec.tagName === "DETAILS") sec.open = true;
+          });
+        });
+      });
+    });
   })();
 </script>
 {% endblock %}
