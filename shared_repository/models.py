@@ -1200,3 +1200,159 @@ class DocumentTemplateAcceptSignature(models.Model):
 
     def __str__(self):
         return f"Файлы для {self.template.document_template}"
+
+class PSIDocument(models.Model):
+    # --- Основная информация ---
+    serial_number = models.CharField("Заводской номер", max_length=100, default='2000002026')
+    test_date = models.DateField("Дата испытания / изготовления")
+    model_name = models.CharField("Модель", max_length=200, default='ИБП СПМ 1.2000-3U')
+    fw_version = models.CharField("Версия программы управления ИБП", max_length=50)
+
+    # --- Варианты выбора для статусов ---
+    STATUS_CHOICES = [
+        ('соответствует', 'Соответствует'),
+        ('не соответствует', 'Не соответствует'),
+        ('нет данных', 'Нет данных'),
+    ]
+    SHIPMENT_CHOICES = [
+        ('готов к отгрузке', 'Готов к отгрузке'),
+        ('не готов', 'Не готов')
+    ]
+    ELECTRO_CHOICES = [
+        ('≥ 1 МОм', '≥ 1 МОм'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+
+    ]
+    TEMPERATURE_CHOICES = [
+        ('норма (15 °С ... 35 °С)', 'Норма (15 °С ... 35 °С)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    HUMIDITY_CHOICES = [
+        ('норма (30 % ... 60 %)', 'норма (30 % ... 60 %)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    PRESSURE_CHOICES = [
+        ('норма (84 кПа ... 106,7 кПа)', 'норма (84 кПа ... 106,7 кПа)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+
+    # --- Общие проверки ---
+    visual_check = models.CharField("Проверка соответствия КД и внешнего вида (5.3)",
+                                    max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    marking_check = models.CharField("Проверка содержания маркировки",
+                                     max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    insulation_res = models.CharField("Проверка электрического сопротивления изоляции (5.7)",
+                                      max_length=20, choices=ELECTRO_CHOICES, default='соответствует')
+    insulation_strength = models.CharField("Проверка электрической прочности изоляции (5.8)",
+                                           max_length=20, choices=STATUS_CHOICES, default='соответствует')
+
+    # --- Проверка функционирования (5.6) ---
+    func_power_on = models.CharField("5.6.1 Проверка включения", choices=STATUS_CHOICES)
+    func_display = models.CharField("5.6.2 Проверка индикации", choices=STATUS_CHOICES)
+    func_navigation = models.CharField("5.6.3 Проверка навигации по страницам", choices=STATUS_CHOICES)
+    func_battery_mode = models.CharField("5.6.4 Проверка работы в автономном режиме", choices=STATUS_CHOICES)
+    func_bypass = models.CharField("5.6.5 Проверка режима «байпас»", choices=STATUS_CHOICES)
+    func_audio = models.CharField("5.6.6 Проверка отключения звукового сигнала", choices=STATUS_CHOICES)
+    func_settings = models.CharField("5.6.7 Проверка режима настроек", choices=STATUS_CHOICES)
+    func_terminal = models.CharField("5.6.8 Проверка обмена данными с терминалом", choices=STATUS_CHOICES)
+
+    # --- Заключение ---
+    completeness = models.CharField("Проверка комплектности", max_length=200)
+    conclusion = models.TextField("Заключение", choices=SHIPMENT_CHOICES, default="Устройство признано годным к эксплуатации")
+    comment = models.TextField("Комментарий", blank=True)
+
+    # --- Условия испытаний (Метеоусловия) ---
+    inspector = models.CharField("Испытатель / ОТК", max_length=150)
+    workshop = models.CharField("Цех", max_length=100, default="№1018")
+    temperature = models.CharField("Температура", choices=TEMPERATURE_CHOICES, max_length=50, default="+22°C")
+    humidity = models.CharField("Влажность", choices=HUMIDITY_CHOICES, max_length=50, default="45%")
+    pressure = models.CharField("Давление", choices=PRESSURE_CHOICES, max_length=50, default="750 мм рт. ст.")
+    remark = models.TextField("Комментарий", blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Протокол ПСИ"
+        verbose_name_plural = "Протоколы ПСИ"
+
+    def __str__(self):
+        return f"Протокол {self.serial_number} ({self.model_name})"
+
+class GeneratedDocument(models.Model):
+    # Вместо старого source теперь привязка к PSIDocument
+    psi_source = models.ForeignKey(PSIDocument, on_delete=models.CASCADE, related_name='pdfs', verbose_name="Протокол-источник",null=True, blank=True)
+    file = models.FileField("Готовый PDF", upload_to='generated_pdfs/')
+    version = models.PositiveIntegerField("Версия")
+    generated_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Сгенерированный PDF"
+        verbose_name_plural = "Сгенерированные PDF"
+
+class DocumentHistory(models.Model):
+    # Привязка к новой модели
+    psi_source = models.ForeignKey(PSIDocument, on_delete=models.CASCADE, related_name='history', verbose_name="Протокол",null=True, blank=True)
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="Пользователь")
+    action = models.CharField("Действие", max_length=255)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+
+# Модель для расширения стандартного пользователя Django
+
+class Department(models.Model):
+    """Организационный отдел (подразделение) компании.
+
+    Используется как справочник: в профиле сотрудника выбирается из списка,
+    а в маршрутах ознакомления можно разослать документ всему отделу разом.
+    """
+    name = models.CharField('Название отдела', max_length=150, unique=True)
+    is_active = models.BooleanField('Активен', default=True)
+
+    class Meta:
+        verbose_name = 'Отдел'
+        verbose_name_plural = 'Отделы'
+        ordering = ('name',)
+
+    def __str__(self):
+        return self.name
+
+
+class EmployeeProfile(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='profile',
+        verbose_name='Пользователь'
+    )
+    patronymic = models.CharField('Отчество', max_length=100, blank=True)
+    phone = models.CharField('Телефон', max_length=20, blank=True)
+    org_department = models.ForeignKey(
+        'Department',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='employees',
+        verbose_name='Структурное подразделение (Отдел)',
+    )
+    is_head = models.BooleanField('Руководитель отдела', default=False)
+    position = models.CharField('Должность', max_length=100, blank=True)
+    supervisor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='subordinates',
+        verbose_name='Непосредственное подчинение'
+    )
+    roles_responsibilities = models.TextField('Роли / обязанности', blank=True)
+
+    class Meta:
+        verbose_name = 'Профиль сотрудника'
+        verbose_name_plural = 'Профили сотрудников'
+
+    def __str__(self):
+        return f"Профиль: {self.user.get_full_name() or self.user.username}"

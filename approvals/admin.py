@@ -182,6 +182,39 @@ def _route_steps_preview(obj):
     return format_html_join("", "{}", ((line,) for line in lines))
 
 
+_WORK_STATUS_ORDER = ("assigned", "in_progress", "review", "done")
+_WORK_STATUS_LABELS = {
+    "assigned": "Ожидает принятия",
+    "in_progress": "В работе",
+    "review": "На проверке",
+    "done": "Завершённые",
+}
+
+
+def _group_work_by_status(items):
+    buckets = {key: [] for key in _WORK_STATUS_ORDER}
+    for item in items:
+        st = item.control_status
+        if st in ("on_time", "rescheduled", "partial", "not_done"):
+            key = "done"
+        elif st == "assigned":
+            key = "assigned"
+        elif st == "review":
+            key = "review"
+        else:
+            key = "in_progress"
+        buckets[key].append(item)
+    return [
+        {
+            "key": key,
+            "label": _WORK_STATUS_LABELS[key],
+            "items": buckets[key],
+            "count": len(buckets[key]),
+        }
+        for key in _WORK_STATUS_ORDER
+    ]
+
+
 def _collect_responsible_items(user, limit_per_model=200):
     """Все объекты во всех моделях, где пользователь — «Текущий ответственный»."""
     from django.apps import apps
@@ -191,7 +224,6 @@ def _collect_responsible_items(user, limit_per_model=200):
     from django.urls import NoReverseMatch
 
     user_model = get_user_model()
-    # Рабочие задания и подзадачи показываются в отдельных вкладках ЛК.
     excluded_labels = {"blog.workassignment", "blog.workassignmentsubtask"}
     items = []
     for model in apps.get_models():
@@ -876,43 +908,59 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             else:
                 sign_tasks.append(t)
 
-        my_work = list(
+        active_filter = (
+            Q(control_status__isnull=True)
+            | Q(control_status__in=WorkAssignment.ACTIVE_STATUSES)
+        )
+        published_filter = Q(executor__isnull=False)
+
+        my_work_active = list(
             WorkAssignment.objects
             .filter(executor=user)
-            .filter(Q(control_status__isnull=True) | Q(control_status="in_progress"))
+            .filter(published_filter)
+            .filter(active_filter)
             .select_related("post")
             .order_by("target_deadline")
         )
+        my_work_done = list(
+            WorkAssignment.objects
+            .filter(executor=user, control_status__in=WorkAssignment.TERMINAL_STATUSES)
+            .filter(published_filter)
+            .select_related("post")
+            .order_by("-control_date", "-date_of_change")[:25]
+        )
+        my_work = my_work_active + my_work_done
+        my_work_groups = _group_work_by_status(my_work)
+        my_work_active_count = len(my_work_active)
 
-        issued_work_qs = (
+        issued_base = (
             WorkAssignment.objects
             .filter(author=user)
+            .filter(published_filter)
             .annotate(subtask_total=Count("subtasks"))
             .select_related("executor", "post", "current_responsible")
-            .order_by("-date_of_creation")
         )
-        issued_work = list(issued_work_qs[:50])
-        issued_work_active = issued_work_qs.filter(
-            Q(control_status__isnull=True) | Q(control_status="in_progress")
-        ).count()
+        issued_active = list(issued_base.filter(active_filter).order_by("target_deadline"))
+        issued_done = list(
+            issued_base
+            .filter(control_status__in=WorkAssignment.TERMINAL_STATUSES)
+            .order_by("-control_date", "-date_of_change")[:25]
+        )
+        issued_work = issued_active + issued_done
+        issued_work_groups = _group_work_by_status(issued_work)
+        issued_work_active = len(issued_active)
 
         my_subtasks = list(
             WorkAssignmentSubtask.objects
             .filter(executor=user)
             .filter(Q(control_status__isnull=True) | Q(control_status="in_progress"))
+            .filter(
+                Q(work_assignment__control_status__isnull=True)
+                | Q(work_assignment__control_status="in_progress")
+            )
             .select_related("work_assignment", "work_assignment__post")
             .order_by("work_assignment_id", "subtask_number", "pk")
         )
-        subtask_groups, _cur = [], None
-        for st in my_subtasks:
-            if _cur is None or _cur["wa_id"] != st.work_assignment_id:
-                _cur = {
-                    "wa_id": st.work_assignment_id,
-                    "wa": st.work_assignment,
-                    "subtasks": [],
-                }
-                subtask_groups.append(_cur)
-            _cur["subtasks"].append(st)
 
         assigned_items = _collect_responsible_items(user)
 
@@ -942,10 +990,12 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             "ack_tasks": ack_tasks,
             "fix_tasks": fix_tasks,
             "my_work": my_work,
+            "my_work_groups": my_work_groups,
+            "my_work_active_count": my_work_active_count,
             "my_subtasks": my_subtasks,
-            "subtask_groups": subtask_groups,
             "assigned_items": assigned_items,
             "issued_work": issued_work,
+            "issued_work_groups": issued_work_groups,
             "issued_work_active": issued_work_active,
             "my_docs": my_docs,
             "notifications": notifications,
