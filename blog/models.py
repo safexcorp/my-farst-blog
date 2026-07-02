@@ -1,4 +1,4 @@
-from django.db import models
+﻿from django.db import models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.core.validators import FileExtensionValidator, RegexValidator
@@ -3023,3 +3023,253 @@ class ShipmentAdditionalFile(models.Model):
 
     def __str__(self):
         return self.file.name if self.file else str(self.pk)
+
+
+
+#Протоколы ПСИ СПМ ИБП
+class PSIDocument(models.Model):
+    # --- Основная информация ---
+
+    # СВЯЗЬ С ОРГАНИЗАЦИЕЙ-РАЗРАБОТЧИКОМ (для логотипа и названия)
+    developer_org = models.ForeignKey(
+        'RKDDeveloper',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='psi_documents',
+        verbose_name="Организация-разработчик/изготовитель"
+    )
+    # СВЯЗЬ С ИЗДЕЛИЕМ К ОТГРУЗКЕ (заводской номер)
+    shipment = models.ForeignKey(
+        'Shipment',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='psi_documents',
+        verbose_name="Изделие к отгрузке"
+    )
+    # СВЯЗЬ С РАЗРАБОТКОЙ (модификацией)
+    post = models.ForeignKey(
+        'Post',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='psi_documents',
+        verbose_name="Разработка (модификация)"
+    )
+    test_date = models.DateField("Дата испытания / изготовления")
+    fw_version = models.CharField("Версия программы управления ИБП", max_length=50)
+
+    # --- Варианты выбора для статусов ---
+    STATUS_CHOICES = [
+        ('соответствует', 'Соответствует'),
+        ('не соответствует', 'Не соответствует'),
+        ('нет данных', 'Нет данных'),
+    ]
+    SHIPMENT_CHOICES = [
+        ('готов к отгрузке', 'Готов к отгрузке'),
+        ('не готов', 'Не готов')
+    ]
+    ELECTRO_CHOICES = [
+        ('≥ 1 МОм', '≥ 1 МОм'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    TEMPERATURE_CHOICES = [
+        ('норма (15 °С ... 35 °С)', 'Норма (15 °С ... 35 °С)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    HUMIDITY_CHOICES = [
+        ('норма (30 % ... 60 %)', 'норма (30 % ... 60 %)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    PRESSURE_CHOICES = [
+        ('норма (84 кПа ... 106,7 кПа)', 'норма (84 кПа ... 106,7 кПа)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+
+    # --- Общие проверки ---
+    visual_check = models.CharField("1 Проверка соответствия КД и проверка внешнего вида (1.1.1, 1.4.2 ТУ, 5.3 ПМ)",
+                                    max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    marking_check = models.CharField("2 Проверка содержания маркировки (1.10.1 ТУ, 5.1 ПМ)",
+                                     max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    insulation_res = models.CharField("3 Проверка электрического сопротивления изоляции (2.5 ТУ, 5.6 ПМ)",
+                                      max_length=20, choices=STATUS_CHOICES, default='нет данных')
+    insulation_res_value = models.DecimalField(
+        "Фактическое значение сопротивления изоляции, МОм",
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Введите измеренное значение в МОм. Статус устанавливается автоматически: при ≥ 1 МОм - Соответсвует; при < 1 МОм - Не соответсвует."
+    )
+
+    insulation_strength = models.CharField("4 Проверка электрической прочности изоляции (2.6 ТУ, 5.7 ПМ)", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+
+    # --- Проверка функционирования (5.6) ---
+    func_power_on = models.CharField("5.1 Проверка включения", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_display = models.CharField("5.2 Проверка индикации", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_navigation = models.CharField("5.3 Проверка навигации по информационным страницам", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_battery_mode = models.CharField("5.4 Проверка работы от аккумуляторных батарей (АБ)", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_bypass = models.CharField("5.5 Проверка режима «байпас»", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_audio = models.CharField("5.6 Проверка интерфейсов SNMP и UART (Использовать web-приложение для мониторинга ИБП СПМ)", max_length=20, choices=STATUS_CHOICES, default='нет данных')
+    # НОВОЕ ПОЛЕ: файл для 5.6
+    interface_file = models.FileField(
+        upload_to="psi_interfaces_files/",
+        blank=True,
+        null=True,
+        verbose_name="Загружаемый файл (SNMP/UART)",
+        help_text="Прикрепите файл с результатами проверки интерфейсов SNMP и UART"
+    )
+    # НОВОЕ ПОЛЕ: примечание для 5.6 (2000 знаков)
+    interface_note = models.TextField(
+        max_length=2000,
+        blank=True,
+        default="",
+        verbose_name="Примечание (п. 5.6)",
+        help_text="Мотивы несоответствия (заполняется, если по п. 5.6 выбрано «Не соответствует»)"
+    )
+
+    func_settings = models.CharField("5.7 Проверка отключения звукового сигнала", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_terminal = models.CharField("5.8 Проверка настроек", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+
+    # --- Заключение ---
+    conclusion = models.CharField("Заключение", max_length=50, choices=SHIPMENT_CHOICES, default="готов к отгрузке")
+    comment = models.TextField("Комментарий", blank=True)
+
+    # --- Условия испытаний (Метеоусловия) ---
+    inspector = models.CharField("Представитель ОТК", max_length=150)
+
+    #связь с помещением
+    workshop = models.ForeignKey('enterprise_asset_management.ProductionArea', on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='psi_documents',
+        verbose_name="Производственная площадка (Цех)")
+
+    remark = models.TextField("Комментарий", blank=True)
+    temperature = models.CharField("Температура", choices=TEMPERATURE_CHOICES, max_length=50, default="+22°C")
+    humidity = models.CharField("Влажность", choices=HUMIDITY_CHOICES, max_length=50, default="45%")
+    pressure = models.CharField("Давление", choices=PRESSURE_CHOICES, max_length=50, default="750 мм рт. ст.")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    author = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="psi_document_created",
+        verbose_name="Автор",
+    )
+    date_of_creation = models.DateTimeField(default=timezone.now, verbose_name="Дата и время создания")
+    last_editor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="psi_document_edited",
+        verbose_name="Последний редактор",
+    )
+    version = models.CharField(max_length=3, default="1", verbose_name="Версия")
+    version_diff = models.TextField(
+        blank=True,
+        default="Стартовая версия",
+        verbose_name="Сравнение версий",
+    )
+    date_of_change = models.DateTimeField(auto_now=True, verbose_name="Дата и время последнего изменения")
+    current_responsible = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="psi_document_responsible",
+        verbose_name="Текущий ответственный",
+    )
+
+    class Meta:
+        verbose_name = "ПСИ ИБП СПМ"
+        verbose_name_plural = "ПСИ ИБП СПМ"
+
+    def __str__(self):
+        # Пытаемся получить серийный номер из связанной модели Shipment
+        serial = self.shipment.serial_number if self.shipment else "[не указан]"
+
+        # Пытаемся получить название модели из связанной разработки (Post)
+        model_name = self.post.name if self.post else "Модель не указана"
+
+        return f"Протокол {serial} ({model_name})"
+
+    def clean(self):
+        """Валидация модели"""
+        #from django.core.exceptions import ValidationError
+
+        # ИЗМЕНЕНИЕ 5: Если файл не прикреплен - автомат-ки "НЕ соответ"
+        if not self.interface_file:
+            self.func_audio = 'не соответствует'
+
+    def all_checks_passed(self):
+        """True только если ВСЕ проверки в статусе 'соответствует'
+        (нет ни одного 'не соответствует' или 'нет данных')."""
+        checks = (
+            self.visual_check, self.marking_check,
+            self.insulation_res, self.insulation_strength,
+            self.func_power_on, self.func_display, self.func_navigation,
+            self.func_battery_mode, self.func_bypass, self.func_audio,
+            self.func_settings, self.func_terminal,
+        )
+        return all(status == 'соответствует' for status in checks)
+
+    def save(self, *args, **kwargs):
+
+            # 5.6: если файл интерфейсов не прикреплён — статус "не соответствует"
+        if not self.interface_file:
+            self.func_audio = 'не соответствует'
+
+            # 3: статус сопротивления изоляции определяется автоматически по
+            #     фактическому значению (порог 1 МОм):
+            #       нет значения      -> "нет данных"
+            #       значение < 1 МОм  -> "не соответствует"
+            #       значение >= 1 МОм -> "соответствует"
+        if self.insulation_res_value is None:
+            self.insulation_res = 'нет данных'
+        elif self.insulation_res_value < 1:
+            self.insulation_res = 'не соответствует'
+        else:
+                self.insulation_res = 'соответствует'
+
+            # Заключение: если хотя бы одна проверка "не соответствует" или "нет данных" —
+            # изделие не готово к отгрузке.
+        if self.all_checks_passed():
+            self.conclusion = 'готов к отгрузке'
+        else:
+            self.conclusion = 'не готов'
+
+            # Вызываем финальное сохранение со всеми обновленными полями
+        super().save(*args, **kwargs)
+
+    def get_inspector_display(self):
+        """Возвращает ФИО испытателя"""
+        return self.inspector if self.inspector else "—"
+
+    def get_workshop_display(self):
+        """Возвращает цех"""
+        return self.workshop if self.workshop else "—"
+
+class GeneratedDocument(models.Model):
+    # Вместо старого source теперь привязка к PSIDocument
+    psi_source = models.ForeignKey(PSIDocument, on_delete=models.CASCADE, related_name='pdfs', verbose_name="Протокол-источник",null=True, blank=True)
+    file = models.FileField("Готовый PDF", upload_to='generated_pdfs/')
+    version = models.PositiveIntegerField("Версия")
+    generated_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Сгенерированный PDF"
+        verbose_name_plural = "Сгенерированные PDF"
+
+class DocumentHistory(models.Model):
+    # Привязка к новой модели
+    psi_source = models.ForeignKey(PSIDocument, on_delete=models.CASCADE, related_name='history', verbose_name="Протокол",null=True, blank=True)
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="Пользователь")
+    action = models.CharField("Действие", max_length=255)
+    timestamp = models.DateTimeField(auto_now_add=True)
