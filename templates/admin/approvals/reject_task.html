@@ -1,0 +1,44 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main" style="max-width:700px;">
+
+  <div style="border:1px solid #E53935;border-radius:10px;
+              padding:16px 20px;margin-bottom:20px;background:rgba(229,57,53,.06);">
+    <div style="font-size:12px;font-weight:600;margin-bottom:4px;opacity:.85;">{{ doc_ctx.type_label }}</div>
+    <div style="font-size:15px;font-weight:700;">{{ doc_ctx.title }}</div>
+    {% if doc_ctx.subtitle %}
+    <div style="font-size:13px;color:var(--body-quiet-color,#aaa);margin-top:2px;">{{ doc_ctx.subtitle }}</div>
+    {% endif %}
+    <div style="font-size:12px;margin-top:6px;display:flex;gap:12px;flex-wrap:wrap;">
+      Роль: <strong>{{ task.target_label }}</strong>
+      {% if doc_ctx.file_url %}
+      <a href="{{ doc_ctx.file_url }}" target="_blank">Открыть документ →</a>
+      {% endif %}
+      {% if doc_ctx.admin_url %}
+      <a href="{{ doc_ctx.admin_url }}" target="_blank">Карточка →</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <p style="margin-bottom:8px;">
+    Опишите замечание — автор документа получит его в Личном кабинете и сможет внести правки.
+  </p>
+
+  <form method="post">
+    {% csrf_token %}
+    <table>{{ form.as_table }}</table>
+    <div style="display:flex;gap:10px;margin-top:16px;">
+      <input type="submit" value="Отклонить и отправить замечание"
+             style="background:#E53935;color:#fff;padding:10px 22px;
+                    border:none;border-radius:4px;font-size:14px;cursor:pointer;">
+      <a href="{{ back_url }}"
+         style="padding:10px 22px;font-size:14px;border-radius:4px;
+                border:1px solid #79aec8;color:#79aec8;text-decoration:none;">
+        ← Назад в кабинет
+      </a>
+    </div>
+  </form>
+
+</div>
+{% endblock %}

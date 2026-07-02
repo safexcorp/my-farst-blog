@@ -95,19 +95,19 @@ class ProductGroup(models.Model):
     name = models.CharField(
         max_length=200,
         unique=True,
-        verbose_name="Общее наименование группы изделий (продуктов)",
+        verbose_name="Наименование группы разработок",
     )
     designation = models.CharField(
         max_length=100,
         blank=True,
         default="",
-        verbose_name="Общее обозначение группы изделий (продуктов)",
+        verbose_name="Обозначение группы разработок",
     )
     main_purpose = models.TextField(
         max_length=2000,
         blank=True,
         default="",
-        verbose_name="Основное назначение изделия (продукта)",
+        verbose_name="Основное назначение группы разработок",
     )
     author = models.ForeignKey(
         User,
@@ -135,7 +135,7 @@ class ProductGroup(models.Model):
     )
 
     class Meta:
-        verbose_name = "Общая группа разработок"
+        verbose_name = "Группа разработок"
         verbose_name_plural = "Группы разработок (модификаций)"
         ordering = ("name",)
 
@@ -157,7 +157,7 @@ class ProductGroupDocument(models.Model):
         ProductGroup,
         on_delete=models.CASCADE,
         related_name="documents",
-        verbose_name="Общая группа разработок",
+        verbose_name="Группа разработок",
     )
     title = models.CharField(
         max_length=500,
@@ -257,7 +257,7 @@ class Post(models.Model):
         null=True,
         blank=True,
         related_name="posts",
-        verbose_name="Общая группа разработок",
+        verbose_name="Группа разработок",
     )
     group_modification_features = models.TextField(
         max_length=2000,
@@ -1606,10 +1606,11 @@ class WorkAssignment(models.Model):
     ]
 
     TEMP_STATUS_CHOICES = [
+        ('in_progress', 'В работе'),
         ('on_time', 'Выполнено в срок'),
         ('rescheduled', 'Выполнено с переносом сроков'),
         ('partial', 'Выполнено частично'),
-        ('not_done', 'Не выполнено'),
+        ('not_done', 'Не выполнено (Отменено)'),
     ]
 
     # базовые поля
@@ -1638,7 +1639,10 @@ class WorkAssignment(models.Model):
         verbose_name="Текущий ответственный"
     )
     version = models.CharField(max_length=3, blank=True, null=True, verbose_name="Версия")
-    task = models.TextField(verbose_name="Задача")
+    task = models.TextField(
+        verbose_name="Задача",
+        help_text="Декомпозиция задачи: в разделе «ПОДЗАДАЧИ» (доступна через «Сохранить и продолжить редактировать»)",
+    )
     acceptance_criteria = models.TextField(default='---', verbose_name="Критерий выполнения")
     uploaded_file = models.FileField(upload_to='uploads/', blank = True, verbose_name="Загружаемый файл")
 
@@ -1657,8 +1661,13 @@ class WorkAssignment(models.Model):
     conditional_deadline = models.CharField("Условный дедлайн", max_length=1000, blank=True)
     #uploaded_file = models.FileField(upload_to='uploads/', blank = True, verbose_name="Приложение к РЗ")
 
+    version_diff = models.TextField(
+        "Сравнение версий",
+        blank=True,
+        default="Стартовая версия",
+    )
     control_status = models.CharField(
-        "Контроль выполнения - статус",
+        "Статус выполнения / Результат",
         max_length=20,
         null=True,
         blank=True,
@@ -1792,7 +1801,6 @@ class WorkAssignmentSubtask(models.Model):
         User,
         on_delete=models.CASCADE,
         null=True,
-        blank=True,
         related_name="subtask_executed_assignments",
         verbose_name="Исполнитель",
     )
@@ -1842,13 +1850,18 @@ class WorkAssignmentSubtask(models.Model):
     time_window_end = models.DateField("Временное окно: по", null=True, blank=True)
     conditional_deadline = models.CharField("Условный дедлайн", max_length=1000, blank=True)
     control_status = models.CharField(
-        "Контроль выполнения - статус",
+        "Статус выполнения / Результат",
         max_length=20,
         null=True,
         blank=True,
         choices=WorkAssignment.TEMP_STATUS_CHOICES,
     )
     control_date = models.DateField("Дата фиксации статуса", null=True, blank=True)
+    comment = models.TextField(
+        "Комментарий",
+        blank=True,
+        null=True,
+    )
 
     class Meta:
         verbose_name = "Подзадача рабочего задания"
@@ -2508,6 +2521,15 @@ class UniversalRKD(models.Model):
         verbose_name="Удостоверяющий лист: исходник (DOCX)",
         help_text="Допустимый формат: DOCX.",
     )
+    acquaintance_document = models.FileField(
+        upload_to="blog/universal_rkd/acquaintance/%Y/%m/",
+        max_length=500,
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(allowed_extensions=["pdf"])],
+        verbose_name="Лист ознакомления (PDF)",
+        help_text="Формируется автоматически при подписании шагов «Ознакомление».",
+    )
 
     checked_by = models.ForeignKey(
         User,
@@ -2661,6 +2683,24 @@ class UniversalRKD(models.Model):
             if not self.signature_checked:
                 raise ValidationError({"signature_checked": "Для статуса «Выпущен» приложите подпись проверки."})
 
+        has_approval = bool(self.approval_document) or bool(self.approval_source)
+        has_attestation = bool(self.attestation_document) or bool(self.attestation_source)
+        if has_approval and has_attestation:
+            mutual_error = (
+                "К документу можно прикрепить только что-то одно: «Лист утверждения» или "
+                "«Удостоверяющий лист». Удалите файлы из ненужного блока."
+            )
+            errors = {}
+            if self.approval_document:
+                errors["approval_document"] = mutual_error
+            if self.approval_source:
+                errors["approval_source"] = mutual_error
+            if self.attestation_document:
+                errors["attestation_document"] = mutual_error
+            if self.attestation_source:
+                errors["attestation_source"] = mutual_error
+            raise ValidationError(errors)
+
     def save(self, *args, **kwargs):
         if self.post_id:
             post = self.post
@@ -2683,11 +2723,14 @@ class UniversalRKDSignature(models.Model):
     """Подписи к документу РКД (проверил / согласовал / утвердил)."""
 
     ROLE_CHOICES = [
+        ("designer", "Разработал"),
         ("scheme", "Проверил (схемотехнические требования)"),
         ("it", "Проверил IT (требования, связанные с клиент-серверным ПО)"),
         ("3d", "Проверил 3D (требования, связанные с 3D-печатью)"),
-        ("tt", "Проверил ТТ (технические требования)"),
-        ("nk", "Проверил НК (нормоконтроль)"),
+        ("metro", "Проверил (метрологический контроль)"),
+        ("tk", "Т. контроль (технологический контроль)"),
+        ("lead", "Проверил (руководитель разработки)"),
+        ("nk", "Н. контроль (нормоконтроль)"),
         ("agreed", "Согласовал"),
         ("approved", "Утвердил"),
     ]
@@ -2718,6 +2761,9 @@ class UniversalRKDSignature(models.Model):
         null=True,
         verbose_name="Файл подписи",
     )
+    signed_at = models.DateField("Дата подписания", null=True, blank=True)
+    cert_cn = models.CharField("ФИО из сертификата ЭЦП", max_length=500, blank=True)
+    cert_issuer = models.CharField("Удостоверяющий центр (УЦ)", max_length=500, blank=True)
 
     class Meta:
         verbose_name = "Подпись документа"
@@ -2726,6 +2772,57 @@ class UniversalRKDSignature(models.Model):
 
     def __str__(self):
         return f"{self.get_role_display()} — {self.signed_by or '—'}"
+
+
+class UniversalRKDAcknowledgment(models.Model):
+    """Строка листа ознакомления по шагу маршрута с ЭЦП."""
+
+    rkd = models.ForeignKey(
+        UniversalRKD,
+        on_delete=models.CASCADE,
+        related_name="acknowledgments",
+        verbose_name="Документ РКД",
+    )
+    process = models.ForeignKey(
+        "approvals.ApprovalProcess",
+        on_delete=models.CASCADE,
+        related_name="acknowledgments",
+        verbose_name="Согласование",
+    )
+    task = models.OneToOneField(
+        "approvals.ApprovalTask",
+        on_delete=models.CASCADE,
+        related_name="acknowledgment",
+        verbose_name="Задача",
+    )
+    department = models.ForeignKey(
+        "approvals.Department",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="Роль",
+    )
+    position = models.CharField("Отдел", max_length=150, blank=True)
+    signed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rkd_acknowledgments",
+        verbose_name="Подписант",
+    )
+    signed_at = models.DateField("Дата", null=True, blank=True)
+    cert_cn = models.CharField("ФИО из сертификата ЭЦП", max_length=500, blank=True)
+    cert_issuer = models.CharField("Удостоверяющий центр (УЦ)", max_length=500, blank=True)
+    step_order = models.PositiveSmallIntegerField("Порядок в маршруте", default=0)
+
+    class Meta:
+        verbose_name = "Ознакомление (лист)"
+        verbose_name_plural = "Ознакомления (лист)"
+        ordering = ("step_order", "pk")
+
+    def __str__(self):
+        return f"{self.position or self.department or '—'} — {self.signed_by or '—'}"
 
 
 class Shipment(models.Model):

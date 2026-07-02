@@ -1,5 +1,6 @@
 from django.db import transaction
 from django.utils import timezone
+
 from .models import WorkAssignment, WorkAssignmentDeadlineChange
 
 class WorkAssignmentService:
@@ -66,14 +67,24 @@ class WorkAssignmentService:
 
         # 6) служебные поля
         assignment.reschedule_count = (assignment.reschedule_count or 0) + 1
-        assignment.control_status = "changed"
-        assignment.control_date = eff
 
         # 7) сохранить
         assignment.save(update_fields=[
             "target_deadline","hard_deadline","time_window_start","time_window_end",
-            "reschedule_count","control_status","control_date","deadline_version",
+            "reschedule_count","deadline_version",
             "date_of_change","last_editor"
         ])
 
         return assignment
+
+
+class UniversalRKDService:
+    @staticmethod
+    def generate_approval_sheet(rkd, user):
+        from approvals.sheet_service import generate_approval_sheet
+        return generate_approval_sheet(rkd)
+
+    @staticmethod
+    def generate_acquaintance_sheet(rkd, process):
+        from approvals.sheet_service import generate_acquaintance_sheet
+        return generate_acquaintance_sheet(rkd, process)

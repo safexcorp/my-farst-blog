@@ -577,6 +577,10 @@ class MeetingFile(models.Model):
         ordering = ['-uploaded_at']
 
 
+def default_intake_date():
+    return timezone.localdate()
+
+
 # Обращения техподдержки
 class SupportTicket(models.Model):
     STATUS_NEW = 'new'
@@ -591,41 +595,131 @@ class SupportTicket(models.Model):
         (STATUS_RESOLVED, 'Решена/Закрыта'),
     ]
 
+    CATEGORY_QUESTION_CONSULT = 'question_consult'
+    CATEGORY_ERROR_PROBLEM = 'error_problem'
+    CATEGORY_IMPROVEMENT = 'improvement'
+
     CATEGORY_CHOICES = [
-        ('question', 'Вопрос'),
-        ('error', 'Ошибка'),
-        ('consultation', 'Консультация'),
-        ('improvement', 'Запрос на улучшение'),
+        (CATEGORY_QUESTION_CONSULT, 'Вопрос/Консультация'),
+        (CATEGORY_ERROR_PROBLEM, 'Ошибка/Проблема'),
+        (CATEGORY_IMPROVEMENT, 'Запрос на улучшение'),
     ]
 
-    # Основные поля
-    created_date = models.DateTimeField(default=timezone.now, verbose_name='Дата поступления')
-    customer = models.ForeignKey('Customer', on_delete=models.CASCADE, verbose_name='Контрагент', related_name='support_tickets')
-    product = models.ForeignKey('Product', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Продукт')
+    INTAKE_MESSENGER = 'messenger'
+    INTAKE_EMAIL = 'email'
+    INTAKE_MAIL = 'mail'
+    INTAKE_MANAGEMENT = 'management'
+    INTAKE_PHONE_SUPPORT = 'phone_support'
+    INTAKE_PHONE = 'phone'
+    INTAKE_IN_PERSON = 'in_person'
+    INTAKE_OTHER = 'other'
 
+    INTAKE_CHANNEL_CHOICES = [
+        (INTAKE_MESSENGER, 'Мессенджер'),
+        (INTAKE_EMAIL, 'Электронная почта'),
+        (INTAKE_MAIL, 'Почта (бумажное письмо)'),
+        (INTAKE_MANAGEMENT, 'Руководство'),
+        (INTAKE_PHONE_SUPPORT, 'Телефон тех. поддержки'),
+        (INTAKE_PHONE, 'Телефон (прочее)'),
+        (INTAKE_IN_PERSON, 'Личное обращение'),
+        (INTAKE_OTHER, 'Прочее'),
+    ]
 
+    CLAIM_VERBAL = 'verbal'
+    CLAIM_OFFICIAL = 'official'
+
+    CLAIM_TYPE_CHOICES = [
+        ('', '—'),
+        (CLAIM_VERBAL, 'Устная'),
+        (CLAIM_OFFICIAL, 'Официальная'),
+    ]
+
+    created_date = models.DateField(
+        default=default_intake_date,
+        verbose_name='Дата поступления',
+    )
+    customer = models.ForeignKey(
+        'Customer',
+        on_delete=models.CASCADE,
+        verbose_name='Контрагент',
+        related_name='support_tickets',
+    )
+    product = models.ForeignKey(
+        'Product',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='Продукт',
+    )
     category = models.CharField(
         max_length=20,
         choices=CATEGORY_CHOICES,
         verbose_name='Категория',
-        default='question'
+        default=CATEGORY_QUESTION_CONSULT,
+    )
+    problem = models.TextField(verbose_name='Проблема')
+    description = models.TextField(verbose_name='Описание (ход решения)', blank=True)
+    intake_channel = models.CharField(
+        max_length=20,
+        choices=INTAKE_CHANNEL_CHOICES,
+        verbose_name='Как поступило',
+        blank=True,
     )
 
-    problem = models.CharField(max_length=200, verbose_name='Проблема')
-    description = models.TextField(verbose_name='Описание (ход решения)', blank=True)
-
-    # Статус и даты
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_NEW, verbose_name='Статус')
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_NEW,
+        verbose_name='Статус',
+    )
+    resolution = models.TextField(
+        verbose_name='Решение проблемы / причины её возникновения',
+        blank=True,
+    )
+    claim_type = models.CharField(
+        max_length=10,
+        choices=CLAIM_TYPE_CHOICES,
+        blank=True,
+        default='',
+        verbose_name='Претензия',
+    )
+    claim_attachment = models.FileField(
+        upload_to='support_tickets/claims/%Y/%m/',
+        blank=True,
+        null=True,
+        verbose_name='Письмо / декларация (претензия)',
+        validators=[validate_file_size],
+    )
     status_changed_date = models.DateTimeField(auto_now=True, verbose_name='Дата изменения статуса')
 
-    # Пользователи
-    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True,
-                                   related_name='created_tickets', verbose_name='Создал')
-    assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
-                                    related_name='assigned_tickets', verbose_name='Назначенный агент')
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_tickets',
+        verbose_name='Создал',
+    )
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_tickets',
+        verbose_name='Текущий ответственный',
+    )
+
+    def clean(self):
+        super().clean()
+        if self.status == self.STATUS_RESOLVED and not (self.resolution or '').strip():
+            raise ValidationError({
+                'resolution': 'Заполните решение проблемы при статусе «Решена/Закрыта».',
+            })
+        if self.claim_type == self.CLAIM_OFFICIAL and not self.claim_attachment:
+            raise ValidationError({
+                'claim_attachment': 'Для официальной претензии приложите письмо или декларацию.',
+            })
 
     def save(self, *args, **kwargs):
-        """Автоматическое обновление даты изменения статуса"""
         if self.pk:
             original = SupportTicket.objects.get(pk=self.pk)
             if original.status != self.status:
@@ -633,12 +727,12 @@ class SupportTicket(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"Обращение #{self.id} - {self.problem}"
+        return f"Обращение #{self.id} - {self.problem[:80]}"
 
     class Meta:
         verbose_name = 'Обращение'
         verbose_name_plural = 'Обращения'
-        ordering = ['-created_date']
+        ordering = ['-created_date', '-pk']
 
 
 # Комментарии к заявкам
@@ -654,7 +748,7 @@ class TicketComment(models.Model):
         return f"Комментарий к #{self.ticket.id} от {self.author.username}"
 
     class Meta:
-        verbose_name = 'Комментарий обращения'
-        verbose_name_plural = 'Комментарии обращений'
+        verbose_name = 'Запись взаимодействия'
+        verbose_name_plural = 'Взаимодействие по обработке обращений'
         ordering = ['created_date']
 

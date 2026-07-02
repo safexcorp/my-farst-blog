@@ -1,0 +1,533 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<style>
+  .cab-wrap { max-width: 1150px; }
+
+  .cab-nav {
+    margin-bottom:22px; padding:14px 16px 16px; border-radius:12px;
+    border:1px solid rgba(121,174,200,.22);
+    background:rgba(121,174,200,.04);
+    display:flex; flex-direction:column; gap:0;
+  }
+  .cab-nav-row {
+    display:grid; grid-template-columns:108px 1fr; gap:12px 16px;
+    align-items:center; padding:10px 0;
+  }
+  .cab-nav-row + .cab-nav-row { border-top:1px solid rgba(121,174,200,.12); }
+  .cab-nav-label {
+    font-size:11px; font-weight:700; letter-spacing:.04em;
+    text-transform:uppercase; color:#79aec8;
+    display:flex; align-items:center; gap:6px;
+  }
+  .cab-nav-label-icon { font-size:15px; line-height:1; }
+  .cab-tabs { display:grid; gap:8px; min-width:0; }
+  .cab-tabs--4 { grid-template-columns:repeat(4, minmax(0, 1fr)); }
+  .cab-tabs--3 { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+  .cab-tabs--2 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  @media (max-width:900px) {
+    .cab-tabs--4 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width:720px) {
+    .cab-nav-row { grid-template-columns:1fr; gap:8px; }
+    .cab-tabs--4, .cab-tabs--3, .cab-tabs--2 { grid-template-columns:1fr; }
+  }
+  .cab-tab {
+    width:100%; padding:10px 14px; cursor:pointer; border-radius:8px;
+    border:1px solid rgba(121,174,200,.45);
+    background:transparent;
+    font-family:inherit; font-size:13px; font-weight:600; color:var(--body-fg,#9ec5d8);
+    display:flex; align-items:center; gap:10px;
+    appearance:none; -webkit-appearance:none;
+    transition:background .15s, border-color .15s, color .15s, box-shadow .15s;
+  }
+  .cab-tab:hover {
+    background:rgba(121,174,200,.14); color:var(--body-fg,#d4e8f2);
+    border-color:#79aec8;
+    box-shadow:0 2px 6px rgba(65,118,144,.2);
+  }
+  .cab-tab.active {
+    background:#417690;
+    border-color:#609ab6;
+    color:#fff;
+    box-shadow:0 3px 10px rgba(65,118,144,.45);
+  }
+  .cab-tab-icon { font-size:18px; line-height:1; flex-shrink:0; width:22px; text-align:center; }
+  .cab-tab.active .cab-tab-icon { transform:scale(1.05); }
+  .cab-tab-label { flex:1; text-align:left; white-space:normal; line-height:1.2; word-break:break-word; }
+  .cab-badge {
+    flex-shrink:0; min-width:20px; text-align:center;
+    background:#E53935; color:#fff; border-radius:999px;
+    padding:2px 7px; font-size:10px; font-weight:700; line-height:1.3;
+  }
+  .cab-tab.active .cab-badge { background:rgba(255,255,255,.92); color:#417690; }
+  .cab-badge.muted { background:#417690; color:#fff; }
+  .cab-tab.active .cab-badge.muted { background:rgba(255,255,255,.92); color:#417690; }
+  .cab-panel { display:none; }
+  .cab-panel.active { display:block; }
+
+  .cab-card {
+    border:1px solid var(--hairline-color,#444); border-radius:10px; padding:14px 18px;
+    margin-bottom:12px; background:var(--darkened-bg,rgba(255,255,255,.02));
+    display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap;
+  }
+  .cab-info { min-width:280px; flex:1; }
+  .cab-card .title { font-size:15px; font-weight:700; }
+  .cab-card .subtitle { font-size:13px; color:var(--body-quiet-color,#aaa); margin-top:2px; }
+  .cab-card .meta { font-size:12px; color:var(--body-quiet-color,#999); margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .cab-card .note { font-size:12px; margin-top:6px; padding:6px 10px; border-radius:6px; background:rgba(229,57,53,.10); }
+
+  .pill { border-radius:12px; padding:2px 10px; font-size:11px; font-weight:600; color:#fff; display:inline-block; }
+  .pill-blue { background:#2196F3; } .pill-green { background:#4CAF50; }
+  .pill-gray { background:#9E9E9E; } .pill-orange { background:#FB8C00; }
+  .pill-purple { background:#9C27B0; }
+  .pill-type { background:#607D8B; }
+
+  .cab-actions { display:flex; gap:8px; flex-wrap:wrap; }
+  .btn { padding:7px 15px; border-radius:6px; color:#fff; font-weight:600; font-size:13px; text-decoration:none; border:none; cursor:pointer; }
+  .btn-green { background:#4CAF50; } .btn-red { background:#E53935; }
+  .btn-blue { background:#2196F3; } .btn-gray { background:#777; }
+  .btn-ghost { background:transparent; color:#79aec8; border:1px solid #79aec8; }
+  .btn-doc { background:#5c6bc0; }
+  .cab-wrap a.btn:link, .cab-wrap a.btn:visited { color:#fff; }
+  .cab-wrap a.btn-ghost:link, .cab-wrap a.btn-ghost:visited { color:#417690; }
+  .cab-wrap a.btn-ghost { border-color:#417690; }
+
+  .cab-group { margin-bottom:24px; }
+  .cab-group-head {
+    font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+    color:#79aec8; padding:0 2px 8px; margin-bottom:12px;
+    border-bottom:1px solid rgba(121,174,200,.25);
+    display:flex; align-items:center; gap:9px;
+  }
+  .cab-group-head .cab-group-icon { font-size:16px; line-height:1; }
+  .cab-group-count {
+    background:#417690; color:#fff; border-radius:999px;
+    padding:1px 9px; font-size:11px; font-weight:700;
+  }
+  .cab-group-sub {
+    font-size:12px; font-weight:600; text-transform:none; letter-spacing:0;
+    color:var(--body-quiet-color,#aaa); margin-left:auto;
+  }
+  .cab-card--compact { padding:7px 12px; margin-bottom:6px; }
+  .cab-card--compact .title { font-size:13px; font-weight:600; }
+
+  /* Подзадачи: родитель + вложенные подзадачи */
+  .clamp2 {
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+    overflow:hidden;
+  }
+  .cab-st-group {
+    margin-bottom:18px; border:1px solid var(--hairline-color,#444);
+    border-radius:12px; overflow:hidden;
+    border-left:4px solid #5c6bc0;
+  }
+  .cab-st-parent { padding:12px 16px; background:rgba(92,107,192,.12); }
+  .cab-st-parent-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .cab-st-code { font-size:15px; font-weight:800; color:#5c6bc0; letter-spacing:.02em; }
+  .cab-st-pill {
+    background:#5c6bc0; color:#fff; border-radius:999px;
+    padding:2px 10px; font-size:11px; font-weight:700;
+  }
+  .cab-st-parent-task {
+    margin-top:6px; font-size:12px; line-height:1.4;
+    color:var(--body-quiet-color,#9a9a9a);
+  }
+  .cab-st-caption {
+    font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--body-quiet-color,#888); padding:10px 16px 4px;
+  }
+  .cab-st-children { padding:0 14px 10px; display:flex; flex-direction:column; gap:8px; }
+  .cab-st-child {
+    display:flex; justify-content:space-between; align-items:center; gap:14px;
+    flex-wrap:wrap; padding:10px 14px; border-radius:8px;
+    border:1px solid var(--hairline-color,#444);
+    border-left:3px solid #79aec8;
+    background:var(--darkened-bg,rgba(255,255,255,.02));
+  }
+  .cab-st-child .cab-info { min-width:240px; flex:1; }
+  .cab-st-child .num {
+    display:inline-block; font-weight:700; font-size:11px; color:#fff;
+    background:#417690; border-radius:6px; padding:1px 7px; margin-right:6px;
+  }
+  .cab-st-child .task-text { font-size:13px; font-weight:600; line-height:1.4; }
+  .cab-st-child .meta { font-size:12px; color:var(--body-quiet-color,#999); margin-top:5px; }
+  .btn-sm { padding:5px 12px; font-size:12px; }
+
+  .cab-empty { padding:30px; text-align:center; color:var(--body-quiet-color,#999); font-style:italic; }
+  .cab-overdue { color:#E53935; font-weight:700; }
+  .notif.unread { background:rgba(33,150,243,.08); border-color:#2196F3; }
+
+  .issued-task {
+    margin-top:6px; padding:7px 0 7px 12px;
+    border-left:2px solid #79aec8;
+    font-size:13px; line-height:1.45; color:var(--body-quiet-color,#b0b0b0);
+    white-space:pre-line; word-break:break-word;
+  }
+</style>
+
+<div id="content-main" class="cab-wrap">
+
+  <nav class="cab-nav" aria-label="Разделы личного кабинета">
+    <div class="cab-nav-row">
+      <span class="cab-nav-label"><span class="cab-nav-label-icon">📑</span> Согласование</span>
+      <div class="cab-tabs cab-tabs--3">
+        <button type="button" class="cab-tab active" data-tab="sign">
+          <span class="cab-tab-icon" aria-hidden="true">✍️</span>
+          <span class="cab-tab-label">Подпись</span>
+          {% if sign_tasks %}<span class="cab-badge">{{ sign_tasks|length }}</span>{% endif %}
+        </button>
+        <button type="button" class="cab-tab" data-tab="ack">
+          <span class="cab-tab-icon" aria-hidden="true">👁️</span>
+          <span class="cab-tab-label">Ознакомление</span>
+          {% if ack_tasks %}<span class="cab-badge">{{ ack_tasks|length }}</span>{% endif %}
+        </button>
+        <button type="button" class="cab-tab" data-tab="fix">
+          <span class="cab-tab-icon" aria-hidden="true">✏️</span>
+          <span class="cab-tab-label">Доработка</span>
+          {% if fix_tasks %}<span class="cab-badge">{{ fix_tasks|length }}</span>{% endif %}
+        </button>
+      </div>
+    </div>
+    <div class="cab-nav-row">
+      <span class="cab-nav-label"><span class="cab-nav-label-icon">📋</span> Задания</span>
+      <div class="cab-tabs cab-tabs--4">
+        <button type="button" class="cab-tab" data-tab="assigned">
+          <span class="cab-tab-icon" aria-hidden="true">🎯</span>
+          <span class="cab-tab-label">Мне назначено (Текущий ответственный)</span>
+          {% if assigned_items %}<span class="cab-badge muted">{{ assigned_items|length }}</span>{% endif %}
+        </button>
+        <button type="button" class="cab-tab" data-tab="work">
+          <span class="cab-tab-icon" aria-hidden="true">📥</span>
+          <span class="cab-tab-label">Мои задачи</span>
+          {% if my_work %}<span class="cab-badge muted">{{ my_work|length }}</span>{% endif %}
+        </button>
+        <button type="button" class="cab-tab" data-tab="subtasks">
+          <span class="cab-tab-icon" aria-hidden="true">🧩</span>
+          <span class="cab-tab-label">Мои подзадачи</span>
+          {% if my_subtasks %}<span class="cab-badge muted">{{ my_subtasks|length }}</span>{% endif %}
+        </button>
+        <button type="button" class="cab-tab" data-tab="issued">
+          <span class="cab-tab-icon" aria-hidden="true">📤</span>
+          <span class="cab-tab-label">Выданные задачи</span>
+          {% if issued_work_active %}<span class="cab-badge muted">{{ issued_work_active }}</span>{% endif %}
+        </button>
+      </div>
+    </div>
+    <div class="cab-nav-row">
+      <span class="cab-nav-label"><span class="cab-nav-label-icon">📌</span> Прочее</span>
+      <div class="cab-tabs cab-tabs--2">
+        <button type="button" class="cab-tab" data-tab="docs">
+          <span class="cab-tab-icon" aria-hidden="true">📄</span>
+          <span class="cab-tab-label">Мои документы</span>
+          {% if my_docs %}<span class="cab-badge muted">{{ my_docs|length }}</span>{% endif %}
+        </button>
+        <button type="button" class="cab-tab" data-tab="notif">
+          <span class="cab-tab-icon" aria-hidden="true">🔔</span>
+          <span class="cab-tab-label">Уведомления</span>
+          {% if unread_count %}<span class="cab-badge">{{ unread_count }}</span>{% endif %}
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="cab-panel active" data-panel="sign">
+    {% for t in sign_tasks %}
+    <div class="cab-card">
+      <div class="cab-info">
+        <div class="title">{{ t.doc_ctx.title }}</div>
+        {% if t.doc_ctx.subtitle %}<div class="subtitle">{{ t.doc_ctx.subtitle }}</div>{% endif %}
+        <div class="meta">
+          <span class="pill pill-type">{{ t.doc_ctx.type_label }}</span>
+          <span class="pill pill-orange">На подпись</span>
+          <span class="pill pill-blue">Шаг {{ t.process.current_order }}</span>
+          Ваша роль: <strong>{{ t.target_label }}</strong>
+          {% if t.is_recheck %} · ⟳ повторно{% endif %}
+        </div>
+      </div>
+      <div class="cab-actions">
+        {% if t.doc_ctx.file_url %}
+        <a class="btn btn-doc" href="{{ t.doc_ctx.file_url }}" target="_blank">Открыть документ</a>
+        {% endif %}
+        {% if t.doc_ctx.admin_url %}
+        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка</a>
+        {% endif %}
+        <a class="btn btn-green" href="{% url 'admin:approvals_task_sign' t.pk %}">✍ Подписать (ЭЦП)</a>
+        <a class="btn btn-red" href="{% url 'admin:approvals_task_reject' t.pk %}">Отклонить</a>
+      </div>
+    </div>
+    {% empty %}
+    <div class="cab-empty">Нет документов на согласование / подпись.</div>
+    {% endfor %}
+  </div>
+
+  <div class="cab-panel" data-panel="ack">
+    {% for t in ack_tasks %}
+    <div class="cab-card">
+      <div class="cab-info">
+        <div class="title">{{ t.doc_ctx.title }}</div>
+        {% if t.doc_ctx.subtitle %}<div class="subtitle">{{ t.doc_ctx.subtitle }}</div>{% endif %}
+        <div class="meta">
+          <span class="pill pill-type">{{ t.doc_ctx.type_label }}</span>
+          <span class="pill pill-purple">Ознакомление</span>
+          <span class="pill pill-blue">Шаг {{ t.process.current_order }}</span>
+          Роль: <strong>{{ t.target_label }}</strong>
+        </div>
+      </div>
+      <div class="cab-actions">
+        {% if t.doc_ctx.file_url %}
+        <a class="btn btn-doc" href="{{ t.doc_ctx.file_url }}" target="_blank">Открыть документ</a>
+        {% endif %}
+        {% if t.doc_ctx.admin_url %}
+        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка</a>
+        {% endif %}
+        <a class="btn btn-green" href="{% url 'admin:approvals_task_sign' t.pk %}">✍ Подписать (ЭЦП)</a>
+      </div>
+    </div>
+    {% empty %}
+    <div class="cab-empty">Нет документов на ознакомление.</div>
+    {% endfor %}
+  </div>
+
+  <div class="cab-panel" data-panel="fix">
+    {% for t in fix_tasks %}
+    <div class="cab-card">
+      <div class="cab-info">
+        <div class="title">{{ t.doc_ctx.title }}</div>
+        {% if t.doc_ctx.subtitle %}<div class="subtitle">{{ t.doc_ctx.subtitle }}</div>{% endif %}
+        <div class="meta">
+          <span class="pill pill-type">{{ t.doc_ctx.type_label }}</span>
+          <span class="pill pill-orange">На доработку</span>
+          Вернула роль: <strong>{{ t.target_label }}</strong>
+        </div>
+        {% if t.comment %}<div class="note">💬 Замечание: {{ t.comment }}</div>{% endif %}
+      </div>
+      <div class="cab-actions">
+        {% if t.doc_ctx.file_url %}
+        <a class="btn btn-doc" href="{{ t.doc_ctx.file_url }}" target="_blank">Открыть документ</a>
+        {% endif %}
+        {% if t.doc_ctx.admin_url %}
+        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка</a>
+        {% endif %}
+        <a class="btn btn-blue" href="{% url 'admin:approvals_task_resubmit' t.pk %}">Отправить на повторную проверку</a>
+      </div>
+    </div>
+    {% empty %}
+    <div class="cab-empty">Нет документов на доработке.</div>
+    {% endfor %}
+  </div>
+
+  <div class="cab-panel" data-panel="assigned">
+    {% regroup assigned_items by model_label as assigned_groups %}
+    {% for group in assigned_groups %}
+    <div class="cab-group">
+      <div class="cab-group-head">
+        <span class="cab-group-icon" aria-hidden="true">📦</span>
+        {{ group.grouper }}
+        <span class="cab-group-count">{{ group.list|length }}</span>
+      </div>
+      {% for it in group.list %}
+      <div class="cab-card cab-card--compact">
+        <div class="cab-info">
+          <div class="title">{{ it.title }}</div>
+        </div>
+        <div class="cab-actions">
+          {% if it.admin_url %}
+          <a class="btn btn-gray btn-sm" href="{{ it.admin_url }}">Открыть</a>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% empty %}
+    <div class="cab-empty">Нет объектов, где вы — текущий ответственный.</div>
+    {% endfor %}
+  </div>
+
+  <div class="cab-panel" data-panel="work">
+    {% for wa in my_work %}
+    <div class="cab-card">
+      <div class="cab-info">
+        <div class="title">{{ wa.name|default:wa }}</div>
+        <div class="meta">
+          {% if wa.post %}{{ wa.post }} · {% endif %}
+          Срок:
+          <span {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>
+            {{ wa.target_deadline|date:"d.m.Y" }}{% if wa.target_deadline < today %} (просрочено){% endif %}
+          </span>
+        </div>
+      </div>
+      <div class="cab-actions">
+        <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
+      </div>
+    </div>
+    {% empty %}
+    <div class="cab-empty">Нет активных заданий, назначенных вам.</div>
+    {% endfor %}
+  </div>
+
+  <div class="cab-panel" data-panel="subtasks">
+    {% for group in subtask_groups %}
+    <div class="cab-st-group">
+      <div class="cab-st-parent">
+        <div class="cab-st-parent-head">
+          <span class="cab-st-code">
+            📋 {% if group.wa %}{{ group.wa.wa_full_code|default:"Рабочее задание" }}{% else %}Без рабочего задания{% endif %}
+          </span>
+          <span class="cab-st-pill">Подзадач: {{ group.subtasks|length }}</span>
+          {% if group.wa %}
+          <a class="btn btn-ghost btn-sm" style="margin-left:auto;"
+             href="{% url 'admin:blog_workassignment_change' group.wa.pk %}">Открыть РЗ</a>
+          {% endif %}
+        </div>
+        {% if group.wa.task %}
+        <div class="cab-st-parent-task clamp2" title="{{ group.wa.task }}">{{ group.wa.task }}</div>
+        {% endif %}
+      </div>
+      <div class="cab-st-caption">Подзадачи ↓</div>
+      <div class="cab-st-children">
+        {% for st in group.subtasks %}
+        <div class="cab-st-child">
+          <div class="cab-info">
+            <div class="task-text clamp2" title="{{ st.task }}">
+              {% if st.subtask_full_code %}<span class="num">{{ st.subtask_full_code }}</span>{% endif %}
+              {{ st.task }}
+            </div>
+            <div class="meta">
+              Срок:
+              <span {% if st.target_deadline < today %}class="cab-overdue"{% endif %}>
+                {{ st.target_deadline|date:"d.m.Y" }}{% if st.target_deadline < today %} (просрочено){% endif %}
+              </span>
+            </div>
+          </div>
+          <div class="cab-actions">
+            <a class="btn btn-gray btn-sm" href="{% url 'admin:blog_workassignmentsubtask_change' st.pk %}">Открыть</a>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% empty %}
+    <div class="cab-empty">Нет активных подзадач, назначенных вам.</div>
+    {% endfor %}
+  </div>
+
+  <div class="cab-panel" data-panel="issued">
+    {% for wa in issued_work %}
+    <div class="cab-card">
+      <div class="cab-info">
+        <div class="title">
+          {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
+        </div>
+        {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
+        <div class="meta">
+          {% if wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
+          {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
+          {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
+          {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+          {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
+          {% if wa.executor %}
+            Исполнитель: <strong>{{ wa.executor }}</strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
+          {% endif %}
+          {% if wa.current_responsible_id != wa.executor_id %}
+            · Ответственный: <strong>{{ wa.current_responsible }}</strong>
+          {% endif %}
+          {% if wa.post %} · {{ wa.post }}{% endif %}
+        </div>
+        <div class="meta">
+          Срок:
+          <strong {% if not wa.control_status or wa.control_status == "in_progress" %}{% if wa.target_deadline < today %}class="cab-overdue"{% endif %}{% endif %}>
+            {{ wa.target_deadline|date:"d.m.Y" }}
+          </strong>
+          {% if not wa.control_status or wa.control_status == "in_progress" %}
+            {% if wa.target_deadline < today %} (просрочено){% endif %}
+          {% endif %}
+          · Создано: {{ wa.date_of_creation|date:"d.m.Y" }}
+          {% if wa.subtask_total %} · Подзадач: {{ wa.subtask_total }}{% endif %}
+          {% if wa.reschedule_count %} · Переносов: {{ wa.reschedule_count }}{% endif %}
+        </div>
+      </div>
+      <div class="cab-actions">
+        <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
+      </div>
+    </div>
+    {% empty %}
+    <div class="cab-empty">У вас пока нет выданных заданий.</div>
+    {% endfor %}
+  </div>
+
+  <div class="cab-panel" data-panel="docs">
+    {% for p in my_docs %}
+    <div class="cab-card">
+      <div class="cab-info">
+        <div class="title">{{ p.doc_ctx.title }}</div>
+        <div class="meta">
+          <span class="pill pill-type">{{ p.doc_ctx.type_label }}</span>
+          {% if p.status == "approved" %}<span class="pill pill-green">Согласован</span>
+          {% elif p.status == "cancelled" %}<span class="pill pill-gray">Отменён</span>
+          {% else %}<span class="pill pill-blue">В процессе · шаг {{ p.current_order }}</span>{% endif %}
+          Маршрут: {{ p.route }}
+        </div>
+      </div>
+      <div class="cab-actions">
+        {% if p.doc_ctx.admin_url %}
+        <a class="btn btn-gray" href="{{ p.doc_ctx.admin_url }}">Карточка</a>
+        {% endif %}
+      </div>
+    </div>
+    {% empty %}
+    <div class="cab-empty">Вы не запускали согласований.</div>
+    {% endfor %}
+  </div>
+
+  <div class="cab-panel" data-panel="notif">
+    {% if notifications %}
+    <div style="margin-bottom:12px; display:flex; gap:8px; flex-wrap:wrap;">
+      <form method="post" action="{% url 'admin:approvals_notification_read_all' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-gray">Отметить все прочитанными</button>
+      </form>
+      <form method="post" action="{% url 'admin:approvals_notification_clear_all' %}"
+            onsubmit="return confirm('Удалить все уведомления? Это действие нельзя отменить.');">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-red">Очистить уведомления</button>
+      </form>
+    </div>
+    {% endif %}
+    {% for n in notifications %}
+    <div class="cab-card notif {% if not n.is_read %}unread{% endif %}">
+      <div class="cab-info">
+        <div class="title">{% if not n.is_read %}🔵 {% endif %}{{ n.title }}</div>
+        {% if n.text %}<div class="subtitle">{{ n.text }}</div>{% endif %}
+        <div class="meta">{{ n.created_at|date:"d.m.Y H:i" }}</div>
+      </div>
+      <div class="cab-actions">
+        <a class="btn btn-blue" href="{% url 'admin:approvals_notification_open' n.pk %}">Открыть</a>
+      </div>
+    </div>
+    {% empty %}
+    <div class="cab-empty">Уведомлений нет.</div>
+    {% endfor %}
+  </div>
+
+</div>
+
+<script>
+  (function () {
+    var tabs = document.querySelectorAll(".cab-tab");
+    var panels = document.querySelectorAll(".cab-panel");
+    function activate(name) {
+      tabs.forEach(function (t) { t.classList.toggle("active", t.dataset.tab === name); });
+      panels.forEach(function (p) { p.classList.toggle("active", p.dataset.panel === name); });
+      try { localStorage.setItem("cabinetTab", name); } catch (e) {}
+    }
+    tabs.forEach(function (t) {
+      t.addEventListener("click", function () { activate(t.dataset.tab); });
+    });
+    var saved;
+    try { saved = localStorage.getItem("cabinetTab"); } catch (e) {}
+    var exists = saved && document.querySelector('.cab-panel[data-panel="' + saved + '"]');
+    if (exists) activate(saved);
+  })();
+</script>
+{% endblock %}
