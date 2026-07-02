@@ -9,7 +9,6 @@ class WorkAssignmentService:
     def reschedule_deadline(
         assignment: WorkAssignment, *,
         new_target_deadline=None,
-        new_hard_deadline=None,
         new_time_window_start=None,
         new_time_window_end=None,
         reason: str = "",
@@ -34,10 +33,12 @@ class WorkAssignmentService:
         )
 
         # 3) применим только переданные поля
+        hard_reset = False
         if new_target_deadline is not None:
+            if new_target_deadline != old["target"] and old["hard"] is not None:
+                assignment.hard_deadline = None
+                hard_reset = True
             assignment.target_deadline = new_target_deadline
-        if new_hard_deadline is not None:
-            assignment.hard_deadline = new_hard_deadline
         if new_time_window_start is not None:
             assignment.time_window_start = new_time_window_start
         if new_time_window_end is not None:
@@ -75,6 +76,7 @@ class WorkAssignmentService:
             "date_of_change","last_editor"
         ])
 
+        assignment._hard_deadline_reset = hard_reset
         return assignment
 
 

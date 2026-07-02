@@ -8,6 +8,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from datetime import date, datetime
 
 from .helpers import (
     SPECIFICATION_SECTION_CHOICES,
@@ -20,6 +21,33 @@ from .helpers import (
 
 User = settings.AUTH_USER_MODEL
 User = get_user_model()
+
+_INVALID_DATE_MSG = "Укажите дату в формате ДД.ММ.ГГГГ (например, 01.07.2026)."
+
+
+def _as_date(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def _normalize_model_dates(instance, field_names):
+    normalized = {}
+    errors = {}
+    for name in field_names:
+        raw = getattr(instance, name, None)
+        coerced = _as_date(raw)
+        if raw not in (None, "") and coerced is None:
+            errors[name] = _INVALID_DATE_MSG
+        else:
+            normalized[name] = coerced
+            if coerced is not None:
+                setattr(instance, name, coerced)
+    return normalized, errors
 
 
 class technical_design(models.Model):
@@ -1606,14 +1634,22 @@ class WorkAssignment(models.Model):
     ]
 
     TEMP_STATUS_CHOICES = [
+        ('assigned', 'Ожидает принятия'),
         ('in_progress', 'В работе'),
+        ('review', 'На проверке'),
         ('on_time', 'Выполнено в срок'),
         ('rescheduled', 'Выполнено с переносом сроков'),
         ('partial', 'Выполнено частично'),
         ('not_done', 'Не выполнено (Отменено)'),
     ]
 
-    # базовые поля
+    STATUS_ASSIGNED = 'assigned'
+    STATUS_IN_PROGRESS = 'in_progress'
+    STATUS_REVIEW = 'review'
+
+    ACTIVE_STATUSES = ('assigned', 'in_progress', 'review')
+    TERMINAL_STATUSES = ('on_time', 'rescheduled', 'partial', 'not_done')
+
     name = models.CharField(max_length=100, unique=True, blank=True, null=True, verbose_name="Наименование")
     wa_number = models.PositiveIntegerField(
         null=True,
@@ -1623,7 +1659,6 @@ class WorkAssignment(models.Model):
     )
     category = models.CharField(max_length=100, default="РЗ", verbose_name="Категория")
     executor = models.ForeignKey(User, on_delete=models.CASCADE, null= True, related_name= "executed_workassignments", verbose_name="Исполнитель")
-    task = models.CharField('Задача', max_length=255, blank=True)
     post = models.ForeignKey('Post', on_delete=models.CASCADE, null=True, blank=True, related_name='work_assignments', verbose_name="Связанная разработка/проект")
     author = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Автор")
     date_of_creation = models.DateTimeField(default=timezone.now, verbose_name="Дата и время создания")
@@ -1654,12 +1689,11 @@ class WorkAssignment(models.Model):
     result_description = models.TextField(max_length=5000, blank=True, null=True, verbose_name="Описание результата")
     route = models.ForeignKey("Route", on_delete=models.CASCADE, related_name='routes', blank=True, null=True, verbose_name="Маршрут")
 
-    target_deadline = models.DateField("Целевой срок выполнения", default=timezone.now, null=False, blank=False)
+    target_deadline = models.DateField("Целевой срок выполнения", default=timezone.localdate, null=False, blank=False)
     hard_deadline = models.DateField("Абсолютный дедлайн", null=True, blank=True)
     time_window_start = models.DateField("Временное окно: с", null=True, blank=True)
     time_window_end = models.DateField("Временное окно: по", null=True, blank=True)
-    conditional_deadline = models.CharField("Условный дедлайн", max_length=1000, blank=True)
-    #uploaded_file = models.FileField(upload_to='uploads/', blank = True, verbose_name="Приложение к РЗ")
+    conditional_deadline = models.CharField("Условия/ограничения", max_length=1000, blank=True)
 
     version_diff = models.TextField(
         "Сравнение версий",
@@ -1675,64 +1709,40 @@ class WorkAssignment(models.Model):
     )
     control_date = models.DateField("Дата фиксации статуса", null=True, blank=True)
 
-   #def _build_name(self) -> str:
-    #    sep = " — "  # любой разделитель
-     #   technical_assignment_part = (self.technical_assignment.name if self.technical_assignment_id else "").strip()
-#
- #       # Нормализуем и режем вторую часть до 50 символов без троеточия
-  #      task_clean = " ".join((self.task or "").split())
-   #     # чтобы не переполнить name, сначала считаем доступную длину под вторую часть
-    #    max_len = self._meta.get_field('name').max_length
-     #   allowed_for_task = max(0, min(50, max_len - len(sep) - len(technical_assignment_part)))
-      #  task_part = Truncator(task_clean).chars(allowed_for_task, truncate='')
-
-       # return f"{technical_assignment_part}{sep}{task_part}" if task_part else technical_assignment_part"""
-
     def clean(self):
         super().clean()
-        if self.hard_deadline and self.target_deadline:
-            if self.hard_deadline < self.target_deadline:
-                raise ValidationError({
-                    "hard_deadline": _(
-                        "Абсолютный дедлайн не может быть раньше целевого."
-                    )
-                })
 
-        if self.time_window_end and self.target_deadline:
-            if self.time_window_end > self.target_deadline:
-                raise ValidationError({
-                    "time_window_end": _(
-                        "Конец временного окна не может быть позже целевого дедлайна."
-                    )
-                })
+        dates, date_errors = _normalize_model_dates(
+            self,
+            ("target_deadline", "hard_deadline", "time_window_start", "time_window_end"),
+        )
+        if date_errors:
+            raise ValidationError(date_errors)
 
-            def save(self, *args, **kwargs):
-                self.full_clean()
-                return super().save(*args, **kwargs)
-    class Meta:
-        verbose_name = 'Рабочее задание'
-        verbose_name_plural = 'Рабочие задания'
+        target = dates["target_deadline"]
+        hard = dates["hard_deadline"]
+        tw_start = dates["time_window_start"]
+        tw_end = dates["time_window_end"]
 
-    #def save(self, *args, **kwargs):
-     #   self.name = self._build_name()
-      #  super().save(*args, **kwargs)
+        if tw_start and tw_end and tw_end < tw_start:
+            raise ValidationError({
+                "time_window_end": "Дата «по» не может быть раньше даты «с».",
+            })
 
-    def clean(self):
-        super().clean()
-        # проверка окна
-        if self.time_window_start and self.time_window_end:
-            if self.time_window_end < self.time_window_start:
-                raise ValidationError({'time_window_end': 'Дата «по» не может быть раньше даты «с».'})
+        if target and tw_end and tw_end > target:
+            raise ValidationError({
+                "time_window_end": "Конец временного окна не может быть позже целевого срока.",
+            })
 
-    def clean(self):
-        super().clean()
-        if self.time_window_start and self.time_window_end and self.time_window_end < self.time_window_start:
-            raise ValidationError({'time_window_end': 'Дата «по» не может быть раньше даты «с».'})
-        if self.target_deadline and self.time_window_start and self.time_window_end:
-            if not (self.time_window_start <= self.target_deadline <= self.time_window_end):
-                raise ValidationError({'target_deadline': 'Целевой срок должен попадать в заданное окно.'})
-        if self.hard_deadline and self.target_deadline and self.target_deadline > self.hard_deadline:
-            raise ValidationError({'target_deadline': 'Целевой срок не может быть позже абсолютного дедлайна.'})
+        if target and tw_start and tw_end and not (tw_start <= target <= tw_end):
+            raise ValidationError({
+                "target_deadline": "Целевой срок должен попадать в заданное временное окно.",
+            })
+
+        if hard and target and hard < target:
+            raise ValidationError({
+                "hard_deadline": "Абсолютный дедлайн не может быть раньше целевого срока.",
+            })
 
     @property
     def effective_deadline(self):
@@ -1742,19 +1752,33 @@ class WorkAssignment(models.Model):
             return self.target_deadline
         if self.time_window_end:
             return self.time_window_end
-        return self.deadline
+        return None
 
     def is_active(self):
-        return self.control_status not in ('not_done',)
+        return self.control_status not in self.TERMINAL_STATUSES
+
+    def is_target_overdue(self, today=None):
+        if not self.is_active():
+            return False
+        if not self.target_deadline:
+            return False
+        today = today or timezone.localdate()
+        return today > self.target_deadline
+
+    def is_hard_overdue(self, today=None):
+        if not self.is_active():
+            return False
+        if not self.hard_deadline:
+            return False
+        today = today or timezone.localdate()
+        return today > self.hard_deadline
 
     def is_overdue(self, today=None):
         if not self.is_active():
             return False
-        d = self.effective_deadline
-        if not d:
-            return False
-        today = today or timezone.localdate()
-        return today > d
+        if self.is_target_overdue(today):
+            return True
+        return self.is_hard_overdue(today)
 
     def mark_result_on_close(self):
         if self.result:
@@ -1781,6 +1805,10 @@ class WorkAssignment(models.Model):
 
     def __str__(self):
         return self.name or "Без названия"
+
+    class Meta:
+        verbose_name = 'Рабочее задание'
+        verbose_name_plural = 'Рабочие задания'
 
 
 class WorkAssignmentSubtask(models.Model):
@@ -1844,7 +1872,7 @@ class WorkAssignmentSubtask(models.Model):
     result_description = models.TextField(
         max_length=5000, blank=True, null=True, verbose_name="Описание результата"
     )
-    target_deadline = models.DateField("Целевой срок выполнения", default=timezone.now)
+    target_deadline = models.DateField("Целевой срок выполнения", default=timezone.localdate)
     hard_deadline = models.DateField("Абсолютный дедлайн", null=True, blank=True)
     time_window_start = models.DateField("Временное окно: с", null=True, blank=True)
     time_window_end = models.DateField("Временное окно: по", null=True, blank=True)
