@@ -48,7 +48,9 @@ from enterprise_asset_management.models import (
 )
 from shared_repository.models import (SharedRepository, IndependentDocumentAcceptSignature,
 KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature, AdministrativeOrder,
-AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature, PSIDocument, GeneratedDocument, DocumentHistory)
+AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature)
+
+from .models import (PSIDocument, GeneratedDocument, DocumentHistory)
 
 from .admin_forms import RescheduleAdminForm
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
@@ -5760,9 +5762,10 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-from shared_repository.utils import generate_pdf_logic
+from blog.utils import generate_pdf_logic
 
 
+#ПСИ СПМ ИБП
 class GeneratedDocumentInline(admin.TabularInline):
     """Inline для отображения сгенерированных PDF внутри протокола"""
     model = GeneratedDocument
@@ -5773,7 +5776,14 @@ class GeneratedDocumentInline(admin.TabularInline):
 
     def file_link(self, obj):
         if obj.file:
-            return format_html('<a href="{}" target="_blank">📄 Открыть PDF</a>', obj.file.url)
+            if obj.psi_source and obj.psi_source.shipment:
+                serial = obj.psi_source.shipment.serial_number
+            else:
+                serial = "—"
+            return format_html(
+                '<a href="{}" target="_blank">📄 Протокол_ПСИ_ИБП_СПМ_{}_v{}</a>',
+                obj.file.url, serial, obj.version
+            )
         return "Файл отсутствует"
 
     file_link.short_description = "Ссылка"
@@ -5789,70 +5799,134 @@ class DocumentHistoryInline(admin.TabularInline):
     verbose_name = "Запись истории"
     verbose_name_plural = "История изменений"
 
+class PSIDocumentForm(forms.ModelForm):
+    class Meta:
+        model = PSIDocument
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Для п. 5.6 ручной выбор — только из двух вариантов (при наличии файла).
+        # Значение "нет данных" проставляется автоматически, когда файл не прикреплён.
+        if 'func_audio' in self.fields:
+            self.fields['func_audio'].choices = [
+                ('соответствует', 'Соответствует'),
+                ('не соответствует', 'Не соответствует'),
+            ]
+
+    def clean(self):
+        cleaned_data = super().clean()
+
+        interface_file = cleaned_data.get('interface_file')
+        func_audio = cleaned_data.get('func_audio')
+        interface_note = cleaned_data.get('interface_note')
+
+        if not interface_file:
+            # Файл (SNMP/UART) не прикреплён — статус п. 5.6 автоматически "нет данных"
+            cleaned_data['func_audio'] = 'нет данных'
+        elif func_audio == 'не соответствует' and not (interface_note and interface_note.strip()):
+            # Файл прикреплён, выбрано "Не соответствует" — примечание обязательно
+            self.add_error(
+                'interface_note',
+                'При статусе «Не соответствует» необходимо заполнить «Примечание (п. 5.6)».'
+            )
+
+        return cleaned_data
+
 
 @admin.register(PSIDocument)
 class PSIDocumentAdmin(admin.ModelAdmin):
+    form = PSIDocumentForm
     """Админка для протоколов ПСИ"""
 
     list_display = (
-        'serial_number',
-        'model_name',
+        'get_post_name',      # отображение модификации
+        'get_serial_number',  # заводской номер из shipment
+        'get_developer_name', # организация-разработчик
         'test_date',
         'inspector',
+        'get_workshop_name',
         'conclusion_short',
         'pdf_count_display',
         'created_at',
+        #'func_audio_status'
     )
 
     list_filter = (
         'test_date',
         'inspector',
-        'model_name',
         'conclusion',
+        'workshop',
     )
 
     search_fields = (
-        'serial_number',
-        'model_name',
+        'shipment__serial_number', # Ищем по связанной модели
+        'post__name', # Ищем по связанной модели
         'fw_version',
         'inspector',
         'comment',
+        'workshop__number_name',
     )
 
     readonly_fields = (
         'created_at',
         'pdf_count_display',
         'display_files_list',
+        'date_of_change',
+        'insulation_res',  # определяется автоматически по фактическому значению
+        'conclusion',  # определяется автоматически по результатам проверок
+        'author',  # проставляется автоматически
+        'last_editor',  # проставляется автоматически
+        'date_of_creation',
     )
+
+    autocomplete_fields = ('post', 'shipment', 'developer_org', 'workshop')
 
     inlines = [GeneratedDocumentInline, DocumentHistoryInline]
 
     fieldsets = (
         ('1. Идентификация изделия', {
-            'fields': ('serial_number', 'test_date', 'model_name', 'fw_version')
+            'fields': (
+                'post',  # выбор модификации
+                'shipment',  # выбор заводского номера
+                'developer_org',  # выбор организации
+                'test_date',
+                'fw_version'
+            )
         }),
-        ('2. Общие проверки (ТУ)', {
-            'fields': ('visual_check', 'marking_check', 'insulation_res', 'insulation_strength')
+        ('2. Общие проверки (ТУ,ПМ)', {
+            'fields': ('visual_check', 'marking_check', 'insulation_res', 'insulation_res_value', 'insulation_strength')
         }),
         ('3. Проверка функционирования (раздел 5.6)', {
             'description': 'Установите статус, если тест пройден успешно',
             'fields': (
                 'func_power_on', 'func_display', 'func_navigation',
-                'func_battery_mode', 'func_bypass', 'func_audio',
+                'func_battery_mode', 'func_bypass', 'func_audio', 'interface_file',      # <-- ПОЛЕ ДЛЯ ЗАГРУЗКИ ФАЙЛА
+                'interface_note',
                 'func_settings', 'func_terminal'
             )
         }),
         ('4. Итоговое заключение', {
-            'fields': ('completeness', 'conclusion', 'comment')
+            'fields': ('conclusion', 'comment')
         }),
-        ('5. Метеоусловия и персонал', {
-            'classes': ('collapse',),
-            'fields': ('inspector', 'workshop', 'temperature', 'humidity', 'pressure', 'remark')
+        ('5. Метеоусловия и Персонал', {
+            #'classes': ('collapse',),
+            'fields': ('inspector', 'workshop', 'remark', 'temperature', 'humidity', 'pressure')
         }),
-        ('Системная информация', {
-            'classes': ('collapse',),
-            'fields': ('created_at', 'pdf_count_display', 'display_files_list'),
-        }),
+        (
+            '6. Системные данные',
+            {
+                "fields": (
+                    "author",
+                    "current_responsible",
+                    "last_editor",
+                    "version",
+                    #"version_diff_display",
+                    "date_of_creation",
+                    "date_of_change",
+                )
+            },
+        ),
     )
 
     actions = ['create_pdf_action']
@@ -5875,13 +5949,16 @@ class PSIDocumentAdmin(admin.ModelAdmin):
     conclusion_short.short_description = 'Заключение'
 
     def pdf_count_display(self, obj):
-        """Отображение количества версий PDF"""
-        count = obj.pdfs.count()
-        if count == 0:
+        """Ссылка на актуальную (последнюю) версию PDF протокола"""
+        latest = obj.pdfs.order_by('-version').first()
+        if not latest or not latest.file:
             return "—"
-        return format_html('<span style="font-weight: bold;">📄 {}</span>', count)
+        return format_html(
+            '<a href="{}" target="_blank">📄_v{}</a>',
+            latest.file.url, latest.version
+        )
 
-    pdf_count_display.short_description = 'Версии PDF'
+    pdf_count_display.short_description = 'Протокол PDF'
 
     def display_files_list(self, obj):
         """Список всех PDF файлов для детального просмотра"""
@@ -5916,6 +5993,31 @@ class PSIDocumentAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         """Оптимизация запросов"""
         return super().get_queryset(request).prefetch_related('pdfs')
+
+    def get_post_name(self, obj):
+        return obj.post.name if obj.post else "—"
+
+    get_post_name.short_description = 'Модификация'
+    get_post_name.admin_order_field = 'post__name'
+
+    def get_serial_number(self, obj):
+        return obj.shipment.serial_number if obj.shipment else "—"
+
+    get_serial_number.short_description = 'Заводской номер'
+    get_serial_number.admin_order_field = 'shipment__serial_number'
+
+    def get_developer_name(self, obj):
+        return obj.developer_org.name if obj.developer_org else "—"
+
+    get_developer_name.short_description = 'Организация'
+    get_developer_name.admin_order_field = 'developer_org__name'
+
+    def get_workshop_name(self, obj):
+        """Отображение цеха/площадки"""
+        return obj.workshop.number_name if obj.workshop else "—"
+
+    get_workshop_name.short_description = 'Цех/Площадка'
+    get_workshop_name.admin_order_field = 'workshop__number_name'
 
 
 @admin.register(GeneratedDocument)
@@ -5963,7 +6065,7 @@ class GeneratedDocumentAdmin(admin.ModelAdmin):
     def psi_source_link(self, obj):
         """Ссылка на родительский протокол"""
         if obj.psi_source:
-            url = f"/admin/shared_repository/psidocument/{obj.psi_source.id}/change/"
+            url = f"/admin/blog/psidocument/{obj.psi_source.id}/change/"
             return format_html('<a href="{}">{}</a>', url, obj.psi_source.serial_number)
         return "—"
 
@@ -5983,7 +6085,7 @@ class GeneratedDocumentAdmin(admin.ModelAdmin):
             return format_html(
                 '<div style="background: #f0f0f0; padding: 10px;">'
                 '<p><strong>Файл:</strong> {}</p>'
-                '<p><a href="{}" target="_blank" class="button">📥 Открыть PDF</a></p>'
+                '<p><a href="{}" target="_blank" class="button">📥 Протокол_ПСИ_ИБП_СПМ</a></p>'
                 '</div>',
                 obj.file.name,
                 obj.file.url
@@ -6044,7 +6146,7 @@ class DocumentHistoryAdmin(admin.ModelAdmin):
     def psi_source_link(self, obj):
         """Ссылка на родительский протокол"""
         if obj.psi_source:
-            url = f"/admin/shared_repository/psidocument/{obj.psi_source.id}/change/"
+            url = f"/admin/blog/psidocument/{obj.psi_source.id}/change/"
             return format_html('<a href="{}">{}</a>', url, obj.psi_source.serial_number)
         return "—"
 
