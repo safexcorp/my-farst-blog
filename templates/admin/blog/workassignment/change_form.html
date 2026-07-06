@@ -1,4 +1,18 @@
 {% extends "admin/change_form.html" %}
+{% load i18n admin_urls %}
+
+{% block submit_buttons_bottom %}
+<div class="submit-row">
+  <input type="submit" value="Сохранить и отправить исполнителю" class="default" name="_save">
+  {% if not original or not original.executor_id %}
+    <input type="submit" value="Сохранить черновик" name="_addanother">
+  {% endif %}
+  <input type="submit" value="Сохранить и продолжить редактирование" name="_continue">
+  {% if show_close %}
+    <a href="{% url opts|admin_urlname:'changelist' %}" class="closelink">{% translate 'Close' %}</a>
+  {% endif %}
+</div>
+{% endblock %}
 
 {% block object-tools-items %}
   {{ block.super }}
@@ -138,7 +152,7 @@
           ul.className = "messagelist";
           ul.id = "reschedule-save-first-msg";
           ul.innerHTML =
-            '<li class="warning">Сначала сохраните изменения («Сохранить» или «Сохранить и продолжить редактирование»), затем снова нажмите «Перенести срок».</li>';
+            '<li class="warning">Сначала сохраните изменения (любой кнопкой сохранения), затем снова нажмите «Перенести срок».</li>';
           var content = document.getElementById("content");
           if (content) {
             content.insertBefore(ul, content.firstChild);
@@ -178,22 +192,6 @@
 
       var li = link.closest("li");
       if (li) li.remove();
-    });
-
-    // Автозаполнение даты фиксации при смене статуса
-    document.addEventListener("DOMContentLoaded", function () {
-      var statusField = document.getElementById("id_control_status");
-      var dateField   = document.getElementById("id_control_date");
-      if (!statusField || !dateField) return;
-
-      statusField.addEventListener("change", function () {
-        if (!statusField.value) return;
-        var today = new Date();
-        var yyyy  = today.getFullYear();
-        var mm    = String(today.getMonth() + 1).padStart(2, "0");
-        var dd    = String(today.getDate()).padStart(2, "0");
-        dateField.value = dd + "." + mm + "." + yyyy;
-      });
     });
   </script>
 {% endblock %}

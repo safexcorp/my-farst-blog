@@ -1,4 +1,4 @@
-from django.db import models
+﻿from django.db import models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.core.validators import FileExtensionValidator, RegexValidator
@@ -8,6 +8,7 @@ from django.db import transaction
 from django.db.models import Max
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from datetime import date, datetime
 
 from .helpers import (
     SPECIFICATION_SECTION_CHOICES,
@@ -20,6 +21,33 @@ from .helpers import (
 
 User = settings.AUTH_USER_MODEL
 User = get_user_model()
+
+_INVALID_DATE_MSG = "Укажите дату в формате ДД.ММ.ГГГГ (например, 01.07.2026)."
+
+
+def _as_date(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def _normalize_model_dates(instance, field_names):
+    normalized = {}
+    errors = {}
+    for name in field_names:
+        raw = getattr(instance, name, None)
+        coerced = _as_date(raw)
+        if raw not in (None, "") and coerced is None:
+            errors[name] = _INVALID_DATE_MSG
+        else:
+            normalized[name] = coerced
+            if coerced is not None:
+                setattr(instance, name, coerced)
+    return normalized, errors
 
 
 class technical_design(models.Model):
@@ -1606,14 +1634,22 @@ class WorkAssignment(models.Model):
     ]
 
     TEMP_STATUS_CHOICES = [
+        ('assigned', 'Ожидает принятия'),
         ('in_progress', 'В работе'),
+        ('review', 'На проверке'),
         ('on_time', 'Выполнено в срок'),
         ('rescheduled', 'Выполнено с переносом сроков'),
         ('partial', 'Выполнено частично'),
         ('not_done', 'Не выполнено (Отменено)'),
     ]
 
-    # базовые поля
+    STATUS_ASSIGNED = 'assigned'
+    STATUS_IN_PROGRESS = 'in_progress'
+    STATUS_REVIEW = 'review'
+
+    ACTIVE_STATUSES = ('assigned', 'in_progress', 'review')
+    TERMINAL_STATUSES = ('on_time', 'rescheduled', 'partial', 'not_done')
+
     name = models.CharField(max_length=100, unique=True, blank=True, null=True, verbose_name="Наименование")
     wa_number = models.PositiveIntegerField(
         null=True,
@@ -1623,7 +1659,6 @@ class WorkAssignment(models.Model):
     )
     category = models.CharField(max_length=100, default="РЗ", verbose_name="Категория")
     executor = models.ForeignKey(User, on_delete=models.CASCADE, null= True, related_name= "executed_workassignments", verbose_name="Исполнитель")
-    task = models.CharField('Задача', max_length=255, blank=True)
     post = models.ForeignKey('Post', on_delete=models.CASCADE, null=True, blank=True, related_name='work_assignments', verbose_name="Связанная разработка/проект")
     author = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Автор")
     date_of_creation = models.DateTimeField(default=timezone.now, verbose_name="Дата и время создания")
@@ -1654,12 +1689,11 @@ class WorkAssignment(models.Model):
     result_description = models.TextField(max_length=5000, blank=True, null=True, verbose_name="Описание результата")
     route = models.ForeignKey("Route", on_delete=models.CASCADE, related_name='routes', blank=True, null=True, verbose_name="Маршрут")
 
-    target_deadline = models.DateField("Целевой срок выполнения", default=timezone.now, null=False, blank=False)
+    target_deadline = models.DateField("Целевой срок выполнения", default=timezone.localdate, null=False, blank=False)
     hard_deadline = models.DateField("Абсолютный дедлайн", null=True, blank=True)
     time_window_start = models.DateField("Временное окно: с", null=True, blank=True)
     time_window_end = models.DateField("Временное окно: по", null=True, blank=True)
-    conditional_deadline = models.CharField("Условный дедлайн", max_length=1000, blank=True)
-    #uploaded_file = models.FileField(upload_to='uploads/', blank = True, verbose_name="Приложение к РЗ")
+    conditional_deadline = models.CharField("Условия/ограничения", max_length=1000, blank=True)
 
     version_diff = models.TextField(
         "Сравнение версий",
@@ -1675,64 +1709,40 @@ class WorkAssignment(models.Model):
     )
     control_date = models.DateField("Дата фиксации статуса", null=True, blank=True)
 
-   #def _build_name(self) -> str:
-    #    sep = " — "  # любой разделитель
-     #   technical_assignment_part = (self.technical_assignment.name if self.technical_assignment_id else "").strip()
-#
- #       # Нормализуем и режем вторую часть до 50 символов без троеточия
-  #      task_clean = " ".join((self.task or "").split())
-   #     # чтобы не переполнить name, сначала считаем доступную длину под вторую часть
-    #    max_len = self._meta.get_field('name').max_length
-     #   allowed_for_task = max(0, min(50, max_len - len(sep) - len(technical_assignment_part)))
-      #  task_part = Truncator(task_clean).chars(allowed_for_task, truncate='')
-
-       # return f"{technical_assignment_part}{sep}{task_part}" if task_part else technical_assignment_part"""
-
     def clean(self):
         super().clean()
-        if self.hard_deadline and self.target_deadline:
-            if self.hard_deadline < self.target_deadline:
-                raise ValidationError({
-                    "hard_deadline": _(
-                        "Абсолютный дедлайн не может быть раньше целевого."
-                    )
-                })
 
-        if self.time_window_end and self.target_deadline:
-            if self.time_window_end > self.target_deadline:
-                raise ValidationError({
-                    "time_window_end": _(
-                        "Конец временного окна не может быть позже целевого дедлайна."
-                    )
-                })
+        dates, date_errors = _normalize_model_dates(
+            self,
+            ("target_deadline", "hard_deadline", "time_window_start", "time_window_end"),
+        )
+        if date_errors:
+            raise ValidationError(date_errors)
 
-            def save(self, *args, **kwargs):
-                self.full_clean()
-                return super().save(*args, **kwargs)
-    class Meta:
-        verbose_name = 'Рабочее задание'
-        verbose_name_plural = 'Рабочие задания'
+        target = dates["target_deadline"]
+        hard = dates["hard_deadline"]
+        tw_start = dates["time_window_start"]
+        tw_end = dates["time_window_end"]
 
-    #def save(self, *args, **kwargs):
-     #   self.name = self._build_name()
-      #  super().save(*args, **kwargs)
+        if tw_start and tw_end and tw_end < tw_start:
+            raise ValidationError({
+                "time_window_end": "Дата «по» не может быть раньше даты «с».",
+            })
 
-    def clean(self):
-        super().clean()
-        # проверка окна
-        if self.time_window_start and self.time_window_end:
-            if self.time_window_end < self.time_window_start:
-                raise ValidationError({'time_window_end': 'Дата «по» не может быть раньше даты «с».'})
+        if target and tw_end and tw_end > target:
+            raise ValidationError({
+                "time_window_end": "Конец временного окна не может быть позже целевого срока.",
+            })
 
-    def clean(self):
-        super().clean()
-        if self.time_window_start and self.time_window_end and self.time_window_end < self.time_window_start:
-            raise ValidationError({'time_window_end': 'Дата «по» не может быть раньше даты «с».'})
-        if self.target_deadline and self.time_window_start and self.time_window_end:
-            if not (self.time_window_start <= self.target_deadline <= self.time_window_end):
-                raise ValidationError({'target_deadline': 'Целевой срок должен попадать в заданное окно.'})
-        if self.hard_deadline and self.target_deadline and self.target_deadline > self.hard_deadline:
-            raise ValidationError({'target_deadline': 'Целевой срок не может быть позже абсолютного дедлайна.'})
+        if target and tw_start and tw_end and not (tw_start <= target <= tw_end):
+            raise ValidationError({
+                "target_deadline": "Целевой срок должен попадать в заданное временное окно.",
+            })
+
+        if hard and target and hard < target:
+            raise ValidationError({
+                "hard_deadline": "Абсолютный дедлайн не может быть раньше целевого срока.",
+            })
 
     @property
     def effective_deadline(self):
@@ -1742,19 +1752,33 @@ class WorkAssignment(models.Model):
             return self.target_deadline
         if self.time_window_end:
             return self.time_window_end
-        return self.deadline
+        return None
 
     def is_active(self):
-        return self.control_status not in ('not_done',)
+        return self.control_status not in self.TERMINAL_STATUSES
+
+    def is_target_overdue(self, today=None):
+        if not self.is_active():
+            return False
+        if not self.target_deadline:
+            return False
+        today = today or timezone.localdate()
+        return today > self.target_deadline
+
+    def is_hard_overdue(self, today=None):
+        if not self.is_active():
+            return False
+        if not self.hard_deadline:
+            return False
+        today = today or timezone.localdate()
+        return today > self.hard_deadline
 
     def is_overdue(self, today=None):
         if not self.is_active():
             return False
-        d = self.effective_deadline
-        if not d:
-            return False
-        today = today or timezone.localdate()
-        return today > d
+        if self.is_target_overdue(today):
+            return True
+        return self.is_hard_overdue(today)
 
     def mark_result_on_close(self):
         if self.result:
@@ -1781,6 +1805,10 @@ class WorkAssignment(models.Model):
 
     def __str__(self):
         return self.name or "Без названия"
+
+    class Meta:
+        verbose_name = 'Рабочее задание'
+        verbose_name_plural = 'Рабочие задания'
 
 
 class WorkAssignmentSubtask(models.Model):
@@ -1844,7 +1872,7 @@ class WorkAssignmentSubtask(models.Model):
     result_description = models.TextField(
         max_length=5000, blank=True, null=True, verbose_name="Описание результата"
     )
-    target_deadline = models.DateField("Целевой срок выполнения", default=timezone.now)
+    target_deadline = models.DateField("Целевой срок выполнения", default=timezone.localdate)
     hard_deadline = models.DateField("Абсолютный дедлайн", null=True, blank=True)
     time_window_start = models.DateField("Временное окно: с", null=True, blank=True)
     time_window_end = models.DateField("Временное окно: по", null=True, blank=True)
@@ -2995,3 +3023,253 @@ class ShipmentAdditionalFile(models.Model):
 
     def __str__(self):
         return self.file.name if self.file else str(self.pk)
+
+
+
+#Протоколы ПСИ СПМ ИБП
+class PSIDocument(models.Model):
+    # --- Основная информация ---
+
+    # СВЯЗЬ С ОРГАНИЗАЦИЕЙ-РАЗРАБОТЧИКОМ (для логотипа и названия)
+    developer_org = models.ForeignKey(
+        'RKDDeveloper',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='psi_documents',
+        verbose_name="Организация-разработчик/изготовитель"
+    )
+    # СВЯЗЬ С ИЗДЕЛИЕМ К ОТГРУЗКЕ (заводской номер)
+    shipment = models.ForeignKey(
+        'Shipment',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='psi_documents',
+        verbose_name="Изделие к отгрузке"
+    )
+    # СВЯЗЬ С РАЗРАБОТКОЙ (модификацией)
+    post = models.ForeignKey(
+        'Post',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='psi_documents',
+        verbose_name="Разработка (модификация)"
+    )
+    test_date = models.DateField("Дата испытания / изготовления")
+    fw_version = models.CharField("Версия программы управления ИБП", max_length=50)
+
+    # --- Варианты выбора для статусов ---
+    STATUS_CHOICES = [
+        ('соответствует', 'Соответствует'),
+        ('не соответствует', 'Не соответствует'),
+        ('нет данных', 'Нет данных'),
+    ]
+    SHIPMENT_CHOICES = [
+        ('готов к отгрузке', 'Готов к отгрузке'),
+        ('не готов', 'Не готов')
+    ]
+    ELECTRO_CHOICES = [
+        ('≥ 1 МОм', '≥ 1 МОм'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    TEMPERATURE_CHOICES = [
+        ('норма (15 °С ... 35 °С)', 'Норма (15 °С ... 35 °С)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    HUMIDITY_CHOICES = [
+        ('норма (30 % ... 60 %)', 'норма (30 % ... 60 %)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    PRESSURE_CHOICES = [
+        ('норма (84 кПа ... 106,7 кПа)', 'норма (84 кПа ... 106,7 кПа)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+
+    # --- Общие проверки ---
+    visual_check = models.CharField("1 Проверка соответствия КД и проверка внешнего вида (1.1.1, 1.4.2 ТУ, 5.3 ПМ)",
+                                    max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    marking_check = models.CharField("2 Проверка содержания маркировки (1.10.1 ТУ, 5.1 ПМ)",
+                                     max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    insulation_res = models.CharField("3 Проверка электрического сопротивления изоляции (2.5 ТУ, 5.6 ПМ)",
+                                      max_length=20, choices=STATUS_CHOICES, default='нет данных')
+    insulation_res_value = models.DecimalField(
+        "Фактическое значение сопротивления изоляции, МОм",
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Введите измеренное значение в МОм. Статус устанавливается автоматически: при ≥ 1 МОм - Соответсвует; при < 1 МОм - Не соответсвует."
+    )
+
+    insulation_strength = models.CharField("4 Проверка электрической прочности изоляции (2.6 ТУ, 5.7 ПМ)", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+
+    # --- Проверка функционирования (5.6) ---
+    func_power_on = models.CharField("5.1 Проверка включения", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_display = models.CharField("5.2 Проверка индикации", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_navigation = models.CharField("5.3 Проверка навигации по информационным страницам", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_battery_mode = models.CharField("5.4 Проверка работы от аккумуляторных батарей (АБ)", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_bypass = models.CharField("5.5 Проверка режима «байпас»", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_audio = models.CharField("5.6 Проверка интерфейсов SNMP и UART (Использовать web-приложение для мониторинга ИБП СПМ)", max_length=20, choices=STATUS_CHOICES, default='нет данных')
+    # НОВОЕ ПОЛЕ: файл для 5.6
+    interface_file = models.FileField(
+        upload_to="psi_interfaces_files/",
+        blank=True,
+        null=True,
+        verbose_name="Загружаемый файл (SNMP/UART)",
+        help_text="Прикрепите файл с результатами проверки интерфейсов SNMP и UART"
+    )
+    # НОВОЕ ПОЛЕ: примечание для 5.6 (2000 знаков)
+    interface_note = models.TextField(
+        max_length=2000,
+        blank=True,
+        default="",
+        verbose_name="Примечание (п. 5.6)",
+        help_text="Мотивы несоответствия (заполняется, если по п. 5.6 выбрано «Не соответствует»)"
+    )
+
+    func_settings = models.CharField("5.7 Проверка отключения звукового сигнала", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_terminal = models.CharField("5.8 Проверка настроек", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+
+    # --- Заключение ---
+    conclusion = models.CharField("Заключение", max_length=50, choices=SHIPMENT_CHOICES, default="готов к отгрузке")
+    comment = models.TextField("Комментарий", blank=True)
+
+    # --- Условия испытаний (Метеоусловия) ---
+    inspector = models.CharField("Представитель ОТК", max_length=150)
+
+    #связь с помещением
+    workshop = models.ForeignKey('enterprise_asset_management.ProductionArea', on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='psi_documents',
+        verbose_name="Производственная площадка (Цех)")
+
+    remark = models.TextField("Комментарий", blank=True)
+    temperature = models.CharField("Температура", choices=TEMPERATURE_CHOICES, max_length=50, default="+22°C")
+    humidity = models.CharField("Влажность", choices=HUMIDITY_CHOICES, max_length=50, default="45%")
+    pressure = models.CharField("Давление", choices=PRESSURE_CHOICES, max_length=50, default="750 мм рт. ст.")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    author = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="psi_document_created",
+        verbose_name="Автор",
+    )
+    date_of_creation = models.DateTimeField(default=timezone.now, verbose_name="Дата и время создания")
+    last_editor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="psi_document_edited",
+        verbose_name="Последний редактор",
+    )
+    version = models.CharField(max_length=3, default="1", verbose_name="Версия")
+    version_diff = models.TextField(
+        blank=True,
+        default="Стартовая версия",
+        verbose_name="Сравнение версий",
+    )
+    date_of_change = models.DateTimeField(auto_now=True, verbose_name="Дата и время последнего изменения")
+    current_responsible = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="psi_document_responsible",
+        verbose_name="Текущий ответственный",
+    )
+
+    class Meta:
+        verbose_name = "ПСИ ИБП СПМ"
+        verbose_name_plural = "ПСИ ИБП СПМ"
+
+    def __str__(self):
+        # Пытаемся получить серийный номер из связанной модели Shipment
+        serial = self.shipment.serial_number if self.shipment else "[не указан]"
+
+        # Пытаемся получить название модели из связанной разработки (Post)
+        model_name = self.post.name if self.post else "Модель не указана"
+
+        return f"Протокол {serial} ({model_name})"
+
+    def clean(self):
+        """Валидация модели"""
+        #from django.core.exceptions import ValidationError
+
+        # ИЗМЕНЕНИЕ 5: Если файл не прикреплен - автомат-ки "НЕ соответ"
+        if not self.interface_file:
+            self.func_audio = 'не соответствует'
+
+    def all_checks_passed(self):
+        """True только если ВСЕ проверки в статусе 'соответствует'
+        (нет ни одного 'не соответствует' или 'нет данных')."""
+        checks = (
+            self.visual_check, self.marking_check,
+            self.insulation_res, self.insulation_strength,
+            self.func_power_on, self.func_display, self.func_navigation,
+            self.func_battery_mode, self.func_bypass, self.func_audio,
+            self.func_settings, self.func_terminal,
+        )
+        return all(status == 'соответствует' for status in checks)
+
+    def save(self, *args, **kwargs):
+
+            # 5.6: если файл интерфейсов не прикреплён — статус "не соответствует"
+        if not self.interface_file:
+            self.func_audio = 'не соответствует'
+
+            # 3: статус сопротивления изоляции определяется автоматически по
+            #     фактическому значению (порог 1 МОм):
+            #       нет значения      -> "нет данных"
+            #       значение < 1 МОм  -> "не соответствует"
+            #       значение >= 1 МОм -> "соответствует"
+        if self.insulation_res_value is None:
+            self.insulation_res = 'нет данных'
+        elif self.insulation_res_value < 1:
+            self.insulation_res = 'не соответствует'
+        else:
+                self.insulation_res = 'соответствует'
+
+            # Заключение: если хотя бы одна проверка "не соответствует" или "нет данных" —
+            # изделие не готово к отгрузке.
+        if self.all_checks_passed():
+            self.conclusion = 'готов к отгрузке'
+        else:
+            self.conclusion = 'не готов'
+
+            # Вызываем финальное сохранение со всеми обновленными полями
+        super().save(*args, **kwargs)
+
+    def get_inspector_display(self):
+        """Возвращает ФИО испытателя"""
+        return self.inspector if self.inspector else "—"
+
+    def get_workshop_display(self):
+        """Возвращает цех"""
+        return self.workshop if self.workshop else "—"
+
+class GeneratedDocument(models.Model):
+    # Вместо старого source теперь привязка к PSIDocument
+    psi_source = models.ForeignKey(PSIDocument, on_delete=models.CASCADE, related_name='pdfs', verbose_name="Протокол-источник",null=True, blank=True)
+    file = models.FileField("Готовый PDF", upload_to='generated_pdfs/')
+    version = models.PositiveIntegerField("Версия")
+    generated_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Сгенерированный PDF"
+        verbose_name_plural = "Сгенерированные PDF"
+
+class DocumentHistory(models.Model):
+    # Привязка к новой модели
+    psi_source = models.ForeignKey(PSIDocument, on_delete=models.CASCADE, related_name='history', verbose_name="Протокол",null=True, blank=True)
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="Пользователь")
+    action = models.CharField("Действие", max_length=255)
+    timestamp = models.DateTimeField(auto_now_add=True)

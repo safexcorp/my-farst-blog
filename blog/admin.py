@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin.utils import unquote
-from django.contrib.admin.widgets import RelatedFieldWidgetWrapper
+from django.contrib.admin.widgets import RelatedFieldWidgetWrapper, AdminDateWidget
 from django.shortcuts import redirect, render
 from django.urls import path, reverse
 from django.utils import timezone
@@ -52,7 +52,14 @@ from shared_repository.models import (SharedRepository, IndependentDocumentAccep
 KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature, AdministrativeOrder,
 AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature)
 
-from .admin_forms import RescheduleAdminForm
+from .models import (PSIDocument, GeneratedDocument, DocumentHistory)
+
+from .admin_forms import (
+    RescheduleAdminForm,
+    WorkAssignmentAdminForm,
+    WorkAssignmentCloseForm,
+    WorkAssignmentReturnForm,
+)
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
 from .helpers import (
     first_incomplete_step_code,
@@ -104,6 +111,7 @@ from .services import WorkAssignmentService
 
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.forms import UserChangeForm
 from django.contrib.auth.models import User
 from shared_repository.models import Department, EmployeeProfile
 
@@ -262,7 +270,9 @@ def _render_version_diff(text: str) -> str:
 
 
 _WA_STATUS_CIRCLE = {
+    'assigned':    ('#FFA000', None,      'Ожидает принятия'),
     'in_progress': ('#2196F3', None,      'В работе'),
+    'review':      ('#00BCD4', None,      'На проверке'),
     'on_time':     ('#4CAF50', None,      'Выполнено в срок'),
     'rescheduled': ('#4CAF50', '#FF9800', 'Выполнено с переносом сроков'),
     'partial':     ('#9C27B0', None,      'Выполнено частично'),
@@ -282,6 +292,14 @@ def _render_status_circle(status):
         '{}</span>',
         bg, label,
     )
+
+
+_WA_RESULT_TEXT = {
+    "on_time": "Выполнено в срок",
+    "rescheduled": "Выполнено с переносом сроков",
+    "partial": "Выполнено частично",
+    "not_done": "Не выполнено",
+}
 
 
 class RequiredFileGenericFormSet(BaseGenericInlineFormSet):
@@ -1405,6 +1423,7 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         "display_lu_lo_sheets",
         "quantity",
         "note",
+        "rkd_planned_review_date",
         "rkd_planned_review_warning",
     )
     list_display_links = ("name",)
@@ -1449,7 +1468,16 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         return _admin_lu_lo_sheets_column_html(obj)
 
     @admin.display(
-        description="Оповещение о пересмотре",
+        description="Дата планового пересмотра",
+        ordering="validity_date",
+    )
+    def rkd_planned_review_date(self, obj):
+        if not obj.validity_date:
+            return "—"
+        return obj.validity_date.strftime("%d.%m.%Y")
+
+    @admin.display(
+        description="Срок пересмотра истекает",
         ordering="validity_date",
     )
     def rkd_planned_review_warning(self, obj):
@@ -2331,22 +2359,35 @@ class ProtocolTechnicalProposalAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 class OverdueFilter(admin.SimpleListFilter):
-    title = "Просрочено?"
+    title = "Просрочен целевой срок"
     parameter_name = "overdue"
 
     def lookups(self, request, model_admin):
         return (
-            ("yes", "Просрочено"),
-            ("no", "Не просрочено"),
+            ("yes", "Просрочен"),
+            ("no", "Не просрочен"),
         )
 
     def queryset(self, request, queryset):
         if self.value() == "yes":
-            return queryset.filter(is_overdue=True)
+            return queryset.filter(is_target_overdue_db=True)
 
         if self.value() == "no":
-            return queryset.filter(is_overdue=False)
+            return queryset.filter(is_target_overdue_db=False)
 
+        return queryset
+
+
+class WorkAssignmentDraftFilter(admin.SimpleListFilter):
+    title = "Черновики"
+    parameter_name = "draft"
+
+    def lookups(self, request, model_admin):
+        return (("yes", "Черновики"),)
+
+    def queryset(self, request, queryset):
+        if self.value() == "yes":
+            return queryset.filter(executor__isnull=True)
         return queryset
 
 
@@ -3973,9 +4014,11 @@ class DeadlineChangeInline(admin.TabularInline):
     extra = 0
     can_delete = False
     readonly_fields = (
-        "old_target_deadline","old_hard_deadline","old_time_window_start","old_time_window_end",
-        "new_target_deadline","new_hard_deadline","new_time_window_start","new_time_window_end",
-        "reason","changed_by","changed_at",
+        "old_target_deadline", "old_hard_deadline",
+        "old_time_window_start", "old_time_window_end",
+        "new_target_deadline", "new_hard_deadline",
+        "new_time_window_start", "new_time_window_end",
+        "reason", "changed_by", "changed_at",
     )
     show_change_link = False
 
@@ -4006,7 +4049,7 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
         "target_deadline",
         "task_preview",
         "criteria_preview",
-        "control_status_colored",
+        "control_status",
         "overdue_flag",
         "comment_preview",
     )
@@ -4017,7 +4060,6 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
         "target_deadline",
         "task_preview",
         "criteria_preview",
-        "control_status_colored",
         "overdue_flag",
         "comment_preview",
     )
@@ -4068,7 +4110,7 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
 
     @admin.display(description="Просрочено?")
     def overdue_flag(self, obj):
-        active = obj.control_status in (None, 'in_progress')
+        active = obj.control_status in (None, "in_progress")
         if not active:
             return "—"
         deadline = obj.hard_deadline or obj.target_deadline
@@ -4279,15 +4321,18 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
                 kind=Notification.KIND_WORK,
             )
 
-
 @admin.register(WorkAssignment)
 class WorkAssignmentAdmin(admin.ModelAdmin):
-    #form = WorkAssignmentForm
+    form = WorkAssignmentAdminForm
+    formfield_overrides = {
+        DateField: {"widget": AdminDateWidget},
+    }
 
     list_display = (
         'wa_code_column',
         'name', 'author', 'executor', 'post',
-        'overdue_flag',
+        'overdue_target_flag',
+        'overdue_hard_flag',
         'control_status_colored',
         'control_date',
         'target_deadline', 'hard_deadline',
@@ -4302,7 +4347,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         'current_responsible__username',
         'post__wa_code',
     )
-    list_filter = ('control_status', OverdueFilter)
+    list_filter = ('control_status', WorkAssignmentDraftFilter, OverdueFilter)
 
     @admin.display(description='Код', ordering='post__wa_code')
     def wa_code_column(self, obj):
@@ -4313,6 +4358,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         'date_of_creation', 'date_of_change',
         'version', 'version_diff_display',
         'deadline_version', 'reschedule_count',
+        'control_status_display', 'control_date_display',
     )
 
     inlines = [DeadlineChangeInline, WorkAssignmentSubtaskInline, WorkAssignmentAttachmentInline]
@@ -4326,32 +4372,37 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         }),
         ('Сроки (изменять через «Перенести срок»)', {
             'fields': (
-                'target_deadline', 'hard_deadline',
-                ('time_window_start', 'time_window_end'),
+                'target_deadline',
+                'requires_hard_deadline',
+                'hard_deadline',
                 'conditional_deadline',
             )
         }),
         ('Статус выполнения / Результат', {
-            'fields': ('control_status', 'control_date', 'result_description')
+            'fields': ('control_status_display', 'control_date_display', 'result_description')
         }),
         ('Системные данные', {
             'fields': (
                 'author', 'last_editor', 'current_responsible',
                 'version', 'version_diff_display',
                 'date_of_creation', 'date_of_change',
-                'route', 'deadline_version', 'reschedule_count',
+                'deadline_version', 'reschedule_count',
             )
         }),
     )
+
+    def get_exclude(self, request, obj=None):
+        excl = list(super().get_exclude(request, obj) or [])
+        for name in ('control_status', 'control_date', 'route'):
+            if name not in excl:
+                excl.append(name)
+        return excl
 
     def get_readonly_fields(self, request, obj=None):
         fields = list(super().get_readonly_fields(request, obj))
         if obj is not None:
             for name in (
                 "target_deadline_display",
-                "hard_deadline_display",
-                "time_window_start_display",
-                "time_window_end_display",
             ):
                 if name not in fields:
                     fields.append(name)
@@ -4363,9 +4414,6 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             return fieldsets
         rename = {
             "target_deadline": "target_deadline_display",
-            "hard_deadline": "hard_deadline_display",
-            "time_window_start": "time_window_start_display",
-            "time_window_end": "time_window_end_display",
         }
         new_fieldsets = []
         for title, opts in fieldsets:
@@ -4400,17 +4448,17 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def target_deadline_display(self, obj):
         return self._readonly_date_input(obj.target_deadline)
 
-    @admin.display(description="Абсолютный дедлайн")
-    def hard_deadline_display(self, obj):
-        return self._readonly_date_input(obj.hard_deadline)
+    @admin.display(description="Статус выполнения / Результат")
+    def control_status_display(self, obj):
+        if not obj or not obj.pk or not obj.control_status:
+            return "—"
+        return _render_status_circle(obj.control_status)
 
-    @admin.display(description="Временное окно: с")
-    def time_window_start_display(self, obj):
-        return self._readonly_date_input(obj.time_window_start)
-
-    @admin.display(description="Временное окно: по")
-    def time_window_end_display(self, obj):
-        return self._readonly_date_input(obj.time_window_end)
+    @admin.display(description="Дата фиксации статуса")
+    def control_date_display(self, obj):
+        if not obj or not obj.control_date:
+            return "—"
+        return obj.control_date.strftime("%d.%m.%Y")
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
@@ -4429,7 +4477,11 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         user = request.user
+        is_draft = "_addanother" in request.POST or (
+            "_continue" in request.POST and not obj.executor_id
+        )
         old_executor_id = None
+        old_status = None
 
         if change:
             try:
@@ -4457,18 +4509,31 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 old_status = None
 
             obj.last_editor = user
-
-            # Автоматически проставляем control_date при смене статуса
-            if obj.control_status and obj.control_status != old_status:
-                obj.control_date = timezone.localdate()
+            if is_draft:
+                obj.executor = None
+                obj.control_status = None
+                obj.control_date = None
+                obj.current_responsible = user
+            else:
+                if not old_status and obj.executor_id:
+                    obj.control_status = WorkAssignment.STATUS_ASSIGNED
+                    obj.control_date = timezone.localdate()
+                elif obj.control_status and obj.control_status != old_status:
+                    obj.control_date = timezone.localdate()
+                obj.current_responsible = obj.executor
         else:
             obj.author = user
             obj.last_editor = user
-            # Для новых записей: статус "В работе" и дата фиксации = сегодня
-            if not obj.control_status:
-                obj.control_status = "in_progress"
-            if not obj.control_date:
-                obj.control_date = timezone.localdate()
+            if is_draft:
+                obj.executor = None
+                obj.control_status = None
+                obj.control_date = None
+                obj.current_responsible = user
+            else:
+                if not obj.control_status:
+                    obj.control_status = WorkAssignment.STATUS_ASSIGNED
+                    obj.control_date = timezone.localdate()
+                obj.current_responsible = obj.executor or user
 
         if obj.post_id:
             from .helpers import assign_wa_code_to_post, next_wa_number_for_post
@@ -4478,7 +4543,12 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
 
         super().save_model(request, obj, form, change)
 
-        if obj.executor_id and obj.executor_id != old_executor_id and obj.executor_id != user.id:
+        if (
+            not is_draft
+            and obj.executor_id
+            and obj.executor_id != old_executor_id
+            and obj.executor_id != user.id
+        ):
             from approvals.services import notify
             from approvals.models import Notification
             notify(
@@ -4489,45 +4559,88 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 kind=Notification.KIND_WORK,
             )
 
+    def response_add(self, request, obj, post_url_continue=None):
+        if "_addanother" in request.POST:
+            return redirect(f"{reverse('admin:blog_workassignment_changelist')}?draft=yes")
+        return super().response_add(request, obj, post_url_continue)
+
+    def response_change(self, request, obj):
+        if "_addanother" in request.POST:
+            return redirect(f"{reverse('admin:blog_workassignment_changelist')}?draft=yes")
+        return super().response_change(request, obj)
+
+    @staticmethod
+    def _is_changelist_request(request):
+        match = getattr(request, "resolver_match", None)
+        return match is not None and match.url_name == "blog_workassignment_changelist"
+
     def get_queryset(self, request):
         qs = super().get_queryset(request)
+        if self._is_changelist_request(request) and request.GET.get("draft") != "yes":
+            qs = qs.exclude(executor__isnull=True)
 
         today = timezone.localdate()
 
-        qs = qs.annotate(
-            effective_deadline_db=Case(
-                When(hard_deadline__isnull=False, then=F("hard_deadline")),
-                default=F("target_deadline"),
-                output_field=DateField(),
-            )
+        active_q = (
+            Q(control_status__isnull=True)
+            | Q(control_status__in=WorkAssignment.ACTIVE_STATUSES)
         )
-
-        # Просрочено: нет статуса ИЛИ статус «В работе» + срок прошёл
         qs = qs.annotate(
-            is_overdue=Case(
+            is_target_overdue_db=Case(
                 When(
-                    Q(control_status__isnull=True) | Q(control_status="in_progress"),
-                    then=Case(
-                        When(effective_deadline_db__lt=today, then=True),
-                        default=False,
-                        output_field=BooleanField(),
-                    ),
+                    active_q & Q(target_deadline__lt=today),
+                    then=True,
                 ),
                 default=False,
                 output_field=BooleanField(),
-            )
+            ),
+            is_hard_overdue_db=Case(
+                When(
+                    active_q
+                    & Q(hard_deadline__isnull=False)
+                    & Q(hard_deadline__lt=today),
+                    then=True,
+                ),
+                default=False,
+                output_field=BooleanField(),
+            ),
         )
 
         return qs
 
+    @admin.display(description="Просрочен целевой срок")
+    def overdue_target_flag(self, obj):
+        overdue = getattr(obj, "is_target_overdue_db", None)
+        if overdue is None:
+            overdue = obj.is_target_overdue()
+        if overdue:
+            return mark_safe(
+                _admin_warning_triangle_html(
+                    title="Целевой срок выполнения просрочен",
+                    color="#f0ad4e",
+                )
+            )
+        return "—"
+
+    @admin.display(description="Просрочен абсолютный дедлайн")
+    def overdue_hard_flag(self, obj):
+        if not obj.hard_deadline:
+            return "—"
+        overdue = getattr(obj, "is_hard_overdue_db", None)
+        if overdue is None:
+            overdue = obj.is_hard_overdue()
+        if overdue:
+            return mark_safe(
+                _admin_warning_triangle_html(
+                    title="Абсолютный дедлайн просрочен",
+                    color="#E53935",
+                )
+            )
+        return "—"
+
     @admin.display(description="Статус выполнения / Результат", ordering="control_status")
     def control_status_colored(self, obj):
         return _render_status_circle(obj.control_status)
-
-    @admin.display(description="Просрочено?")
-    def overdue_flag(self, obj):
-        active = obj.control_status in (None, 'in_progress')
-        return "⚠️" if (active and obj.is_overdue) else "—"
 
     @admin.display(description="История изменений")
     def version_diff_display(self, obj):
@@ -4543,8 +4656,210 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.reschedule_view),
                 name="blog_workassignment_reschedule",
             ),
+            path(
+                "<int:object_id>/acknowledge/",
+                self.admin_site.admin_view(self.acknowledge_view),
+                name="blog_workassignment_acknowledge",
+            ),
+            path(
+                "<int:object_id>/submit-review/",
+                self.admin_site.admin_view(self.submit_review_view),
+                name="blog_workassignment_submit_review",
+            ),
+            path(
+                "<int:object_id>/close/",
+                self.admin_site.admin_view(self.close_view),
+                name="blog_workassignment_close",
+            ),
+            path(
+                "<int:object_id>/return/",
+                self.admin_site.admin_view(self.return_view),
+                name="blog_workassignment_return",
+            ),
         ]
         return custom + urls
+
+    @staticmethod
+    def _wa_label(obj):
+        return obj.wa_full_code or obj.name or (obj.task or "").strip()[:80] or str(obj)
+
+    def _notify_wa(self, recipient, title, text, obj):
+        if not recipient:
+            return
+        from approvals.services import notify
+        from approvals.models import Notification
+        notify(
+            recipient,
+            title,
+            text=text,
+            url=reverse("admin:blog_workassignment_change", args=[obj.pk]),
+            kind=Notification.KIND_WORK,
+        )
+
+    def acknowledge_view(self, request, object_id: int):
+        from django.shortcuts import redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.executor_id:
+            messages.error(request, "Принять задачу в работу может только её исполнитель.")
+            return back
+        if obj.control_status != WorkAssignment.STATUS_ASSIGNED:
+            messages.warning(request, "Задача уже не ожидает принятия.")
+            return back
+        if request.method != "POST":
+            return back
+        obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
+        obj.control_date = timezone.localdate()
+        obj.current_responsible = obj.executor
+        obj.last_editor = request.user
+        obj.save(update_fields=[
+            "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
+        ])
+        self._notify_wa(
+            obj.author,
+            "Исполнитель приступил к задаче",
+            f"«{self._wa_label(obj)}» взята в работу.",
+            obj,
+        )
+        messages.success(request, "Задача принята в работу.")
+        return back
+
+    def submit_review_view(self, request, object_id: int):
+        from django.shortcuts import redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.executor_id:
+            messages.error(request, "Сдать задачу может только её исполнитель.")
+            return back
+        if obj.control_status != WorkAssignment.STATUS_IN_PROGRESS:
+            messages.warning(request, "Сдать на проверку можно только задачу в работе.")
+            return back
+        if request.method != "POST":
+            return back
+        obj.control_status = WorkAssignment.STATUS_REVIEW
+        obj.control_date = timezone.localdate()
+        obj.current_responsible = obj.author
+        obj.last_editor = request.user
+        obj.save(update_fields=[
+            "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
+        ])
+        self._notify_wa(
+            obj.author,
+            "Задача сдана на проверку",
+            f"«{self._wa_label(obj)}» ожидает вашей проверки.",
+            obj,
+        )
+        messages.success(request, "Задача отправлена автору на проверку.")
+        return back
+
+    _CLOSE_STATUS_BY_CHOICE = {
+        "partial": "partial",
+        "not_done": "not_done",
+    }
+    _RESULT_TEXT = _WA_RESULT_TEXT
+
+    def close_view(self, request, object_id: int):
+        from django.shortcuts import render, redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.author_id:
+            messages.error(request, "Закрыть задачу может только её автор.")
+            return back
+        if obj.control_status not in WorkAssignment.ACTIVE_STATUSES:
+            messages.warning(request, "Эта задача уже закрыта.")
+            return back
+
+        if request.method == "POST":
+            form = WorkAssignmentCloseForm(request.POST)
+            if form.is_valid():
+                choice = form.cleaned_data["result"]
+                comment = form.cleaned_data.get("comment", "").strip()
+                if choice == "done":
+                    status = "rescheduled" if obj.reschedule_count else "on_time"
+                else:
+                    status = self._CLOSE_STATUS_BY_CHOICE[choice]
+                obj.control_status = status
+                obj.control_date = timezone.localdate()
+                obj.result = self._RESULT_TEXT.get(status)
+                obj.current_responsible = obj.author
+                obj.last_editor = request.user
+                fields = [
+                    "control_status", "control_date", "result",
+                    "current_responsible", "last_editor", "date_of_change",
+                ]
+                if comment:
+                    obj.result_description = comment
+                    fields.append("result_description")
+                obj.save(update_fields=fields)
+                self._notify_wa(
+                    obj.executor,
+                    "Задача проверена и закрыта",
+                    f"«{self._wa_label(obj)}»: {self._RESULT_TEXT.get(status)}."
+                    + (f" Комментарий: {comment}" if comment else ""),
+                    obj,
+                )
+                messages.success(
+                    request,
+                    f"Задача закрыта со статусом «{self._RESULT_TEXT.get(status)}».",
+                )
+                return back
+        else:
+            form = WorkAssignmentCloseForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "original": obj,
+            "title": "Проверить и закрыть задачу",
+            "form": form,
+            "object_id": object_id,
+            "rescheduled_note": bool(obj.reschedule_count),
+        }
+        return render(request, "admin/blog/workassignment/close.html", context)
+
+    def return_view(self, request, object_id: int):
+        from django.shortcuts import render, redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.author_id:
+            messages.error(request, "Вернуть задачу может только её автор.")
+            return back
+        if obj.control_status != WorkAssignment.STATUS_REVIEW:
+            messages.warning(request, "Вернуть на доработку можно только задачу на проверке.")
+            return back
+
+        if request.method == "POST":
+            form = WorkAssignmentReturnForm(request.POST)
+            if form.is_valid():
+                comment = form.cleaned_data.get("comment", "").strip()
+                obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
+                obj.control_date = timezone.localdate()
+                obj.current_responsible = obj.executor
+                obj.last_editor = request.user
+                obj.save(update_fields=[
+                    "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
+                ])
+                self._notify_wa(
+                    obj.executor,
+                    "Задача возвращена на доработку",
+                    f"«{self._wa_label(obj)}» возвращена автором."
+                    + (f" Комментарий: {comment}" if comment else ""),
+                    obj,
+                )
+                messages.success(request, "Задача возвращена исполнителю на доработку.")
+                return back
+        else:
+            form = WorkAssignmentReturnForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "original": obj,
+            "title": "Вернуть задачу на доработку",
+            "form": form,
+            "object_id": object_id,
+        }
+        return render(request, "admin/blog/workassignment/return.html", context)
 
     def reschedule_view(self, request, object_id: int):
         from django.shortcuts import render, redirect, get_object_or_404
@@ -4554,12 +4869,9 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             form = RescheduleAdminForm(request.POST)
             if form.is_valid():
                 try:
-                    WorkAssignmentService.reschedule_deadline(
+                    assignment = WorkAssignmentService.reschedule_deadline(
                         obj,
                         new_target_deadline=form.cleaned_data.get("new_target_deadline"),
-                        new_hard_deadline=form.cleaned_data.get("new_hard_deadline"),
-                        new_time_window_start=form.cleaned_data.get("new_time_window_start"),
-                        new_time_window_end=form.cleaned_data.get("new_time_window_end"),
                         reason=form.cleaned_data.get("reason", ""),
                         user=request.user if request.user.is_authenticated else None,
                         expected_deadline_version=form.cleaned_data["expected_deadline_version"],
@@ -4569,14 +4881,18 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 except RuntimeError as e:
                     messages.error(request, str(e))  # конфликт версий
                 else:
-                    messages.success(request, "Срок успешно перенесён.")
+                    if getattr(assignment, "_hard_deadline_reset", False):
+                        messages.warning(
+                            request,
+                            "Целевой срок перенесён. Абсолютный дедлайн сброшен — "
+                            "при необходимости назначьте его заново в карточке задания.",
+                        )
+                    else:
+                        messages.success(request, "Срок успешно перенесён.")
                     return redirect(f"../change/")
         else:
             form = RescheduleAdminForm(initial={
                 "new_target_deadline": obj.target_deadline,
-                "new_hard_deadline": obj.hard_deadline,
-                "new_time_window_start": obj.time_window_start,
-                "new_time_window_end": obj.time_window_end,
                 "expected_deadline_version": obj.deadline_version,
             })
 
@@ -4587,6 +4903,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "title": "Перенести срок",
             "form": form,
             "object_id": object_id,
+            "had_hard_deadline": bool(obj.hard_deadline),
             "has_view_permission": self.has_view_permission(request, obj),
             "has_change_permission": self.has_change_permission(request, obj),
         }
@@ -6298,20 +6615,456 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-#Модель пользовательского разделе с доп информацией
-class EmployeeProfileInline(admin.StackedInline):
-    model = EmployeeProfile
-    fk_name = 'user'
+from blog.utils import generate_pdf_logic
+
+
+#ПСИ СПМ ИБП
+class GeneratedDocumentInline(admin.TabularInline):
+    """Inline для отображения сгенерированных PDF внутри протокола"""
+    model = GeneratedDocument
+    extra = 0
+    readonly_fields = ('version', 'file_link', 'generated_at')
+    fields = ('version', 'file_link', 'generated_at')
     can_delete = False
-    verbose_name_plural = 'Дополнительная информация'
+
+    def file_link(self, obj):
+        if obj.file:
+            if obj.psi_source and obj.psi_source.shipment:
+                serial = obj.psi_source.shipment.serial_number
+            else:
+                serial = "—"
+            return format_html(
+                '<a href="{}" target="_blank">📄 Протокол_ПСИ_ИБП_СПМ_{}_v{}</a>',
+                obj.file.url, serial, obj.version
+            )
+        return "Файл отсутствует"
+
+    file_link.short_description = "Ссылка"
+
+
+class DocumentHistoryInline(admin.TabularInline):
+    """Inline для отображения истории изменений протокола"""
+    model = DocumentHistory
+    extra = 0
+    readonly_fields = ('user', 'action', 'timestamp')
+    fields = ('user', 'action', 'timestamp')
+    can_delete = False
+    verbose_name = "Запись истории"
+    verbose_name_plural = "История изменений"
+
+class PSIDocumentForm(forms.ModelForm):
+    class Meta:
+        model = PSIDocument
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Для п. 5.6 ручной выбор — только из двух вариантов (при наличии файла).
+        # Значение "нет данных" проставляется автоматически, когда файл не прикреплён.
+        if 'func_audio' in self.fields:
+            self.fields['func_audio'].choices = [
+                ('соответствует', 'Соответствует'),
+                ('не соответствует', 'Не соответствует'),
+            ]
+
+    def clean(self):
+        cleaned_data = super().clean()
+
+        interface_file = cleaned_data.get('interface_file')
+        func_audio = cleaned_data.get('func_audio')
+        interface_note = cleaned_data.get('interface_note')
+
+        if not interface_file:
+            # Файл (SNMP/UART) не прикреплён — статус п. 5.6 автоматически "нет данных"
+            cleaned_data['func_audio'] = 'нет данных'
+        elif func_audio == 'не соответствует' and not (interface_note and interface_note.strip()):
+            # Файл прикреплён, выбрано "Не соответствует" — примечание обязательно
+            self.add_error(
+                'interface_note',
+                'При статусе «Не соответствует» необходимо заполнить «Примечание (п. 5.6)».'
+            )
+
+        return cleaned_data
+
+
+@admin.register(PSIDocument)
+class PSIDocumentAdmin(admin.ModelAdmin):
+    form = PSIDocumentForm
+    """Админка для протоколов ПСИ"""
+
+    list_display = (
+        'get_post_name',      # отображение модификации
+        'get_serial_number',  # заводской номер из shipment
+        'get_developer_name', # организация-разработчик
+        'test_date',
+        'inspector',
+        'get_workshop_name',
+        'conclusion_short',
+        'pdf_count_display',
+        'created_at',
+        #'func_audio_status'
+    )
+
+    list_filter = (
+        'test_date',
+        'inspector',
+        'conclusion',
+        'workshop',
+    )
+
+    search_fields = (
+        'shipment__serial_number', # Ищем по связанной модели
+        'post__name', # Ищем по связанной модели
+        'fw_version',
+        'inspector',
+        'comment',
+        'workshop__number_name',
+    )
+
+    readonly_fields = (
+        'created_at',
+        'pdf_count_display',
+        'display_files_list',
+        'date_of_change',
+        'insulation_res',  # определяется автоматически по фактическому значению
+        'conclusion',  # определяется автоматически по результатам проверок
+        'author',  # проставляется автоматически
+        'last_editor',  # проставляется автоматически
+        'date_of_creation',
+    )
+
+    autocomplete_fields = ('post', 'shipment', 'developer_org', 'workshop')
+
+    inlines = [GeneratedDocumentInline, DocumentHistoryInline]
+
     fieldsets = (
-        ('Личные данные', {
-            'fields': ('patronymic', 'inn', 'phone')
+        ('1. Идентификация изделия', {
+            'fields': (
+                'post',  # выбор модификации
+                'shipment',  # выбор заводского номера
+                'developer_org',  # выбор организации
+                'test_date',
+                'fw_version'
+            )
         }),
-        ('Рабочие данные', {
-            'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities')
+        ('2. Общие проверки (ТУ,ПМ)', {
+            'fields': ('visual_check', 'marking_check', 'insulation_res', 'insulation_res_value', 'insulation_strength')
+        }),
+        ('3. Проверка функционирования (раздел 5.6)', {
+            'description': 'Установите статус, если тест пройден успешно',
+            'fields': (
+                'func_power_on', 'func_display', 'func_navigation',
+                'func_battery_mode', 'func_bypass', 'func_audio', 'interface_file',      # <-- ПОЛЕ ДЛЯ ЗАГРУЗКИ ФАЙЛА
+                'interface_note',
+                'func_settings', 'func_terminal'
+            )
+        }),
+        ('4. Итоговое заключение', {
+            'fields': ('conclusion', 'comment')
+        }),
+        ('5. Метеоусловия и Персонал', {
+            #'classes': ('collapse',),
+            'fields': ('inspector', 'workshop', 'remark', 'temperature', 'humidity', 'pressure')
+        }),
+        (
+            '6. Системные данные',
+            {
+                "fields": (
+                    "author",
+                    "current_responsible",
+                    "last_editor",
+                    "version",
+                    #"version_diff_display",
+                    "date_of_creation",
+                    "date_of_change",
+                )
+            },
+        ),
+    )
+
+    actions = ['create_pdf_action']
+
+    @admin.action(description="Сгенерировать PDF протокол")
+    def create_pdf_action(self, request, queryset):
+        """Экшен для массовой генерации PDF"""
+        count = 0
+        for obj in queryset:
+            generate_pdf_logic(obj, request.user)
+            count += 1
+        self.message_user(request, f"✅ PDF отчеты успешно сформированы для {count} протокол(ов).")
+
+    def conclusion_short(self, obj):
+        """Краткое отображение заключения"""
+        if obj.conclusion:
+            return obj.conclusion[:50] + '...' if len(obj.conclusion) > 50 else obj.conclusion
+        return "—"
+
+    conclusion_short.short_description = 'Заключение'
+
+    def pdf_count_display(self, obj):
+        """Ссылка на актуальную (последнюю) версию PDF протокола"""
+        latest = obj.pdfs.order_by('-version').first()
+        if not latest or not latest.file:
+            return "—"
+        return format_html(
+            '<a href="{}" target="_blank">📄_v{}</a>',
+            latest.file.url, latest.version
+        )
+
+    pdf_count_display.short_description = 'Протокол PDF'
+
+    def display_files_list(self, obj):
+        """Список всех PDF файлов для детального просмотра"""
+        pdfs = obj.pdfs.all().order_by('-version')
+        if not pdfs.exists():
+            return "Нет сгенерированных PDF"
+
+        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px;">'
+        html += '<h4>📑 Сгенерированные PDF:</h4><ul style="margin-top: 5px;">'
+        for pdf in pdfs:
+            html += f'<li style="margin-bottom: 5px;">'
+            html += f'📄 <a href="{pdf.file.url}" target="_blank">Версия {pdf.version}</a>'
+            html += f' <span style="color: #666; font-size: 0.9em;">(создан: {pdf.generated_at.strftime("%d.%m.%Y %H:%M")})</span>'
+            html += '</li>'
+        html += '</ul></div>'
+        return format_html(html)
+
+    display_files_list.short_description = 'Файлы PDF'
+
+    def save_model(self, request, obj, form, change):
+        """Сохранение с логированием"""
+        is_new = obj.pk is None
+        super().save_model(request, obj, form, change)
+
+        action_text = "Создан новый протокол" if is_new else "Протокол отредактирован"
+        DocumentHistory.objects.create(
+            psi_source=obj,
+            user=request.user,
+            action=action_text
+        )
+
+    def get_queryset(self, request):
+        """Оптимизация запросов"""
+        return super().get_queryset(request).prefetch_related('pdfs')
+
+    def get_post_name(self, obj):
+        return obj.post.name if obj.post else "—"
+
+    get_post_name.short_description = 'Модификация'
+    get_post_name.admin_order_field = 'post__name'
+
+    def get_serial_number(self, obj):
+        return obj.shipment.serial_number if obj.shipment else "—"
+
+    get_serial_number.short_description = 'Заводской номер'
+    get_serial_number.admin_order_field = 'shipment__serial_number'
+
+    def get_developer_name(self, obj):
+        return obj.developer_org.name if obj.developer_org else "—"
+
+    get_developer_name.short_description = 'Организация'
+    get_developer_name.admin_order_field = 'developer_org__name'
+
+    def get_workshop_name(self, obj):
+        """Отображение цеха/площадки"""
+        return obj.workshop.number_name if obj.workshop else "—"
+
+    get_workshop_name.short_description = 'Цех/Площадка'
+    get_workshop_name.admin_order_field = 'workshop__number_name'
+
+
+@admin.register(GeneratedDocument)
+class GeneratedDocumentAdmin(admin.ModelAdmin):
+    """Админка для сгенерированных PDF документов"""
+
+    list_display = (
+        'id',
+        'psi_source_link',
+        'version',
+        'generated_at',
+        'file_link',
+    )
+
+    list_filter = (
+        'version',
+        'generated_at',
+    )
+
+    search_fields = (
+        'psi_source__serial_number',
+        'psi_source__model_name',
+        'file',
+    )
+
+    readonly_fields = (
+        'psi_source',
+        'version',
+        'generated_at',
+        'file_link_display',
+    )
+
+    fieldsets = (
+        ('Основная информация', {
+            'fields': ('psi_source', 'version', 'generated_at')
+        }),
+        ('Файл', {
+            'fields': ('file_link_display',)
         }),
     )
+
+    def has_module_permission(self, request):
+        return False
+
+    def psi_source_link(self, obj):
+        """Ссылка на родительский протокол"""
+        if obj.psi_source:
+            url = f"/admin/blog/psidocument/{obj.psi_source.id}/change/"
+            return format_html('<a href="{}">{}</a>', url, obj.psi_source.serial_number)
+        return "—"
+
+    psi_source_link.short_description = 'Протокол'
+
+    def file_link(self, obj):
+        """Отображение файла в списке"""
+        if obj.file:
+            return format_html('<a href="{}" target="_blank">📄 Открыть</a>', obj.file.url)
+        return "—"
+
+    file_link.short_description = 'PDF'
+
+    def file_link_display(self, obj):
+        """Отображение файла в детальной форме"""
+        if obj.file:
+            return format_html(
+                '<div style="background: #f0f0f0; padding: 10px;">'
+                '<p><strong>Файл:</strong> {}</p>'
+                '<p><a href="{}" target="_blank" class="button">📥 Протокол_ПСИ_ИБП_СПМ</a></p>'
+                '</div>',
+                obj.file.name,
+                obj.file.url
+            )
+        return "Файл не найден"
+
+    file_link_display.short_description = 'Файл PDF'
+
+    def has_add_permission(self, request):
+        """Запрещаем ручное создание PDF"""
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        """Запрещаем изменение PDF"""
+        return False
+
+
+@admin.register(DocumentHistory)
+class DocumentHistoryAdmin(admin.ModelAdmin):
+    """Админка для истории изменений протоколов"""
+
+    list_display = (
+        'id',
+        'psi_source_link',
+        'user',
+        'action_short',
+        'timestamp',
+    )
+
+    list_filter = (
+        'timestamp',
+        'user',
+        'psi_source',
+    )
+
+    search_fields = (
+        'action',
+        'user__username',
+        'psi_source__serial_number',
+    )
+
+    readonly_fields = (
+        'psi_source',
+        'user',
+        'action',
+        'timestamp',
+    )
+
+    fieldsets = (
+        ('Информация об изменении', {
+            'fields': ('psi_source', 'user', 'action', 'timestamp')
+        }),
+    )
+
+    def has_module_permission(self, request):
+        return False
+
+    def psi_source_link(self, obj):
+        """Ссылка на родительский протокол"""
+        if obj.psi_source:
+            url = f"/admin/blog/psidocument/{obj.psi_source.id}/change/"
+            return format_html('<a href="{}">{}</a>', url, obj.psi_source.serial_number)
+        return "—"
+
+    psi_source_link.short_description = 'Протокол'
+
+    def action_short(self, obj):
+        """Краткое отображение действия"""
+        if obj.action:
+            return obj.action[:60] + '...' if len(obj.action) > 60 else obj.action
+        return "—"
+
+    action_short.short_description = 'Действие'
+
+    def has_add_permission(self, request):
+        """Запрещаем ручное добавление истории"""
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        """Запрещаем изменение истории"""
+        return False
+
+#Модель пользовательского разделе с доп информацией
+class UserWithProfileForm(UserChangeForm):
+    """Поля профиля сотрудника (EmployeeProfile) """
+    patronymic = forms.CharField(label='Отчество', max_length=100, required=False)
+    phone = forms.CharField(label='Телефон', max_length=20, required=False)
+    org_department = forms.ModelChoiceField(
+        label='Структурное подразделение (Отдел)',
+        queryset=Department.objects.all(),
+        required=False,
+    )
+    is_head = forms.BooleanField(label='Руководитель отдела', required=False)
+    position = forms.CharField(label='Должность', max_length=100, required=False)
+    supervisor = forms.ModelChoiceField(
+        label='Непосредственное подчинение',
+        queryset=User.objects.all(),
+        required=False,
+    )
+    roles_responsibilities = forms.CharField(
+        label='Роли / обязанности',
+        widget=forms.Textarea(attrs={'rows': 3}),
+        required=False,
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        profile = getattr(self.instance, 'profile', None) if self.instance.pk else None
+        if profile:
+            self.fields['patronymic'].initial = profile.patronymic
+            self.fields['phone'].initial = profile.phone
+            self.fields['org_department'].initial = profile.org_department_id
+            self.fields['is_head'].initial = profile.is_head
+            self.fields['position'].initial = profile.position
+            self.fields['supervisor'].initial = profile.supervisor_id
+            self.fields['roles_responsibilities'].initial = profile.roles_responsibilities
+
+        # Кнопка «+» для добавления нового подразделения прямо из карточки.
+        dep_rel = EmployeeProfile._meta.get_field('org_department').remote_field
+        self.fields['org_department'].widget = RelatedFieldWidgetWrapper(
+            self.fields['org_department'].widget,
+            dep_rel,
+            admin.site,
+            can_add_related=True,
+            can_change_related=True,
+        )
 
 
 @admin.register(Department)
@@ -6329,7 +7082,43 @@ admin.site.unregister(User)
 
 @admin.register(User)
 class CustomUserAdmin(BaseUserAdmin):
-    inlines = [EmployeeProfileInline]
+    form = UserWithProfileForm
+
+    _PROFILE_FIELDS = (
+        'patronymic', 'phone', 'org_department',
+        'is_head', 'position', 'supervisor', 'roles_responsibilities',
+    )
+
+    fieldsets = (
+        (None, {'fields': ('username', 'password')}),
+        ('Персональные данные', {
+            'fields': ('first_name', 'last_name', 'patronymic', 'phone', 'email'),
+        }),
+        ('Профиль сотрудника', {
+            'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities'),
+        }),
+        ('Права доступа', {
+            'classes': ('collapse',),
+            'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions'),
+        }),
+        ('Важные даты', {
+            'classes': ('collapse',),
+            'fields': ('last_login', 'date_joined'),
+        }),
+    )
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if any(f in form.cleaned_data for f in self._PROFILE_FIELDS):
+            profile, _ = EmployeeProfile.objects.get_or_create(user=obj)
+            profile.patronymic = form.cleaned_data.get('patronymic', '')
+            profile.phone = form.cleaned_data.get('phone', '')
+            profile.org_department = form.cleaned_data.get('org_department')
+            profile.is_head = form.cleaned_data.get('is_head', False)
+            profile.position = form.cleaned_data.get('position', '')
+            profile.supervisor = form.cleaned_data.get('supervisor')
+            profile.roles_responsibilities = form.cleaned_data.get('roles_responsibilities', '')
+            profile.save()
 
     list_filter = BaseUserAdmin.list_filter + ('profile__org_department',)
 
@@ -6337,7 +7126,7 @@ class CustomUserAdmin(BaseUserAdmin):
         'username',
         'get_full_name',
         'get_patronymic',
-        'get_inn',
+        'email',
         'get_phone',
         'get_department',
         'get_is_head',
@@ -6345,6 +7134,11 @@ class CustomUserAdmin(BaseUserAdmin):
         'get_supervisor',
         'is_active',
     )
+
+    @admin.display(description='Фамилия. Имя', ordering='last_name')
+    def get_full_name(self, obj):
+        name = f"{obj.last_name} {obj.first_name}".strip()
+        return name or obj.username
 
     @admin.display(description='Руководитель', boolean=True, ordering='profile__is_head')
     def get_is_head(self, obj):
@@ -6355,12 +7149,6 @@ class CustomUserAdmin(BaseUserAdmin):
 
     get_patronymic.short_description = 'Отчество'
     get_patronymic.admin_order_field = 'profile__patronymic'
-
-    def get_inn(self, obj):
-        return obj.profile.inn if hasattr(obj, 'profile') else ''
-
-    get_inn.short_description = 'ИНН'
-    get_inn.admin_order_field = 'profile__inn'
 
     def get_phone(self, obj):
         return obj.profile.phone if hasattr(obj, 'profile') else ''
