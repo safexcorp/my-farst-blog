@@ -50,8 +50,7 @@ from enterprise_asset_management.models import (
 )
 from shared_repository.models import (SharedRepository, IndependentDocumentAcceptSignature,
 KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature, AdministrativeOrder,
-AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature, PSIDocument,
-GeneratedDocument, DocumentHistory)
+AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature)
 
 from .admin_forms import RescheduleAdminForm
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
@@ -4975,11 +4974,12 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     )
 
     def display_related_documents(self, obj):
-        """Отображение связанных документов СМК в списке"""
+        """Связанные документы СМК — списком, каждый с новой строки"""
         docs = obj.related_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_documents.short_description = 'Связанные документы СМК'
 
@@ -5015,11 +5015,12 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     display_related_qms_documents_list.short_description = 'Связанные документы СМК'
 
     def display_related_sharedrepository(self, obj):
-        """Отображение связанных отдельных документов в списке"""
-        docs = obj.related_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        """Связанные отдельные документы — списком, каждый с новой строки"""
+        docs = obj.related_sharedrepository.all()
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_sharedrepository.short_description = 'Связанные отдельные документы'
 
@@ -5609,7 +5610,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
                 'document_purpose',
             )
         }),
-        ('Связанные отдельные документы', {
+        ('Связанные документы', {
             'fields': ('related_documents','related_qms_documents'),
         }),
         ('Дата планового пересмотра', {
@@ -5639,11 +5640,12 @@ class QMSDocumentAdmin(admin.ModelAdmin):
     )
 
     def display_related_documents(self, obj):
-        """Отображение связанных отдельных документов в списке"""
+        """Связанные отдельные документы — списком, каждый с новой строки"""
         docs = obj.related_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_documents.short_description = 'Связанные отдельные документы'
 
@@ -5680,25 +5682,15 @@ class QMSDocumentAdmin(admin.ModelAdmin):
     display_related_shared_documents_list.short_description = 'Связанные отдельные документы'
 
     def display_related_qms_documents(self, obj):
-        """Отображение связанных документов СМК в списке"""
-        docs = obj.qms_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        """Связанные документы СМК — списком, каждый с новой строки"""
+        docs = obj.related_qms_documents.all()
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_qms_documents.short_description = 'Связанные документы СМК'
 
-    def display_related_qms_documents(self, obj):
-        """Отображение количества связанных документов СМК"""
-        count = obj.related_qms_documents.count()
-        if count:
-            return format_html(
-                '<span style="color: #79aec8;">📄 Документов СМК: {}</span>',
-                count
-            )
-        return "—"
-
-    display_related_qms_documents.short_description = 'Связанные документы СМК'
 
     def display_related_qms_documents_list(self, obj):
         """Список связанных документов СМК для детального просмотра"""
@@ -6305,312 +6297,6 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
             obj.last_editor = request.user
         super().save_model(request, obj, form, change)
 
-
-from shared_repository.utils import generate_pdf_logic
-
-
-class GeneratedDocumentInline(admin.TabularInline):
-    """Inline для отображения сгенерированных PDF внутри протокола"""
-    model = GeneratedDocument
-    extra = 0
-    readonly_fields = ('version', 'file_link', 'generated_at')
-    fields = ('version', 'file_link', 'generated_at')
-    can_delete = False
-
-    def file_link(self, obj):
-        if obj.file:
-            return format_html('<a href="{}" target="_blank">📄 Открыть PDF</a>', obj.file.url)
-        return "Файл отсутствует"
-
-    file_link.short_description = "Ссылка"
-
-
-class DocumentHistoryInline(admin.TabularInline):
-    """Inline для отображения истории изменений протокола"""
-    model = DocumentHistory
-    extra = 0
-    readonly_fields = ('user', 'action', 'timestamp')
-    fields = ('user', 'action', 'timestamp')
-    can_delete = False
-    verbose_name = "Запись истории"
-    verbose_name_plural = "История изменений"
-
-
-@admin.register(PSIDocument)
-class PSIDocumentAdmin(admin.ModelAdmin):
-    """Админка для протоколов ПСИ"""
-
-    list_display = (
-        'serial_number',
-        'model_name',
-        'test_date',
-        'inspector',
-        'conclusion_short',
-        'pdf_count_display',
-        'created_at',
-    )
-
-    list_filter = (
-        'test_date',
-        'inspector',
-        'model_name',
-        'conclusion',
-    )
-
-    search_fields = (
-        'serial_number',
-        'model_name',
-        'fw_version',
-        'inspector',
-        'comment',
-    )
-
-    readonly_fields = (
-        'created_at',
-        'pdf_count_display',
-        'display_files_list',
-    )
-
-    inlines = [GeneratedDocumentInline, DocumentHistoryInline]
-
-    fieldsets = (
-        ('1. Идентификация изделия', {
-            'fields': ('serial_number', 'test_date', 'model_name', 'fw_version')
-        }),
-        ('2. Общие проверки (ТУ)', {
-            'fields': ('visual_check', 'marking_check', 'insulation_res', 'insulation_strength')
-        }),
-        ('3. Проверка функционирования (раздел 5.6)', {
-            'description': 'Установите статус, если тест пройден успешно',
-            'fields': (
-                'func_power_on', 'func_display', 'func_navigation',
-                'func_battery_mode', 'func_bypass', 'func_audio',
-                'func_settings', 'func_terminal'
-            )
-        }),
-        ('4. Итоговое заключение', {
-            'fields': ('completeness', 'conclusion', 'comment')
-        }),
-        ('5. Метеоусловия и персонал', {
-            'classes': ('collapse',),
-            'fields': ('inspector', 'workshop', 'temperature', 'humidity', 'pressure', 'remark')
-        }),
-        ('Системная информация', {
-            'classes': ('collapse',),
-            'fields': ('created_at', 'pdf_count_display', 'display_files_list'),
-        }),
-    )
-
-    actions = ['create_pdf_action']
-
-    @admin.action(description="Сгенерировать PDF протокол")
-    def create_pdf_action(self, request, queryset):
-        """Экшен для массовой генерации PDF"""
-        count = 0
-        for obj in queryset:
-            generate_pdf_logic(obj, request.user)
-            count += 1
-        self.message_user(request, f"✅ PDF отчеты успешно сформированы для {count} протокол(ов).")
-
-    def conclusion_short(self, obj):
-        """Краткое отображение заключения"""
-        if obj.conclusion:
-            return obj.conclusion[:50] + '...' if len(obj.conclusion) > 50 else obj.conclusion
-        return "—"
-
-    conclusion_short.short_description = 'Заключение'
-
-    def pdf_count_display(self, obj):
-        """Отображение количества версий PDF"""
-        count = obj.pdfs.count()
-        if count == 0:
-            return "—"
-        return format_html('<span style="font-weight: bold;">📄 {}</span>', count)
-
-    pdf_count_display.short_description = 'Версии PDF'
-
-    def display_files_list(self, obj):
-        """Список всех PDF файлов для детального просмотра"""
-        pdfs = obj.pdfs.all().order_by('-version')
-        if not pdfs.exists():
-            return "Нет сгенерированных PDF"
-
-        html = '<div style="background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px;">'
-        html += '<h4>📑 Сгенерированные PDF:</h4><ul style="margin-top: 5px;">'
-        for pdf in pdfs:
-            html += f'<li style="margin-bottom: 5px;">'
-            html += f'📄 <a href="{pdf.file.url}" target="_blank">Версия {pdf.version}</a>'
-            html += f' <span style="color: #666; font-size: 0.9em;">(создан: {pdf.generated_at.strftime("%d.%m.%Y %H:%M")})</span>'
-            html += '</li>'
-        html += '</ul></div>'
-        return format_html(html)
-
-    display_files_list.short_description = 'Файлы PDF'
-
-    def save_model(self, request, obj, form, change):
-        """Сохранение с логированием"""
-        is_new = obj.pk is None
-        super().save_model(request, obj, form, change)
-
-        action_text = "Создан новый протокол" if is_new else "Протокол отредактирован"
-        DocumentHistory.objects.create(
-            psi_source=obj,
-            user=request.user,
-            action=action_text
-        )
-
-    def get_queryset(self, request):
-        """Оптимизация запросов"""
-        return super().get_queryset(request).prefetch_related('pdfs')
-
-
-@admin.register(GeneratedDocument)
-class GeneratedDocumentAdmin(admin.ModelAdmin):
-    """Админка для сгенерированных PDF документов"""
-
-    list_display = (
-        'id',
-        'psi_source_link',
-        'version',
-        'generated_at',
-        'file_link',
-    )
-
-    list_filter = (
-        'version',
-        'generated_at',
-    )
-
-    search_fields = (
-        'psi_source__serial_number',
-        'psi_source__model_name',
-        'file',
-    )
-
-    readonly_fields = (
-        'psi_source',
-        'version',
-        'generated_at',
-        'file_link_display',
-    )
-
-    fieldsets = (
-        ('Основная информация', {
-            'fields': ('psi_source', 'version', 'generated_at')
-        }),
-        ('Файл', {
-            'fields': ('file_link_display',)
-        }),
-    )
-
-    def has_module_permission(self, request):
-        return False
-
-    def psi_source_link(self, obj):
-        """Ссылка на родительский протокол"""
-        if obj.psi_source:
-            url = f"/admin/shared_repository/psidocument/{obj.psi_source.id}/change/"
-            return format_html('<a href="{}">{}</a>', url, obj.psi_source.serial_number)
-        return "—"
-
-    psi_source_link.short_description = 'Протокол'
-
-    def file_link(self, obj):
-        """Отображение файла в списке"""
-        if obj.file:
-            return format_html('<a href="{}" target="_blank">📄 Открыть</a>', obj.file.url)
-        return "—"
-
-    file_link.short_description = 'PDF'
-
-    def file_link_display(self, obj):
-        """Отображение файла в детальной форме"""
-        if obj.file:
-            return format_html(
-                '<div style="background: #f0f0f0; padding: 10px;">'
-                '<p><strong>Файл:</strong> {}</p>'
-                '<p><a href="{}" target="_blank" class="button">📥 Открыть PDF</a></p>'
-                '</div>',
-                obj.file.name,
-                obj.file.url
-            )
-        return "Файл не найден"
-
-    file_link_display.short_description = 'Файл PDF'
-
-    def has_add_permission(self, request):
-        """Запрещаем ручное создание PDF"""
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        """Запрещаем изменение PDF"""
-        return False
-
-
-@admin.register(DocumentHistory)
-class DocumentHistoryAdmin(admin.ModelAdmin):
-    """Админка для истории изменений протоколов"""
-
-    list_display = (
-        'id',
-        'psi_source_link',
-        'user',
-        'action_short',
-        'timestamp',
-    )
-
-    list_filter = (
-        'timestamp',
-        'user',
-        'psi_source',
-    )
-
-    search_fields = (
-        'action',
-        'user__username',
-        'psi_source__serial_number',
-    )
-
-    readonly_fields = (
-        'psi_source',
-        'user',
-        'action',
-        'timestamp',
-    )
-
-    fieldsets = (
-        ('Информация об изменении', {
-            'fields': ('psi_source', 'user', 'action', 'timestamp')
-        }),
-    )
-
-    def has_module_permission(self, request):
-        return False
-
-    def psi_source_link(self, obj):
-        """Ссылка на родительский протокол"""
-        if obj.psi_source:
-            url = f"/admin/shared_repository/psidocument/{obj.psi_source.id}/change/"
-            return format_html('<a href="{}">{}</a>', url, obj.psi_source.serial_number)
-        return "—"
-
-    psi_source_link.short_description = 'Протокол'
-
-    def action_short(self, obj):
-        """Краткое отображение действия"""
-        if obj.action:
-            return obj.action[:60] + '...' if len(obj.action) > 60 else obj.action
-        return "—"
-
-    action_short.short_description = 'Действие'
-
-    def has_add_permission(self, request):
-        """Запрещаем ручное добавление истории"""
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        """Запрещаем изменение истории"""
-        return False
 
 #Модель пользовательского разделе с доп информацией
 class EmployeeProfileInline(admin.StackedInline):
