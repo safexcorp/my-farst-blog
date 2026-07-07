@@ -5291,11 +5291,12 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     )
 
     def display_related_documents(self, obj):
-        """Отображение связанных документов СМК в списке"""
+        """Связанные документы СМК — списком, каждый с новой строки"""
         docs = obj.related_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_documents.short_description = 'Связанные документы СМК'
 
@@ -5331,11 +5332,12 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     display_related_qms_documents_list.short_description = 'Связанные документы СМК'
 
     def display_related_sharedrepository(self, obj):
-        """Отображение связанных отдельных документов в списке"""
-        docs = obj.related_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        """Связанные отдельные документы — списком, каждый с новой строки"""
+        docs = obj.related_sharedrepository.all()
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_sharedrepository.short_description = 'Связанные отдельные документы'
 
@@ -5925,7 +5927,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
                 'document_purpose',
             )
         }),
-        ('Связанные отдельные документы', {
+        ('Связанные документы', {
             'fields': ('related_documents','related_qms_documents'),
         }),
         ('Дата планового пересмотра', {
@@ -5955,11 +5957,12 @@ class QMSDocumentAdmin(admin.ModelAdmin):
     )
 
     def display_related_documents(self, obj):
-        """Отображение связанных отдельных документов в списке"""
+        """Связанные отдельные документы — списком, каждый с новой строки"""
         docs = obj.related_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_documents.short_description = 'Связанные отдельные документы'
 
@@ -5996,25 +5999,15 @@ class QMSDocumentAdmin(admin.ModelAdmin):
     display_related_shared_documents_list.short_description = 'Связанные отдельные документы'
 
     def display_related_qms_documents(self, obj):
-        """Отображение связанных документов СМК в списке"""
-        docs = obj.qms_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        """Связанные документы СМК — списком, каждый с новой строки"""
+        docs = obj.related_qms_documents.all()
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_qms_documents.short_description = 'Связанные документы СМК'
 
-    def display_related_qms_documents(self, obj):
-        """Отображение количества связанных документов СМК"""
-        count = obj.related_qms_documents.count()
-        if count:
-            return format_html(
-                '<span style="color: #79aec8;">📄 Документов СМК: {}</span>',
-                count
-            )
-        return "—"
-
-    display_related_qms_documents.short_description = 'Связанные документы СМК'
 
     def display_related_qms_documents_list(self, obj):
         """Список связанных документов СМК для детального просмотра"""
