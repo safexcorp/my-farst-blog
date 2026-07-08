@@ -3101,7 +3101,7 @@ class PSIDocument(models.Model):
     insulation_res_value = models.DecimalField(
         "Фактическое значение сопротивления изоляции, МОм",
         max_digits=10, decimal_places=2, null=True, blank=True,
-        help_text="Введите измеренное значение в МОм. Статус устанавливается автоматически: при ≥ 1 МОм - Соответсвует; при < 1 МОм - Не соответсвует."
+        help_text="Введите измеренное значение в МОм. Статус устанавливается автоматически: при ≥ 1 МОм - Соответствует; при < 1 МОм - Не соответствует."
     )
 
     insulation_strength = models.CharField("4 Проверка электрической прочности изоляции (2.6 ТУ, 5.7 ПМ)", max_length=20, choices=STATUS_CHOICES, default='соответствует')
@@ -3138,7 +3138,7 @@ class PSIDocument(models.Model):
     comment = models.TextField("Комментарий", blank=True)
 
     # --- Условия испытаний (Метеоусловия) ---
-    inspector = models.CharField("Представитель ОТК", max_length=150)
+    inspector = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="psi_inspector", verbose_name="Представитель ОТК",)
 
     #связь с помещением
     workshop = models.ForeignKey('enterprise_asset_management.ProductionArea', on_delete=models.SET_NULL,
@@ -3152,7 +3152,7 @@ class PSIDocument(models.Model):
     humidity = models.CharField("Влажность", choices=HUMIDITY_CHOICES, max_length=50, default="45%")
     pressure = models.CharField("Давление", choices=PRESSURE_CHOICES, max_length=50, default="750 мм рт. ст.")
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField('Создан', auto_now_add=True)
 
     author = models.ForeignKey(
         User,
@@ -3273,3 +3273,229 @@ class DocumentHistory(models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="Пользователь")
     action = models.CharField("Действие", max_length=255)
     timestamp = models.DateTimeField(auto_now_add=True)
+
+
+# ПСИ ПАК СПМ
+class PAKDocument(models.Model):
+    """Протокол приёмо-сдаточных испытаний ПАК СПМ."""
+
+    STATUS_CHOICES = [
+        ('соответствует', 'Соответствует'),
+        ('не соответствует', 'Не соответствует'),
+        ('нет данных', 'Нет данных'),
+    ]
+    SHIPMENT_CHOICES = [
+        ('готов к отгрузке', 'Готов к отгрузке'),
+        ('не готов', 'Не готов'),
+    ]
+    TEMPERATURE_CHOICES = [
+        ('норма (15 °С ... 35 °С)', 'Норма (15 °С ... 35 °С)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    HUMIDITY_CHOICES = [
+        ('норма (30 % ... 60 %)', 'норма (30 % ... 60 %)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+    PRESSURE_CHOICES = [
+        ('норма (84 кПа ... 106,7 кПа)', 'норма (84 кПа ... 106,7 кПа)'),
+        ('отклонение', 'Отклонение'),
+        ('нет данных', 'Нет данных')
+    ]
+
+    # --- Связи (как у ИБП: номер/зав.№ берутся из shipment) ---
+    shipment = models.ForeignKey(
+        'Shipment', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='pak_documents', verbose_name='Изделие к отгрузке'
+    )
+    post = models.ForeignKey(
+        'Post', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='pak_documents', verbose_name='Модификация ПАК СПМ'
+    )
+    developer_org = models.ForeignKey(
+        'RKDDeveloper', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='pak_documents', verbose_name='Организация-разработчик'
+    )
+
+    # --- Основная информация ---
+    fw_version = models.CharField('Версия ПО', max_length=50, blank=True, default='')
+    test_date_start = models.DateField('Дата начала проведения испытаний')
+    test_date_end = models.DateField('Дата окончания испытаний', null=True, blank=True)
+
+    # --- Проверки (Таблица 1) ---
+    check_marking = models.CharField(
+        '1 Проверка содержания маркировки (1.5.2 ТУ, 3.1 ПМ)',
+        max_length=20, choices=STATUS_CHOICES
+    )
+    check_kd_appearance = models.CharField(
+        '2 Проверка соответствия ПАК СПМ КД и внешнего вида (1.1.1, 1.1.9 ТУ, 3.2 ПМ)',
+        max_length=20, choices=STATUS_CHOICES
+    )
+    check_server_link = models.CharField(
+        '3 Проверка обеспечения связи с сервером (1.1.5, 1.1.4 ТУ, 3.3 ПМ)',
+        max_length=20, choices=STATUS_CHOICES
+    )
+    check_alarm = models.CharField(
+        '4 Проверка обнаружения и регистрации аварии (1.1.2, 1.1.4 ТУ, 3.4 ПМ)',
+        max_length=20, choices=STATUS_CHOICES
+    )
+    # Пункт 4: файл с логами от прибора + примечание
+    alarm_log_file = models.FileField(
+        'Файл с логами (п. 4)', upload_to='pak_documents/alarm_logs/%Y/%m/%d/',
+        null=True, blank=True
+    )
+    alarm_note = models.TextField(
+        'Примечание (п. 4)', blank=True, default='',
+        help_text='Комментарий по проверке обнаружения/регистрации аварии'
+    )
+    check_battery_status = models.CharField(
+        '5 Проверка контроля и передачи статуса батареи (1.1.7 ТУ, 3.5 ПМ)',
+        max_length=20, choices=STATUS_CHOICES
+    )
+    check_radio_settings = models.CharField(
+        '6 Проверка обеспечения изменения настроек по радиоканалу ближней связи (1.1.6 ТУ, 3.6 ПМ)',
+        max_length=20, choices=STATUS_CHOICES
+    )
+    check_long_run = models.CharField(
+        '7 Проверка длительной работы ПАК СПМ (3.7 ПМ)',
+        max_length=20, choices=STATUS_CHOICES
+    )
+
+    # --- Заключение ---
+    conclusion = models.CharField(
+        'Заключение', max_length=20, choices=SHIPMENT_CHOICES
+    )
+    comment = models.TextField('Комментарий', blank=True, default='')
+
+    # --- ОТК ---
+    inspector = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="pak_inspector", verbose_name="Представитель ОТК",)
+
+    # связь с помещением
+    workshop = models.ForeignKey('enterprise_asset_management.ProductionArea', on_delete=models.SET_NULL,
+                                 null=True,
+                                 blank=True,
+                                 related_name='pak_documents',
+                                 verbose_name="Производственная площадка (Цех)")
+
+    remark = models.TextField("Комментарий", blank=True)
+    temperature = models.CharField("Температура", choices=TEMPERATURE_CHOICES, max_length=50, default="+22°C")
+    humidity = models.CharField("Влажность", choices=HUMIDITY_CHOICES, max_length=50, default="45%")
+    pressure = models.CharField("Давление", choices=PRESSURE_CHOICES, max_length=50, default="750 мм рт. ст.")
+
+    created_at = models.DateTimeField('Создан', auto_now_add=True)
+
+    author = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="authored_pak_created",
+        verbose_name="Автор",
+    )
+    date_of_creation = models.DateTimeField(auto_now=True, verbose_name="Дата и время создания")
+    last_editor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="edited_pak_documents",
+        verbose_name="Последний редактор",
+    )
+    version = models.CharField(max_length=3, default="1", verbose_name="Версия")
+    version_diff = models.TextField(
+        blank=True,
+        default="Стартовая версия",
+        verbose_name="Сравнение версий",
+    )
+    date_of_change = models.DateTimeField(auto_now=True, verbose_name="Дата и время последнего изменения")
+    current_responsible = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pak_document_responsible",
+        verbose_name="Текущий ответственный",
+    )
+
+    class Meta:
+        verbose_name = 'ПСИ ПАК СПМ'
+        verbose_name_plural = 'ПСИ ПАК СПМ'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        serial = self.shipment.serial_number if self.shipment else '—'
+        return f'Протокол ПАК СПМ {serial}'
+
+    def clean(self):
+        """Валидация модели"""
+        # п. 4: если файл с логами не прикреплён — статус автоматически "нет данных".
+        # Требование примечания при "не соответствует" проверяется в форме (PAKDocumentForm).
+        if not self.alarm_log_file:
+            self.check_alarm = 'нет данных'
+
+    def all_checks_passed(self):
+        """True, только если ВСЕ проверки в статусе 'соответствует'
+        (нет ни одного 'не соответствует' или 'нет данных')."""
+        checks = (
+            self.check_marking,
+            self.check_kd_appearance,
+            self.check_server_link,
+            self.check_alarm,
+            self.check_battery_status,
+            self.check_radio_settings,
+            self.check_long_run,
+        )
+        return all(status == 'соответствует' for status in checks)
+
+    def save(self, *args, **kwargs):
+        # п. 4 если файл интерфейсов не прикреплён — статус "не соответствует"
+        if not self.alarm_log_file:
+            self.check_alarm = 'не соответствует'
+
+        # Заключение определяется автоматически по результатам проверок:
+        # любое 'не соответствует' или 'нет данных' -> не готов к отгрузке.
+
+        if self.all_checks_passed():
+            self.conclusion = 'готов к отгрузке'
+        else:
+            self.conclusion = 'не готов'
+        super().save(*args, **kwargs)
+
+
+class PAKGeneratedDocument(models.Model):
+    """Сгенерированный PDF протокола ПАК СПМ."""
+    pak_source = models.ForeignKey(
+        PAKDocument, on_delete=models.CASCADE, related_name='pdfs',
+        verbose_name='Протокол-источник', null=True, blank=True
+    )
+    file = models.FileField('Готовый PDF', upload_to='pak_generated_pdfs/')
+    version = models.PositiveIntegerField('Версия')
+    generated_at = models.DateTimeField('Сгенерирован', auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Сгенерированный PDF (ПАК СПМ)'
+        verbose_name_plural = 'Сгенерированные PDF (ПАК СПМ)'
+        ordering = ['-version']
+
+    def __str__(self):
+        return f'PDF ПАК СПМ v{self.version}'
+
+
+class PAKDocumentHistory(models.Model):
+    """История изменений протокола ПАК СПМ."""
+    pak_source = models.ForeignKey(
+        PAKDocument, on_delete=models.CASCADE, related_name='history',
+        verbose_name='Протокол', null=True, blank=True
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True,
+        related_name='pak_document_history', verbose_name='Пользователь'
+    )
+    action = models.CharField('Действие', max_length=255)
+    timestamp = models.DateTimeField('Время', auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'История протокола ПАК СПМ'
+        verbose_name_plural = 'История протоколов ПАК СПМ'
+        ordering = ['-timestamp']
