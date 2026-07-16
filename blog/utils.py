@@ -78,7 +78,7 @@ def generate_pdf_logic(psi_document, user):
         raise
 
 
-# ПСИ ИБП СПМ
+# ПСИ ПАК СПМ
 def generate_pak_pdf_logic(pak_document, user):
     """Генерация PDF протокола ПСИ ПАК СПМ."""
     try:
