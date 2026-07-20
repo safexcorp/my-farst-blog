@@ -3093,25 +3093,25 @@ class PSIDocument(models.Model):
 
     # --- Общие проверки ---
     visual_check = models.CharField("1 Проверка соответствия КД и проверка внешнего вида (1.1.1, 1.4.2 ТУ, 5.3 ПМ)",
-                                    max_length=20, choices=STATUS_CHOICES, default='соответствует')
+                                    max_length=20, choices=STATUS_CHOICES, default='нет данных')
     marking_check = models.CharField("2 Проверка содержания маркировки (1.10.1 ТУ, 5.1 ПМ)",
-                                     max_length=20, choices=STATUS_CHOICES, default='соответствует')
+                                     max_length=20, choices=STATUS_CHOICES, default='нет данных')
     insulation_res = models.CharField("3 Проверка электрического сопротивления изоляции (2.5 ТУ, 5.6 ПМ)",
                                       max_length=20, choices=STATUS_CHOICES, default='нет данных')
     insulation_res_value = models.DecimalField(
         "Фактическое значение сопротивления изоляции, МОм",
         max_digits=10, decimal_places=2, null=True, blank=True,
-        help_text="Введите измеренное значение в МОм. Статус устанавливается автоматически: при ≥ 1 МОм - Соответствует; при < 1 МОм - Не соответствует."
+        help_text="Введите измеренное значение в МОм. Статус устанавливается автоматически: при ≥ 1 МОм - Соответствует; при < 1 МОм - Не соответствует. "
     )
 
-    insulation_strength = models.CharField("4 Проверка электрической прочности изоляции (2.6 ТУ, 5.7 ПМ)", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    insulation_strength = models.CharField("4 Проверка электрической прочности изоляции (2.6 ТУ, 5.7 ПМ)", max_length=20, choices=STATUS_CHOICES, default='нет данных')
 
     # --- Проверка функционирования (5.6) ---
-    func_power_on = models.CharField("5.1 Проверка включения", max_length=20, choices=STATUS_CHOICES, default='соответствует')
-    func_display = models.CharField("5.2 Проверка индикации", max_length=20, choices=STATUS_CHOICES, default='соответствует')
-    func_navigation = models.CharField("5.3 Проверка навигации по информационным страницам", max_length=20, choices=STATUS_CHOICES, default='соответствует')
-    func_battery_mode = models.CharField("5.4 Проверка работы от аккумуляторных батарей (АБ)", max_length=20, choices=STATUS_CHOICES, default='соответствует')
-    func_bypass = models.CharField("5.5 Проверка режима «байпас»", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_power_on = models.CharField("5.1 Проверка включения", max_length=20, choices=STATUS_CHOICES, default='нет данных')
+    func_display = models.CharField("5.2 Проверка индикации", max_length=20, choices=STATUS_CHOICES, default='нет данных')
+    func_navigation = models.CharField("5.3 Проверка навигации по информационным страницам", max_length=20, choices=STATUS_CHOICES, default='нет данных')
+    func_battery_mode = models.CharField("5.4 Проверка работы от аккумуляторных батарей (АБ)", max_length=20, choices=STATUS_CHOICES, default='нет данных')
+    func_bypass = models.CharField("5.5 Проверка режима «байпас»", max_length=20, choices=STATUS_CHOICES, default='нет данных')
     func_audio = models.CharField("5.6 Проверка интерфейсов SNMP и UART (Использовать web-приложение для мониторинга ИБП СПМ)", max_length=20, choices=STATUS_CHOICES, default='нет данных')
     # НОВОЕ ПОЛЕ: файл для 5.6
     interface_file = models.FileField(
@@ -3130,11 +3130,11 @@ class PSIDocument(models.Model):
         help_text="Мотивы несоответствия (заполняется, если по п. 5.6 выбрано «Не соответствует»)"
     )
 
-    func_settings = models.CharField("5.7 Проверка отключения звукового сигнала", max_length=20, choices=STATUS_CHOICES, default='соответствует')
-    func_terminal = models.CharField("5.8 Проверка настроек", max_length=20, choices=STATUS_CHOICES, default='соответствует')
+    func_settings = models.CharField("5.7 Проверка отключения звукового сигнала", max_length=20, choices=STATUS_CHOICES, default='нет данных')
+    func_terminal = models.CharField("5.8 Проверка настроек", max_length=20, choices=STATUS_CHOICES, default='нет данных')
 
     # --- Заключение ---
-    conclusion = models.CharField("Заключение", max_length=50, choices=SHIPMENT_CHOICES, default="готов к отгрузке")
+    conclusion = models.CharField("Заключение", max_length=50, choices=SHIPMENT_CHOICES, default="нет данных")
     comment = models.TextField("Комментарий", blank=True)
 
     # --- Условия испытаний (Метеоусловия) ---
@@ -3249,12 +3249,40 @@ class PSIDocument(models.Model):
         super().save(*args, **kwargs)
 
     def get_inspector_display(self):
-        """Возвращает ФИО испытателя"""
-        return self.inspector if self.inspector else "—"
+        """Возвращает полное ФИО испытателя на русском (Фамилия Имя Отчество)."""
+        if not self.inspector:
+            return "—"
+        user = self.inspector
+        last = user.last_name or ''
+        first = user.first_name or ''
+        patronymic = ''
+        if hasattr(user, 'profile') and user.profile.patronymic:
+            patronymic = user.profile.patronymic
+        parts = [p for p in [last, first, patronymic] if p]
+        return ' '.join(parts) if parts else user.username
+
+    def get_inspector_ecp(self):
+        """Возвращает строку ECP для PDF — заглушка подписи."""
+        return "ЭЦП"
 
     def get_workshop_display(self):
         """Возвращает цех"""
         return self.workshop if self.workshop else "—"
+
+    def clean(self):
+        super().clean()
+
+        # Проверяем только при СОЗДАНИИ нового документа ПСИ
+        if not self.pk and self.shipment_id:
+            # Проверяем, существует ли уже ПСИ для этого изделия
+            exists = PSIDocument.objects.filter(shipment=self.shipment.id).exists()
+            if exists:
+                raise ValidationError({
+                    'shipment': (
+                        f"Для изделия «{self.shipment}» уже создан документ ПСИ. "
+                        f"Повторное создание ПСИ запрещено. Вы можете отредактировать существующий."
+                    )
+                })
 
 class GeneratedDocument(models.Model):
     # Вместо старого source теперь привязка к PSIDocument

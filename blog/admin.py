@@ -6644,12 +6644,29 @@ class DocumentHistoryInline(admin.TabularInline):
     verbose_name_plural = "История изменений"
 
 class PSIDocumentForm(forms.ModelForm):
+    # Сопротивление изоляции вводим как текст: полный контроль над разделителем
+    # (только запятая) и над округлением, чтобы «1» не превращалось в «0.96».
+    insulation_res_value = forms.CharField(
+        required=False,
+        label="Фактическое значение сопротивления изоляции, МОм",
+        help_text=(
+            "Необязательное поле. Десятичный разделитель — запятая (например: 1,25). "
+            "Пусто — статус «нет данных»; < 1 — «не соответствует»; ≥ 1 — «соответствует»."
+        ),
+        widget=forms.TextInput(attrs={"placeholder": "например: 1,25"}),
+    )
+
     class Meta:
         model = PSIDocument
         fields = '__all__'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Сохранённое значение сопротивления показываем с запятой,
+        # чтобы при повторном сохранении не срабатывала ошибка про точку.
+        val = getattr(self.instance, "insulation_res_value", None)
+        if val is not None:
+            self.initial["insulation_res_value"] = str(val).replace(".", ",")
         # Для п. 5.6 ручной выбор — только из двух вариантов (при наличии файла).
         # Значение "нет данных" проставляется автоматически, когда файл не прикреплён.
         if 'func_audio' in self.fields:
@@ -6657,6 +6674,22 @@ class PSIDocumentForm(forms.ModelForm):
                 ('соответствует', 'Соответствует'),
                 ('не соответствует', 'Не соответствует'),
             ]
+
+    def clean_insulation_res_value(self):
+        from decimal import Decimal, InvalidOperation
+        raw = (self.cleaned_data.get("insulation_res_value") or "").strip()
+        if not raw:
+            # Поле необязательное: пусто → значение не задано (статус «нет данных»).
+            return None
+        if "." in raw:
+            raise forms.ValidationError("Использовать запятую в качестве десятичного разделителя")
+        normalized = raw.replace("\xa0", "").replace(" ", "").replace(",", ".")
+        try:
+            value = Decimal(normalized)
+        except (InvalidOperation, ValueError):
+            raise forms.ValidationError("Введите корректное числовое значение (например: 1,25)")
+        # Квантуем ровно до 2 знаков: «1» → 1.00 (устраняет искажение вроде 1 → 0.96).
+        return value.quantize(Decimal("0.01"))
 
     def clean(self):
         cleaned_data = super().clean()
@@ -6674,6 +6707,19 @@ class PSIDocumentForm(forms.ModelForm):
                 'interface_note',
                 'При статусе «Не соответствует» необходимо заполнить «Примечание (п. 5.6)».'
             )
+
+        # Один протокол ПСИ на один заводской номер (shipment).
+        shipment = cleaned_data.get('shipment')
+        if shipment:
+            duplicates = PSIDocument.objects.filter(shipment=shipment)
+            if self.instance and self.instance.pk:
+                duplicates = duplicates.exclude(pk=self.instance.pk)
+            if duplicates.exists():
+                self.add_error(
+                    'shipment',
+                    'Для этого заводского номера уже существует протокол ПСИ. '
+                    'На один заводской номер допускается только один протокол.'
+                )
 
         return cleaned_data
 
@@ -6704,10 +6750,12 @@ class PSIDocumentAdmin(admin.ModelAdmin):
     )
 
     search_fields = (
-        'shipment__serial_number', # Ищем по связанной модели
+        'shipment__serial_number', # Ищем по заводскому номеру
         'post__name', # Ищем по связанной модели
         'fw_version',
-        'inspector',
+        'inspector__last_name',   # inspector — FK на User, ищем по полям пользователя
+        'inspector__first_name',
+        'inspector__username',
         'comment',
         'workshop__number_name',
     )
@@ -6728,6 +6776,12 @@ class PSIDocumentAdmin(admin.ModelAdmin):
 
     inlines = [GeneratedDocumentInline, DocumentHistoryInline]
 
+    class Media:
+        # Жирные подписи пунктов 3 (сопротивление изоляции) и 4 (прочность изоляции)
+        css = {
+            'all': ('blog/psi_admin_bold.css',)
+        }
+
     fieldsets = (
         ('1. Идентификация изделия', {
             'fields': (
@@ -6741,7 +6795,7 @@ class PSIDocumentAdmin(admin.ModelAdmin):
         ('2. Общие проверки (ТУ,ПМ)', {
             'fields': ('visual_check', 'marking_check', 'insulation_res', 'insulation_res_value', 'insulation_strength')
         }),
-        ('3. Проверка функционирования (раздел 5.6)', {
+        ('3. Проверка функционирования (1.2.5 ТУ, 5.8 ПМ)', {
             'description': 'Установите статус, если тест пройден успешно',
             'fields': (
                 'func_power_on', 'func_display', 'func_navigation',
@@ -6774,15 +6828,15 @@ class PSIDocumentAdmin(admin.ModelAdmin):
     )
 
     actions = ['create_pdf_action']
-
-    @admin.action(description="Сгенерировать PDF протокол")
-    def create_pdf_action(self, request, queryset):
-        """Экшен для массовой генерации PDF"""
-        count = 0
-        for obj in queryset:
-            generate_pdf_logic(obj, request.user)
-            count += 1
-        self.message_user(request, f"✅ PDF отчеты успешно сформированы для {count} протокол(ов).")
+#отображаемая кнопка для применения выбранного действия к выбранным объектам (в этом случае для генерации pdf  файла пси)
+#    @admin.action(description="Сгенерировать PDF протокол")
+ #   def create_pdf_action(self, request, queryset):
+  #      """Экшен для массовой генерации PDF"""
+   #     count = 0
+   #     for obj in queryset:
+    #        generate_pdf_logic(obj, request.user)
+     #       count += 1
+      #  self.message_user(request, f"✅ PDF отчеты успешно сформированы для {count} протокол(ов).")
 
     def conclusion_short(self, obj):
         """Краткое отображение заключения"""
@@ -6823,16 +6877,36 @@ class PSIDocumentAdmin(admin.ModelAdmin):
     display_files_list.short_description = 'Файлы PDF'
 
     def save_model(self, request, obj, form, change):
-        """Сохранение с логированием"""
+        """Сохранение с логированием и автогенерацией PDF при изменениях."""
         is_new = obj.pk is None
+
+        # Определяем были ли реальные изменения (для существующих объектов)
+        has_changes = is_new or bool(form.changed_data)
+
         super().save_model(request, obj, form, change)
 
         action_text = "Создан новый протокол" if is_new else "Протокол отредактирован"
+        if not is_new and has_changes:
+            action_text += f" (изменены поля: {', '.join(form.changed_data)})"
+
         DocumentHistory.objects.create(
             psi_source=obj,
             user=request.user,
             action=action_text
         )
+
+        # Автогенерация PDF при создании или изменении
+        if has_changes:
+            try:
+                from blog.utils import generate_pdf_logic
+                generate_pdf_logic(obj, request.user)
+                self.message_user(request, "✅ PDF протокол автоматически сгенерирован.")
+            except Exception as e:
+                self.message_user(
+                    request,
+                    f"⚠️ Протокол сохранён, но PDF не удалось сгенерировать: {e}",
+                    level='warning'
+                )
 
     def get_queryset(self, request):
         """Оптимизация запросов"""
@@ -7115,8 +7189,7 @@ class CustomUserAdmin(BaseUserAdmin):
 
     list_display = (
         'username',
-        'get_full_name',
-        'get_patronymic',
+        'get_full_name_with_patronymic',
         'email',
         'get_phone',
         'get_department',
@@ -7126,7 +7199,18 @@ class CustomUserAdmin(BaseUserAdmin):
         'is_active',
     )
 
-    @admin.display(description='Фамилия. Имя', ordering='last_name')
+    @admin.display(description='ФИО (Фамилия Имя Отчество)', ordering='last_name')
+    def get_full_name_with_patronymic(self, obj):
+        """Полное ФИО: Фамилия Имя Отчество из профиля."""
+        last = obj.last_name or ''
+        first = obj.first_name or ''
+        patronymic = ''
+        if hasattr(obj, 'profile') and obj.profile.patronymic:
+            patronymic = obj.profile.patronymic
+        parts = [p for p in [last, first, patronymic] if p]
+        return ' '.join(parts) if parts else obj.username
+
+    # оставляем для обратной совместимости, но прячем из list_display
     def get_full_name(self, obj):
         name = f"{obj.last_name} {obj.first_name}".strip()
         return name or obj.username
@@ -7261,7 +7345,9 @@ class PAKDocumentAdmin(admin.ModelAdmin):
         'shipment__serial_number',
         'post__name',
         'fw_version',
-        'inspector',
+        'inspector__last_name',   # inspector — FK на User, ищем по полям пользователя
+        'inspector__first_name',
+        'inspector__username',
     )
     autocomplete_fields = ('shipment', 'post', 'developer_org')
 
