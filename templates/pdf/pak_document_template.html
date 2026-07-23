@@ -2,27 +2,25 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Протокол ПСИ - {{ protocol_number }}</title>
+    <title>Протокол ПСИ ПАК СПМ - {{ protocol_number }}</title>
     <style>
         @page {
             size: A4;
-            margin: 20mm 17.5mm 20mm 17.5mm;
+            margin: 2cm 1.5cm 2cm 2.5cm;
 
             @top-right {
-                content: "Протокол № " string(protocol-num);
+                content: "Протокол № " string(protocolnum);
                 font-family: "Times New Roman", serif;
                 font-size: 10pt;
-                font-style: normal;
+                font-style: italic;
                 color: #000000;
             }
-
             @bottom-center {
                 content: counter(page);
                 font-family: "Times New Roman", serif;
-                font-size: 10pt;
+                font-size: 11pt;
             }
         }
-
         body {
             font-family: "Times New Roman", serif;
             font-size: 12pt;
@@ -31,7 +29,6 @@
             margin: 0;
             padding: 0;
         }
-
         /* Шапка: левый блок (компания) + правый блок (логотип) */
         .header-layout {
             display: table;
@@ -56,249 +53,52 @@
             border-left: 2px solid #000;
             padding-left: 15px;
         }
-
         .company-name {
-            font-size: 12pt;
-            font-weight: normal;
-            line-height: 1.3;
-            padding: 8px 12px;
-        }
-
-        .company-name span {
-            color: #000000;
-        }
-
-        /* Логотип-текст (SVG-имитация логотипа «Система СПМ») */
-        .logo-block {
-            display: inline-block;
-            border: 2px solid #000000;
-            padding: 6px 12px;
-            line-height: 1.2;
-        }
-
-        .logo-top {
-            font-size: 10pt;
-            color: #000000;
             font-weight: bold;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-
-        .logo-icon {
-            font-size: 18pt;
-            color: #000000;
-            font-weight: bold;
-        }
-
-        .logo-bottom {
             font-size: 13pt;
-            color: #2255aa;
-            font-weight: bold;
-            letter-spacing: 2px;
-            text-align: center;
-            border-top: 1px solid #000000;
-            margin-top: 4px;
-            padding-top: 2px;
-        }
-
-        /* Заголовок протокола — по центру */
-        .doc-title {
-            text-align: center;
-            margin: 20px 0 5px 0;
-        }
-
-        .doc-title h1 {
-            font-size: 14pt;
-            font-weight: bold;
             text-transform: uppercase;
-            margin: 0 0 4px 0;
+            max-width: 60%;
         }
-
-        .doc-title .protocol-num-red {
-            color: #000000;
-            string-set: protocol-num content();
+        .logo-cell { text-align: right; }
+        .title-block { text-align: center; margin: 10px 0 4px 0; }
+        .title-block h1 {
+            font-size: 15pt;
+            margin: 0 0 6px 0;
         }
-
-        .doc-title .subtitle-line {
-            font-size: 13pt;
-            font-weight: normal;
-            margin: 0;
-        }
-
-        .doc-title .model-line {
-            font-size: 13pt;
-            font-weight: bold;
-            color: #000000;
-            margin: 4px 0 0 0;
-        }
-
-        /* Блок «Зав. № … дата изготовления»: отступ только сверху (от модификации),
-           снизу разрыва нет — вводный текст «Изделие изготовлено…» идёт вплотную */
-        .info-block {
-            margin: 24px 0 0 0;
-        }
-
-        /* Строка "Зав. №" — как в PDF: с подчёркиванием */
-        .serial-row {
-            display: table;
-            width: 60%;
-            margin: 25px auto 25px auto;
-            font-size: 13pt;
-        }
-
-        .serial-row td {
-            font-size: 13pt;
-            padding: 0 5px;
-            vertical-align: bottom;
-        }
-
-        .underline-field {
-            border-bottom: 1px solid #000;
-            min-width: 120px;
-            display: inline-block;
-            color: #000000;
-            text-align: center;
-            padding: 0 5px;
-        }
-
-        /* Основной текст */
-        .intro-text {
-            text-align: justify;
-            font-size: 12pt;
-            line-height: 1.6;
-            margin-bottom: 15px;
-        }
-
-        .intro-meta {
-            font-size: 12pt;
-            font-weight: normal;
-            margin-bottom: 4px;
-        }
-
-        .intro-meta-bold {
-            font-size: 12pt;
-            font-weight: bold;
-            margin-bottom: 4px;
-        }
-
-        .intro-meta span.val {
-            color: #000000;
-            font-weight: bold;
-        }
-
-        /* "Результаты испытаний:" */
-        .results-label {
-            font-size: 12pt;
-            margin: 20px 0 8px 0;
-        }
-
-        /* Таблица */
-        table.data-table {
+        .protocol-num-red { string-set: protocolnum content(); }
+        .subtitle { font-size: 12pt; margin: 2px 0; }
+        .model-name { font-weight: bold; margin: 6px 0; }
+        .info-row { margin: 2px 0; }
+        .info-label { font-weight: normal; }
+        .intro-meta { font-weight: bold; margin: 6px 0; }
+        .val { font-weight: normal; }
+        table.results {
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 20px;
+            margin-top: 10px;
             font-size: 11pt;
         }
-
-        table.data-table th,
-        table.data-table td {
-            border: 1px solid #000000;
-            padding: 6px 8px;
+        table.results th, table.results td {
+            border: 1px solid #000;
+            padding: 5px 6px;
             vertical-align: middle;
-        }
-
-        table.data-table thead th {
-            font-weight: bold;
-            text-align: center;
-            background-color: #f0f0f0;
-        }
-
-        table.data-table th:nth-child(1),
-        table.data-table td:nth-child(1) { width: 38%; }
-        table.data-table th:nth-child(2),
-        table.data-table td:nth-child(2) { width: 30%; text-align: center; }
-        table.data-table th:nth-child(3),
-        table.data-table td:nth-child(3) { width: 22%; text-align: center; color: #000000; }
-        table.data-table th:nth-child(4),
-        table.data-table td:nth-child(4) { width: 10%; text-align: center; }
-
-        table.data-table tr {
-            page-break-inside: avoid;
-        }
-
-        /* Все ячейки таблицы — черные */
-        table.data-table td {
-            color: #000000;
-        }
-
-        /* ЗАКЛЮЧЕНИЕ */
-        .conclusion-block {
-            margin-top: 25px;
-            margin-bottom: 25px;
-            page-break-before: always;   /* заключение — с новой (3-й) страницы */
-            page-break-inside: avoid;    /* и не разрывать его между страницами */
-        }
-
-        .conclusion-title {
-            font-size: 13pt;
-            font-weight: bold;
-            text-transform: uppercase;
-            margin-bottom: 10px;
             text-align: center;
         }
-
-        .conclusion-text {
-            font-size: 12pt;
-            text-align: justify;
-            line-height: 1.6;
-        }
-
-        /* Зона подписей */
-        .signature-section {
-            margin-top: 40px;
-            page-break-inside: avoid;
-        }
-
-        .signature-row {
-            display: table;
-            width: 100%;
-            margin-bottom: 20px;
-        }
-
-        .sig-col {
-            display: table-cell;
-            vertical-align: bottom;
-            font-size: 12pt;
-        }
-
-        .sig-post  { width: 28%; }
-        .sig-ecp   { width: 18%; text-align: center; }
-        .sig-date  { width: 18%; text-align: center; }
-        .sig-name  { width: 36%; text-align: center; }
-
+        table.results th { font-weight: bold; }
+        table.results td.name { text-align: left; }
+        .result-cell { text-align: center; }
+        .conclusion-block { margin-top: 18px; }
+        .conclusion-text { margin: 8px 0; text-align: justify; }
+        .sig-wrap { margin-top: 26px; }
+        .sig-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        .sig-table td { text-align: center; padding: 4px 8px; }
         .sig-underline {
-            border-bottom: 1px solid #000;
-            min-width: 80px;
-            display: inline-block;
-            width: 90%;
-            color: #000000;
-        }
-
-        /* ФИО (Фамилия Имя Отчество) — всегда в одну строку, без переноса */
-        .sig-name .sig-underline {
-            white-space: nowrap;
-        }
-
-        .sig-caption {
-            font-size: 8pt;
-            color: #666;
             display: block;
-            text-align: center;
-            margin-top: 2px;
+            border-bottom: 1px solid #000;
+            min-height: 18px;
+            font-weight: bold;
         }
-
-        /* Нижний колонтитул страницы 2 и 3 такой же — counter(page) */
+        .sig-caption { font-size: 10pt; font-style: italic; }
     </style>
 </head>
 <body>
@@ -307,7 +107,8 @@
     <div class="header-layout">
         <div class="header-cell header-left">
             <div class="company-name">
-                ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ {{ psi.developer_org.name|cut:"ООО " }}
+                ОБЩЕСТВО С ОГРАНИЧЕННОЙ<br>
+                ОТВЕТСТВЕННОСТЬЮ {{ pak.developer_org.name }}</strong>
             </div>
         </div>
         <div class="header-cell header-right">
@@ -316,154 +117,124 @@
     </div>
 
     <!-- ЗАГОЛОВОК -->
-    <div class="doc-title">
+
+    <div class="title-block">
         <h1>ПРОТОКОЛ № <span class="protocol-num-red">{{ protocol_number }}</span></h1>
-        <div class="subtitle-line">приемо-сдаточных испытаний</div>
-        <div class="subtitle-line">Источника бесперебойного питания</div>
-        <div class="model-line">{{ psi.post.name }}</div>
+        <div class="subtitle">приемо-сдаточных испытаний</div>
+        <div class="subtitle">Программно-аппаратного комплекса</div>
+        <div class="model-name">{{ model_name }}</div>
     </div>
-
-    <!-- Заводской номер из Shipment -->
-<div class="info-block">
+<!-- Заводской номер из Shipment -->
     <div class="info-row">
-        <span class="info-label" style="white-space:nowrap">Зав.&nbsp;№&nbsp;</span><span class="info-value">{{ serial_number|default:"-" }}</span>
-        <span class="info-label" style="margin-left: 30px;">дата изготовления&nbsp;</span><span class="info-value">{{ psi.test_date|date:"d.m.Y" }}</span>
+        <span class="info-label">Зав. №</span>
+        <span class="val">{{ serial_number }}</span>
+        <span class="info-label">дата изготовления</span>
+        <span class="val">{{ pak.test_date_start|date:"d.m.Y" }}</span>
     </div>
-</div>
+<!-- ВВОДНЫЙ ТЕКСТ -->
+    <p>
+        Изделие изготовлено в соответствии с техническими условиями
+        СИ.40522001.000ТУ. Программа и методика испытаний в соответствии с
+        СИ.40522001.000ПМ1.
+    </p>
 
-    <!-- ВВОДНЫЙ ТЕКСТ -->
-    <div class="intro-text">
-        Изделие изготовлено в соответствии с техническими условиями <span style="white-space:nowrap">СИ.40525114.000ТУ</span>. Программа и методика испытаний в соответствии с <span style="white-space:nowrap">СИ.40525114.000ПМ</span>.
+    <div class="intro-meta">Дата начала проведения испытаний:
+        <span class="val">{{ pak.test_date_start|date:"d.m.Y" }}</span>
+    </div>
+    <div class="intro-meta">Дата окончания испытаний:
+        <span class="val">{{ pak.test_date_end|date:"d.m.Y" }}</span>
+    </div>
+    <div class="intro-meta">Место проведения испытаний:
+        <span class="val">{{ pak.developer_org.name }}</span>
+    </div>
+    <div class="intro-meta">Версия ПО:
+        <span class="val">{{ pak.fw_version }}</span>
     </div>
 
-    <div class="intro-meta"><strong>Дата проведения испытаний:</strong> {{ psi.test_date|date:"d.m.Y" }}</div>
-    <div class="intro-meta"><strong>Место проведения испытаний:</strong> {{ psi.developer_org.name }}</div>
-    <div class="intro-meta"><strong>Версия ПО:</strong> {{ psi.fw_version }}</div>
-
-    <div class="results-label">Результаты испытаний:</div>
-
-    <!-- ТАБЛИЦА -->
-    <table class="data-table">
+    <p>Результаты проведения испытаний представлены в таблице 1.</p>
+    <p style="text-align: right; margin: 2px 0;">Таблица 1</p>
+<!-- ТАБЛИЦА -->
+    <table class="results">
         <thead>
             <tr>
-                <th>Наименование проверки<br>(№ п. ТУ, № п. ПМ)</th>
-                <th>Значение параметра<br>(соответствие)</th>
-                <th>Данные испытания<br>(контроля)</th>
-                <th>Примечание</th>
+                <th style="width: 42%;">Наименование проверки<br>(№ п. ТУ, № п. ПМ)</th>
+                <th style="width: 20%;">Значение параметра (соответствие)</th>
+                <th style="width: 20%;">Данные испытания (контроля)</th>
+                <th style="width: 18%;">Примечание</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>1 Проверка соответствия КД и проверка внешнего вида<br>(1.1.1, 1.4.2 ТУ, 5.3 ПМ)</td>
+                <td class="name">1 Проверка содержания маркировки (1.5.2 ТУ, 3.1 ПМ)</td>
                 <td>Соответствует ТУ</td>
-                <td class="result-cell">{{ psi.get_visual_check_display }}</td>
+                <td class="result-cell">{{ pak.get_check_marking_display }}</td>
                 <td></td>
             </tr>
             <tr>
-                <td>2 Проверка содержания маркировки<br>(1.10.1 ТУ, 5.1 ПМ)</td>
+                <td class="name">2 Проверка соответствия ПАК СПМ основному комплекту КД, проверка внешнего вида (1.1.1, 1.1.9 ТУ, 3.2 ПМ)</td>
                 <td>Соответствует ТУ</td>
-                <td class="result-cell">{{ psi.get_marking_check_display }}</td>
+                <td class="result-cell">{{ pak.get_check_kd_appearance_display }}</td>
                 <td></td>
             </tr>
             <tr>
-    <td>3 Проверка электрического сопротивления изоляции (2.5 ТУ, 5.6 ПМ)</td>
-    <td>Не менее 1 МОм</td>
-    <td class="result-cell">{{ psi.get_insulation_res_display }}</td>
-    <td>{% if psi.insulation_res_value is not None %}{{ psi.insulation_res_value }} МОм{% else %}нет данных{% endif %}</td>
-</tr>
-            <tr>
-                <td>4 Проверка электрической прочности изоляции<br>(2.6 ТУ, 5.7 ПМ)</td>
-                <td>Выдерживает напряжение переменного тока 1500&nbsp;В с частотой <span style="white-space:nowrap">500&nbsp;Гц</span></td>
-                <td class="result-cell">{{ psi.get_insulation_strength_display }}</td>
-                <td></td>
-            </tr>
-            <tr style="page-break-before: always;">
-                <td colspan="4" style="font-weight:bold; background:#f9f9f9;">5 Проверка функционирования (1.2.4 ТУ, 5.8 ПМ)</td>
-            </tr>
-            <tr>
-                <td>5.1 Проверка включения</td>
-                <td>ИБП СПМ включается</td>
-                <td class="result-cell">{{ psi.get_func_power_on_display }}</td>
+                <td class="name">3 Проверка обеспечения связи с сервером (1.1.5, 1.1.4 ТУ, 3.3 ПМ)</td>
+                <td>Соответствует ТУ</td>
+                <td class="result-cell">{{ pak.get_check_server_link_display }}</td>
                 <td></td>
             </tr>
             <tr>
-                <td>5.2 Проверка индикации</td>
-                <td>Индикация соответствует режиму работы</td>
-                <td class="result-cell">{{ psi.get_func_display_display }}</td>
+                <td class="name">4 Проверка обнаружения и регистрации аварии (1.1.2, 1.1.4 ТУ, 3.4 ПМ)</td>
+                <td>Соответствует ТУ</td>
+                <td class="result-cell">{{ pak.get_check_alarm_display }}</td>
+                <td>{% if not pak.alarm_log_file %}нет данных{% elif pak.check_alarm == 'соответствует' %}Файл с логами от прибора{% else %}{{ pak.alarm_note }}{% endif %}</td>
+            </tr>
+            <tr>
+                <td class="name">5 Проверка контроля и передачи статуса батареи (1.1.7 ТУ, 3.5 ПМ)</td>
+                <td>Соответствует ТУ</td>
+                <td class="result-cell">{{ pak.get_check_battery_status_display }}</td>
                 <td></td>
             </tr>
             <tr>
-                <td>5.3 Проверка навигации по информационным страницам</td>
-                <td>Навигация осуществляется</td>
-                <td class="result-cell">{{ psi.get_func_navigation_display }}</td>
+                <td class="name">6 Проверка обеспечения изменения настроек по радиоканалу ближней связи (1.1.6 ТУ, 3.6 ПМ)</td>
+                <td>Соответствует ТУ</td>
+                <td class="result-cell">{{ pak.get_check_radio_settings_display }}</td>
                 <td></td>
             </tr>
             <tr>
-                <td>5.4 Проверка работы от аккумуляторных батарей (АБ)</td>
-                <td>ИБП СПМ осуществляет переход на режим работы от АБ</td>
-                <td class="result-cell">{{ psi.get_func_battery_mode_display }}</td>
-                <td></td>
-            </tr>
-            <tr>
-                <td>5.5 Проверка режима байпас</td>
-                <td>ИБП СПМ осуществляет переход на режим байпас</td>
-                <td class="result-cell">{{ psi.get_func_bypass_display }}</td>
-                <td></td>
-            </tr>
-            <tr>
-     <td>5.6 Проверка интерфейсов SNMP и UART (Использовать web-приложение для мониторинга ИБП СПМ)</td>
-    <td>ИБП СПМ обеспечивает мониторинг и управление по интерфейсам SNMP и UART</td>
-    <td class="result-cell">{{ psi.get_func_audio_display }}</td>
-    <td>{% if psi.interface_file and psi.func_audio == 'не соответствует' %}{{ psi.interface_note }}{% elif psi.interface_file %}<span style="white-space:nowrap">{{ psi.interface_file.name|cut:"psi_interfaces_files/" }}</span>{% else %}нет данных{% endif %}</td>
-</tr>
-            <tr>
-                <td>5.7 Проверка отключения звукового сигнала</td>
-                <td>Звуковой сигнал отключается</td>
-                <td class="result-cell">{{ psi.get_func_settings_display }}</td>
-                <td></td>
-            </tr>
-            <tr>
-                <td>5.8 Проверка настроек</td>
-                <td>ИБП СПМ позволяет изменять настройки выходных параметров</td>
-                <td class="result-cell">{{ psi.get_func_terminal_display }}</td>
+                <td class="name">7 Проверка длительной работы ПАК СПМ (3.7 ПМ)</td>
+                <td>Соответствует ТУ</td>
+                <td class="result-cell">{{ pak.get_check_long_run_display }}</td>
                 <td></td>
             </tr>
         </tbody>
     </table>
-
-    <!-- ЗАКЛЮЧЕНИЕ -->
+<!-- ЗАКЛЮЧЕНИЕ -->
     <div class="conclusion-block">
-        <div class="conclusion-title">ЗАКЛЮЧЕНИЕ</div>
+        <p style="text-align: center; font-weight: bold;">Заключение</p>
         <div class="conclusion-text">
-            {% if psi.conclusion == 'готов к отгрузке' %}
-                Изделие источник бесперебойного питания {{ psi.post.name }}
-                Зав.&nbsp;№&nbsp;{{ serial_number }} соответствует требованиям
-                СИ.40525114.000ТУ и годно для использования по назначению (эксплуатации).
+            {% if pak.conclusion == 'готов к отгрузке' %}
+                Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
+                Зав. № <strong>{{ serial_number }}</strong>
+                соответствует требованиям СИ.40522001.000ТУ и годно для
+                использования по назначению (эксплуатации).
             {% else %}
-                Изделие источник бесперебойного питания {{ psi.post.name }}
-                Зав.&nbsp;№&nbsp;{{ serial_number }} не соответствует требованиям
-                СИ.40525114.000ТУ и подлежит возврату на устранение дефектов и доработку.
+                Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
+                Зав. № <strong>{{ serial_number }}</strong>
+                не соответствует требованиям СИ.40522001.000ТУ и подлежит
+                возврату на устранение дефектов и доработку.
             {% endif %}
         </div>
     </div>
-
-    <!-- ПОДПИСИ -->
-    <div class="signature-section">
-        <div class="signature-row">
-            <div class="sig-col sig-post">Представитель ОТК</div>
-            <div class="sig-col sig-ecp">
-                <span class="sig-underline"style="font-weight: bold; color: #000000; letter-spacing: 2px;">ЭЦП</span>
-                <span class="sig-caption">Подпись</span>
-            </div>
-            <div class="sig-col sig-date">
-                <span class="sig-underline">{{ psi.test_date|date:"d.m.Y"|default:"" }}</span>
-                <span class="sig-caption">Дата</span>
-            </div>
-            <div class="sig-col sig-name">
-                <span class="sig-underline">{{ psi.get_inspector_display }}</span>
-                <span class="sig-caption">ФИО</span>
-            </div>
-        </div>
+<!-- ПОДПИСИ -->
+    <div class="sig-wrap">
+        <div>Представитель ОТК</div>
+        <table class="sig-table">
+            <tr>
+                <td style="width: 33%;"><span class="sig-underline" style="letter-spacing: 2px;">ЭЦП</span><span class="sig-caption">Подпись</span></td>
+                <td style="width: 33%;"><span class="sig-underline">{{ pak.test_date_end|date:"d.m.Y" }}</span><span class="sig-caption">Дата</span></td>
+                <td style="width: 34%;"><span class="sig-underline">{{ pak.inspector }}</span><span class="sig-caption">ФИО</span></td>
+            </tr>
+        </table>
     </div>
 
 </body>

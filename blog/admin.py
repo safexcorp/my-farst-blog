@@ -50,8 +50,9 @@ from enterprise_asset_management.models import (
 )
 from shared_repository.models import (SharedRepository, IndependentDocumentAcceptSignature,
 KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature, AdministrativeOrder,
-AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature, PSIDocument,
-GeneratedDocument, DocumentHistory)
+AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature)
+
+from .models import (PSIDocument, GeneratedDocument, DocumentHistory, PAKDocument, PAKGeneratedDocument, PAKDocumentHistory)
 
 from .admin_forms import (
     RescheduleAdminForm,
@@ -1943,6 +1944,7 @@ class ShipmentAdmin(admin.ModelAdmin):
         "shipment_post_column",
         "serial_number",
         "manufacture_date",
+        "psi_conclusion_status",
         "passport_link",
         "additional_files_links",
         "shipment_date",
@@ -1950,6 +1952,7 @@ class ShipmentAdmin(admin.ModelAdmin):
         "supplier_column",
         "buyer_column",
         "recipient_column",
+        "completeness",
         "note",
     )
     list_display_links = ("serial_number",)
@@ -2069,6 +2072,24 @@ class ShipmentAdmin(admin.ModelAdmin):
     @admin.display(description="Разработка (модификация)", ordering="post")
     def shipment_post_column(self, obj):
         return obj.post or "—"
+
+    @admin.display(description="Заключение")
+    def psi_conclusion_status(self, obj):
+        """Итоговое заключение по протоколу ПСИ для этого изделия.
+        готов / не готов — по заключению протокола (у которого есть готовый PDF);
+        — (прочерк) — если PDF на изделие ещё не сформирован."""
+        doc = (
+                PSIDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
+                or PAKDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
+        )
+        if not doc:
+            return "—"
+        if doc.conclusion == 'готов к отгрузке':
+            return format_html('<b style="color:#28a745;">готов</b>')
+        if doc.conclusion == 'не готов':
+            return format_html('<b style="color:#dc3545;">не готов</b>')
+        return "—"
+
 
     @admin.display(description="Паспорт/Формуляр", ordering="product_passport")
     def passport_link(self, obj):
@@ -4910,9 +4931,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
 
 @admin.register(WorkAssignmentDeadlineChange)
 class WorkAssignmentDeadlineChangeAdmin(admin.ModelAdmin):
-    list_display = ("id","assignment","changed_by","changed_at",
-                    "old_target_deadline","new_target_deadline",
-                    "old_hard_deadline","new_hard_deadline")
+    list_display = ("id","assignment","changed_by","changed_at", "old_target_deadline","new_target_deadline", "old_hard_deadline","new_hard_deadline")
     list_filter = ("changed_by","changed_at")
     search_fields = ("assignment__name","reason")
 
@@ -4946,13 +4965,7 @@ class RouteAdmin(admin.ModelAdmin):
     list_filter = ("access_level",)
     search_fields = ("name",)
     inlines = [RouteProcessInline]
-    autocomplete_fields = (
-        "author",
-        "last_editor",
-        "current_responsible",
-        "check_document",
-        "approval_document",
-    )
+    autocomplete_fields = ("author", "last_editor", "current_responsible", "check_document", "approval_document")
 
     def sequence_preview(self, obj: Route):
         # «IT → Тех → Нормо» — просто подсказка
@@ -4991,33 +5004,12 @@ class ReturnReasonForm(forms.Form):
 
 @admin.register(CheckDocumentWorkflow)
 class CheckDocumentWorkflowAdmin(admin.ModelAdmin):
-    list_display = (
-        "current_step_display",          # вычисляемый «Текущий шаг»
+    list_display = ("current_step_display",          # вычисляемый «Текущий шаг»
         "current_reviewer_display",      # вычисляемый «Проверяющий сейчас»
         "it_responsible_display",        # ответственные по этапам (ниже методы)
-        "tech_responsible_display",
-        "m3d_responsible_display",
-        "norm_responsible_display",
-        "date_of_change",
-    )
-    search_fields = (
-        "desig_or_name_document",
-        "types_check_document",
-        "author__username",
-        "last_editor__username",
-        "current_responsible__username",
-        "check_it_requirements_responsible__username",
-        "check_technical_requirements_responsible__username",
-        "check_3D_model_responsible__username",
-        "norm_control_responsible__username",
-    )
-    list_filter = (
-        "process_sequence",
-        "check_it_requirements",
-        "check_technical_requirements",
-        "check_3D_model",
-        "norm_control",
-    )
+        "tech_responsible_display", "m3d_responsible_display", "norm_responsible_display", "date_of_change")
+    search_fields = ("desig_or_name_document", "types_check_document", "author__username", "last_editor__username", "current_responsible__username", "check_it_requirements_responsible__username", "check_technical_requirements_responsible__username", "check_3D_model_responsible__username", "norm_control_responsible__username")
+    list_filter = ("process_sequence", "check_it_requirements", "check_technical_requirements", "check_3D_model", "norm_control")
     autocomplete_fields = ("author", "last_editor", "current_responsible")
 
     # ---- служебное: определяем текущий шаг по первому НЕподписанному в маршруте ----
@@ -5290,11 +5282,12 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     )
 
     def display_related_documents(self, obj):
-        """Отображение связанных документов СМК в списке"""
+        """Связанные документы СМК — списком, каждый с новой строки"""
         docs = obj.related_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_documents.short_description = 'Связанные документы СМК'
 
@@ -5330,11 +5323,12 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     display_related_qms_documents_list.short_description = 'Связанные документы СМК'
 
     def display_related_sharedrepository(self, obj):
-        """Отображение связанных отдельных документов в списке"""
-        docs = obj.related_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        """Связанные отдельные документы — списком, каждый с новой строки"""
+        docs = obj.related_sharedrepository.all()
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_sharedrepository.short_description = 'Связанные отдельные документы'
 
@@ -5924,7 +5918,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
                 'document_purpose',
             )
         }),
-        ('Связанные отдельные документы', {
+        ('Связанные документы', {
             'fields': ('related_documents','related_qms_documents'),
         }),
         ('Дата планового пересмотра', {
@@ -5954,11 +5948,12 @@ class QMSDocumentAdmin(admin.ModelAdmin):
     )
 
     def display_related_documents(self, obj):
-        """Отображение связанных отдельных документов в списке"""
+        """Связанные отдельные документы — списком, каждый с новой строки"""
         docs = obj.related_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_documents.short_description = 'Связанные отдельные документы'
 
@@ -5995,25 +5990,15 @@ class QMSDocumentAdmin(admin.ModelAdmin):
     display_related_shared_documents_list.short_description = 'Связанные отдельные документы'
 
     def display_related_qms_documents(self, obj):
-        """Отображение связанных документов СМК в списке"""
-        docs = obj.qms_documents.all()
-        if docs.exists():
-            return ", ".join([doc.document_title for doc in docs[:3]]) + ("..." if docs.count() > 3 else "")
-        return "—"
+        """Связанные документы СМК — списком, каждый с новой строки"""
+        docs = obj.related_qms_documents.all()
+        if not docs:
+            return "—"
+        fmt = "<br>".join(["{}"] * len(docs))
+        return format_html(fmt, *[doc.document_title for doc in docs])
 
     display_related_qms_documents.short_description = 'Связанные документы СМК'
 
-    def display_related_qms_documents(self, obj):
-        """Отображение количества связанных документов СМК"""
-        count = obj.related_qms_documents.count()
-        if count:
-            return format_html(
-                '<span style="color: #79aec8;">📄 Документов СМК: {}</span>',
-                count
-            )
-        return "—"
-
-    display_related_qms_documents.short_description = 'Связанные документы СМК'
 
     def display_related_qms_documents_list(self, obj):
         """Список связанных документов СМК для детального просмотра"""
@@ -6621,9 +6606,10 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-from shared_repository.utils import generate_pdf_logic
+from blog.utils import generate_pdf_logic
 
 
+#ПСИ СПМ ИБП
 class GeneratedDocumentInline(admin.TabularInline):
     """Inline для отображения сгенерированных PDF внутри протокола"""
     model = GeneratedDocument
@@ -6634,7 +6620,14 @@ class GeneratedDocumentInline(admin.TabularInline):
 
     def file_link(self, obj):
         if obj.file:
-            return format_html('<a href="{}" target="_blank">📄 Открыть PDF</a>', obj.file.url)
+            if obj.psi_source and obj.psi_source.shipment:
+                serial = obj.psi_source.shipment.serial_number
+            else:
+                serial = "—"
+            return format_html(
+                '<a href="{}" target="_blank">📄 Протокол_ПСИ_ИБП_СПМ_{}_v{}</a>',
+                obj.file.url, serial, obj.version
+            )
         return "Файл отсутствует"
 
     file_link.short_description = "Ссылка"
@@ -6650,82 +6643,200 @@ class DocumentHistoryInline(admin.TabularInline):
     verbose_name = "Запись истории"
     verbose_name_plural = "История изменений"
 
+class PSIDocumentForm(forms.ModelForm):
+    # Сопротивление изоляции вводим как текст: полный контроль над разделителем
+    # (только запятая) и над округлением, чтобы «1» не превращалось в «0.96».
+    insulation_res_value = forms.CharField(
+        required=False,
+        label="Фактическое значение сопротивления изоляции, МОм",
+        help_text=(
+            "Необязательное поле. Десятичный разделитель — запятая (например: 1,25). "
+            "Пусто — статус «нет данных»; < 1 — «не соответствует»; ≥ 1 — «соответствует»."
+        ),
+        widget=forms.TextInput(attrs={"placeholder": "например: 1,25"}),
+    )
+
+    class Meta:
+        model = PSIDocument
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Сохранённое значение сопротивления показываем с запятой,
+        # чтобы при повторном сохранении не срабатывала ошибка про точку.
+        val = getattr(self.instance, "insulation_res_value", None)
+        if val is not None:
+            self.initial["insulation_res_value"] = str(val).replace(".", ",")
+        # Для п. 5.6 ручной выбор — только из двух вариантов (при наличии файла).
+        # Значение "нет данных" проставляется автоматически, когда файл не прикреплён.
+        if 'func_audio' in self.fields:
+            self.fields['func_audio'].choices = [
+                ('соответствует', 'Соответствует'),
+                ('не соответствует', 'Не соответствует'),
+            ]
+
+    def clean_insulation_res_value(self):
+        from decimal import Decimal, InvalidOperation
+        raw = (self.cleaned_data.get("insulation_res_value") or "").strip()
+        if not raw:
+            # Поле необязательное: пусто → значение не задано (статус «нет данных»).
+            return None
+        if "." in raw:
+            raise forms.ValidationError("Использовать запятую в качестве десятичного разделителя")
+        normalized = raw.replace("\xa0", "").replace(" ", "").replace(",", ".")
+        try:
+            value = Decimal(normalized)
+        except (InvalidOperation, ValueError):
+            raise forms.ValidationError("Введите корректное числовое значение (например: 1,25)")
+        # Квантуем ровно до 2 знаков: «1» → 1.00 (устраняет искажение вроде 1 → 0.96).
+        return value.quantize(Decimal("0.01"))
+
+    def clean(self):
+        cleaned_data = super().clean()
+
+        interface_file = cleaned_data.get('interface_file')
+        func_audio = cleaned_data.get('func_audio')
+        interface_note = cleaned_data.get('interface_note')
+
+        if not interface_file:
+            # Файл (SNMP/UART) не прикреплён — статус п. 5.6 автоматически "нет данных"
+            cleaned_data['func_audio'] = 'нет данных'
+        elif func_audio == 'не соответствует' and not (interface_note and interface_note.strip()):
+            # Файл прикреплён, выбрано "Не соответствует" — примечание обязательно
+            self.add_error(
+                'interface_note',
+                'При статусе «Не соответствует» необходимо заполнить «Примечание (п. 5.6)».'
+            )
+
+        # Один протокол ПСИ на один заводской номер (shipment).
+        shipment = cleaned_data.get('shipment')
+        if shipment:
+            duplicates = PSIDocument.objects.filter(shipment=shipment)
+            if self.instance and self.instance.pk:
+                duplicates = duplicates.exclude(pk=self.instance.pk)
+            if duplicates.exists():
+                self.add_error(
+                    'shipment',
+                    'Для этого заводского номера уже существует протокол ПСИ. '
+                    'На один заводской номер допускается только один протокол.'
+                )
+
+        return cleaned_data
+
 
 @admin.register(PSIDocument)
 class PSIDocumentAdmin(admin.ModelAdmin):
+    form = PSIDocumentForm
     """Админка для протоколов ПСИ"""
 
     list_display = (
-        'serial_number',
-        'model_name',
+        'get_post_name',      # отображение модификации
+        'get_serial_number',  # заводской номер из shipment
+        'get_developer_name', # организация-разработчик
         'test_date',
         'inspector',
+        'get_workshop_name',
         'conclusion_short',
         'pdf_count_display',
         'created_at',
+        #'func_audio_status'
     )
 
     list_filter = (
         'test_date',
         'inspector',
-        'model_name',
         'conclusion',
+        'workshop',
     )
 
     search_fields = (
-        'serial_number',
-        'model_name',
+        'shipment__serial_number', # Ищем по заводскому номеру
+        'post__name', # Ищем по связанной модели
         'fw_version',
-        'inspector',
+        'inspector__last_name',   # inspector — FK на User, ищем по полям пользователя
+        'inspector__first_name',
+        'inspector__username',
         'comment',
+        'workshop__number_name',
     )
 
     readonly_fields = (
         'created_at',
         'pdf_count_display',
         'display_files_list',
+        'date_of_change',
+        'insulation_res',  # определяется автоматически по фактическому значению
+        'conclusion',  # определяется автоматически по результатам проверок
+        'author',  # проставляется автоматически
+        'last_editor',  # проставляется автоматически
+        'date_of_creation',
     )
+
+    autocomplete_fields = ('post', 'shipment', 'developer_org', 'workshop')
 
     inlines = [GeneratedDocumentInline, DocumentHistoryInline]
 
+    class Media:
+        # Жирные подписи пунктов 3 (сопротивление изоляции) и 4 (прочность изоляции)
+        css = {
+            'all': ('blog/psi_admin_bold.css',)
+        }
+
     fieldsets = (
         ('1. Идентификация изделия', {
-            'fields': ('serial_number', 'test_date', 'model_name', 'fw_version')
+            'fields': (
+                'post',  # выбор модификации
+                'shipment',  # выбор заводского номера
+                'developer_org',  # выбор организации
+                'test_date',
+                'fw_version'
+            )
         }),
-        ('2. Общие проверки (ТУ)', {
-            'fields': ('visual_check', 'marking_check', 'insulation_res', 'insulation_strength')
+        ('2. Общие проверки (ТУ,ПМ)', {
+            'fields': ('visual_check', 'marking_check', 'insulation_res', 'insulation_res_value', 'insulation_strength')
         }),
-        ('3. Проверка функционирования (раздел 5.6)', {
+        ('3. Проверка функционирования (1.2.5 ТУ, 5.8 ПМ)', {
             'description': 'Установите статус, если тест пройден успешно',
             'fields': (
                 'func_power_on', 'func_display', 'func_navigation',
-                'func_battery_mode', 'func_bypass', 'func_audio',
+                'func_battery_mode', 'func_bypass', 'func_audio', 'interface_file',      # <-- ПОЛЕ ДЛЯ ЗАГРУЗКИ ФАЙЛА
+                'interface_note',
                 'func_settings', 'func_terminal'
             )
         }),
         ('4. Итоговое заключение', {
-            'fields': ('completeness', 'conclusion', 'comment')
+            'fields': ('conclusion', 'comment')
         }),
-        ('5. Метеоусловия и персонал', {
-            'classes': ('collapse',),
-            'fields': ('inspector', 'workshop', 'temperature', 'humidity', 'pressure', 'remark')
+        ('5. Метеоусловия и Персонал', {
+            #'classes': ('collapse',),
+            'fields': ('inspector', 'workshop', 'remark', 'temperature', 'humidity', 'pressure')
         }),
-        ('Системная информация', {
-            'classes': ('collapse',),
-            'fields': ('created_at', 'pdf_count_display', 'display_files_list'),
-        }),
+        (
+            '6. Системные данные',
+            {
+                "fields": (
+                    "author",
+                    "current_responsible",
+                    "last_editor",
+                    "version",
+                    #"version_diff_display",
+                    "date_of_creation",
+                    "date_of_change",
+                )
+            },
+        ),
     )
 
     actions = ['create_pdf_action']
-
-    @admin.action(description="Сгенерировать PDF протокол")
-    def create_pdf_action(self, request, queryset):
-        """Экшен для массовой генерации PDF"""
-        count = 0
-        for obj in queryset:
-            generate_pdf_logic(obj, request.user)
-            count += 1
-        self.message_user(request, f"✅ PDF отчеты успешно сформированы для {count} протокол(ов).")
+#отображаемая кнопка для применения выбранного действия к выбранным объектам (в этом случае для генерации pdf  файла пси)
+#    @admin.action(description="Сгенерировать PDF протокол")
+ #   def create_pdf_action(self, request, queryset):
+  #      """Экшен для массовой генерации PDF"""
+   #     count = 0
+   #     for obj in queryset:
+    #        generate_pdf_logic(obj, request.user)
+     #       count += 1
+      #  self.message_user(request, f"✅ PDF отчеты успешно сформированы для {count} протокол(ов).")
 
     def conclusion_short(self, obj):
         """Краткое отображение заключения"""
@@ -6736,13 +6847,16 @@ class PSIDocumentAdmin(admin.ModelAdmin):
     conclusion_short.short_description = 'Заключение'
 
     def pdf_count_display(self, obj):
-        """Отображение количества версий PDF"""
-        count = obj.pdfs.count()
-        if count == 0:
+        """Ссылка на актуальную (последнюю) версию PDF протокола"""
+        latest = obj.pdfs.order_by('-version').first()
+        if not latest or not latest.file:
             return "—"
-        return format_html('<span style="font-weight: bold;">📄 {}</span>', count)
+        return format_html(
+            '<a href="{}" target="_blank">📄_v{}</a>',
+            latest.file.url, latest.version
+        )
 
-    pdf_count_display.short_description = 'Версии PDF'
+    pdf_count_display.short_description = 'Протокол PDF'
 
     def display_files_list(self, obj):
         """Список всех PDF файлов для детального просмотра"""
@@ -6763,20 +6877,65 @@ class PSIDocumentAdmin(admin.ModelAdmin):
     display_files_list.short_description = 'Файлы PDF'
 
     def save_model(self, request, obj, form, change):
-        """Сохранение с логированием"""
+        """Сохранение с логированием и автогенерацией PDF при изменениях."""
         is_new = obj.pk is None
+
+        # Определяем были ли реальные изменения (для существующих объектов)
+        has_changes = is_new or bool(form.changed_data)
+
         super().save_model(request, obj, form, change)
 
         action_text = "Создан новый протокол" if is_new else "Протокол отредактирован"
+        if not is_new and has_changes:
+            action_text += f" (изменены поля: {', '.join(form.changed_data)})"
+
         DocumentHistory.objects.create(
             psi_source=obj,
             user=request.user,
             action=action_text
         )
 
+        # Автогенерация PDF при создании или изменении
+        if has_changes:
+            try:
+                from blog.utils import generate_pdf_logic
+                generate_pdf_logic(obj, request.user)
+                self.message_user(request, "✅ PDF протокол автоматически сгенерирован.")
+            except Exception as e:
+                self.message_user(
+                    request,
+                    f"⚠️ Протокол сохранён, но PDF не удалось сгенерировать: {e}",
+                    level='warning'
+                )
+
     def get_queryset(self, request):
         """Оптимизация запросов"""
         return super().get_queryset(request).prefetch_related('pdfs')
+
+    def get_post_name(self, obj):
+        return obj.post.name if obj.post else "—"
+
+    get_post_name.short_description = 'Модификация'
+    get_post_name.admin_order_field = 'post__name'
+
+    def get_serial_number(self, obj):
+        return obj.shipment.serial_number if obj.shipment else "—"
+
+    get_serial_number.short_description = 'Заводской номер'
+    get_serial_number.admin_order_field = 'shipment__serial_number'
+
+    def get_developer_name(self, obj):
+        return obj.developer_org.name if obj.developer_org else "—"
+
+    get_developer_name.short_description = 'Организация'
+    get_developer_name.admin_order_field = 'developer_org__name'
+
+    def get_workshop_name(self, obj):
+        """Отображение цеха/площадки"""
+        return obj.workshop.number_name if obj.workshop else "—"
+
+    get_workshop_name.short_description = 'Цех/Площадка'
+    get_workshop_name.admin_order_field = 'workshop__number_name'
 
 
 @admin.register(GeneratedDocument)
@@ -6824,7 +6983,7 @@ class GeneratedDocumentAdmin(admin.ModelAdmin):
     def psi_source_link(self, obj):
         """Ссылка на родительский протокол"""
         if obj.psi_source:
-            url = f"/admin/shared_repository/psidocument/{obj.psi_source.id}/change/"
+            url = f"/admin/blog/psidocument/{obj.psi_source.id}/change/"
             return format_html('<a href="{}">{}</a>', url, obj.psi_source.serial_number)
         return "—"
 
@@ -6844,7 +7003,7 @@ class GeneratedDocumentAdmin(admin.ModelAdmin):
             return format_html(
                 '<div style="background: #f0f0f0; padding: 10px;">'
                 '<p><strong>Файл:</strong> {}</p>'
-                '<p><a href="{}" target="_blank" class="button">📥 Открыть PDF</a></p>'
+                '<p><a href="{}" target="_blank" class="button">📥 Протокол_ПСИ_ИБП_СПМ</a></p>'
                 '</div>',
                 obj.file.name,
                 obj.file.url
@@ -6905,7 +7064,7 @@ class DocumentHistoryAdmin(admin.ModelAdmin):
     def psi_source_link(self, obj):
         """Ссылка на родительский протокол"""
         if obj.psi_source:
-            url = f"/admin/shared_repository/psidocument/{obj.psi_source.id}/change/"
+            url = f"/admin/blog/psidocument/{obj.psi_source.id}/change/"
             return format_html('<a href="{}">{}</a>', url, obj.psi_source.serial_number)
         return "—"
 
@@ -7030,8 +7189,7 @@ class CustomUserAdmin(BaseUserAdmin):
 
     list_display = (
         'username',
-        'get_full_name',
-        'get_patronymic',
+        'get_full_name_with_patronymic',
         'email',
         'get_phone',
         'get_department',
@@ -7041,7 +7199,18 @@ class CustomUserAdmin(BaseUserAdmin):
         'is_active',
     )
 
-    @admin.display(description='Фамилия. Имя', ordering='last_name')
+    @admin.display(description='ФИО (Фамилия Имя Отчество)', ordering='last_name')
+    def get_full_name_with_patronymic(self, obj):
+        """Полное ФИО: Фамилия Имя Отчество из профиля."""
+        last = obj.last_name or ''
+        first = obj.first_name or ''
+        patronymic = ''
+        if hasattr(obj, 'profile') and obj.profile.patronymic:
+            patronymic = obj.profile.patronymic
+        parts = [p for p in [last, first, patronymic] if p]
+        return ' '.join(parts) if parts else obj.username
+
+    # оставляем для обратной совместимости, но прячем из list_display
     def get_full_name(self, obj):
         name = f"{obj.last_name} {obj.first_name}".strip()
         return name or obj.username
@@ -7083,3 +7252,284 @@ class CustomUserAdmin(BaseUserAdmin):
 
     get_supervisor.short_description = 'Непосредственное подчинение'
     get_supervisor.admin_order_field = 'profile__supervisor'
+
+
+# ПСИ ПАК СПМ
+from .utils import generate_pak_pdf_logic
+
+
+class PAKGeneratedDocumentInline(admin.TabularInline):
+    model = PAKGeneratedDocument
+    extra = 0
+    can_delete = False
+    readonly_fields = ('version', 'file_link', 'generated_at')
+    fields = ('version', 'file_link', 'generated_at')
+
+    def file_link(self, obj):
+        if obj.file:
+            if obj.pak_source and obj.pak_source.shipment:
+                serial = obj.pak_source.shipment.serial_number
+            else:
+                serial = "—"
+            return format_html(
+                '<a href="{}" target="_blank">📄 Протокол_ПСИ_ПАК_СПМ_{}_v{}</a>',
+                obj.file.url, serial, obj.version
+            )
+        return "Файл отсутствует"
+
+    file_link.short_description = "Ссылка"
+
+
+class PAKDocumentHistoryInline(admin.TabularInline):
+    model = PAKDocumentHistory
+    extra = 0
+    can_delete = False
+    readonly_fields = ('action', 'user', 'timestamp')
+    fields = ('action', 'user', 'timestamp')
+
+
+class PAKDocumentForm(forms.ModelForm):
+    class Meta:
+        model = PAKDocument
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Для п. 4 ручной выбор — только из двух вариантов (при наличии файла).
+        # Значение "нет данных" проставляется автоматически, когда файл не прикреплён.
+        if 'check_alarm' in self.fields:
+            self.fields['check_alarm'].required = False
+            self.fields['check_alarm'].choices = [
+                ('соответствует', 'Соответствует'),
+                ('не соответствует', 'Не соответствует'),
+            ]
+        if 'alarm_note' in self.fields:
+            self.fields['alarm_note'].required = False
+
+    def clean(self):
+        cleaned_data = super().clean()
+
+        alarm_log_file = cleaned_data.get('alarm_log_file')
+        check_alarm = cleaned_data.get('check_alarm')
+        alarm_note = cleaned_data.get('alarm_note')
+
+        if not alarm_log_file:
+            # если файл с логами не прикреплён — статус п. 4 автоматически "нет данных"
+            cleaned_data['check_alarm'] = 'не соответствует'
+        elif check_alarm == 'не соответствует' and not (alarm_note and alarm_note.strip()):
+            # Файл прикреплён, выбрано "Не соответствует" — примечание обязательно
+            self.add_error(
+                'alarm_note',
+                'При статусе «Не соответствует» необходимо заполнить «Примечание (п. 4)».'
+            )
+
+        return cleaned_data
+
+
+@admin.register(PAKDocument)
+class PAKDocumentAdmin(admin.ModelAdmin):
+    form = PAKDocumentForm
+    list_display = (
+        'get_model_name',
+        'get_serial_number',
+        'get_developer_name',
+        'test_date_start',
+        'test_date_end',
+        'inspector',
+        'conclusion',
+        'pdf_link',
+        'created_at',
+    )
+    list_filter = ('test_date_start', 'inspector', 'conclusion')
+    search_fields = (
+        'shipment__serial_number',
+        'post__name',
+        'fw_version',
+        'inspector__last_name',   # inspector — FK на User, ищем по полям пользователя
+        'inspector__first_name',
+        'inspector__username',
+    )
+    autocomplete_fields = ('shipment', 'post', 'developer_org')
+
+    readonly_fields = (
+        'created_at',
+        'date_of_change',
+        'author',
+        'last_editor',
+        'conclusion',  # определяется автоматически по результатам проверок
+        'pdf_count_display',
+        'date_of_creation',
+    )
+
+    inlines = [PAKGeneratedDocumentInline, PAKDocumentHistoryInline]
+
+    fieldsets = (
+        ('1. Основная информация', {
+            'fields': (
+                'shipment',
+                'post',
+                'developer_org',
+                'fw_version',
+                'test_date_start',
+                'test_date_end',
+            )
+        }),
+        ('2. Общие проверки (ТУ,ПМ)', {
+            'fields': (
+                'check_marking',
+                'check_kd_appearance',
+                'check_server_link',
+                'check_alarm',
+                'alarm_log_file',
+                'alarm_note',
+                'check_battery_status',
+                'check_radio_settings',
+                'check_long_run',
+            )
+        }),
+        ('3. Итоговое заключение', {
+            'fields': ('conclusion', 'comment'),
+        }),
+        ('4. Метеоусловия и Персонал', {
+            'fields': ('inspector','workshop', 'remark', 'temperature', 'humidity', 'pressure'),
+        }),
+        ('5. Системные данные',
+            {
+                "fields": (
+                    "author",
+                    "current_responsible",
+                    "last_editor",
+                    "version",
+                    #"version_diff_display",
+                    "date_of_creation",
+                    "date_of_change",
+                ),
+        }),
+    )
+
+    actions = ['create_pak_pdf_action']
+
+    def conclusion_short(self, obj):
+        """Краткое отображение заключения"""
+        if obj.conclusion:
+            return obj.conclusion[:50] + '...' if len(obj.conclusion) > 50 else obj.conclusion
+        return "—"
+
+    conclusion_short.short_description = 'Заключение'
+
+    # ---- Колонки списка ----
+    def get_model_name(self, obj):
+        return obj.post.name if obj.post else "—"
+
+    get_model_name.short_description = 'Модификация'
+
+    def get_serial_number(self, obj):
+        return obj.shipment.serial_number if obj.shipment else "—"
+
+    get_serial_number.short_description = 'Заводской номер'
+
+    def get_developer_name(self, obj):
+        return obj.developer_org.name if obj.developer_org else "—"
+
+    get_developer_name.short_description = 'Организация'
+
+    def pdf_link(self, obj):
+        """Кликабельная ссылка на актуальную (последнюю) версию PDF."""
+        latest = obj.pdfs.order_by('-version').first()
+        if not latest or not latest.file:
+            return "—"
+        return format_html(
+            '<a href="{}" target="_blank">📄 v{}</a>',
+            latest.file.url, latest.version
+        )
+
+    pdf_link.short_description = 'Протокол PDF'
+
+    def pdf_count_display(self, obj):
+        latest = obj.pdfs.order_by('-version').first()
+        if not latest or not latest.file:
+            return "—"
+        return format_html(
+            '<a href="{}" target="_blank">📄 v{}</a>',
+            latest.file.url, latest.version
+        )
+
+    pdf_count_display.short_description = 'Протокол PDF'
+
+    # ---- Автор / редактор + автогенерация PDF ----
+    def save_model(self, request, obj, form, change):
+        if not obj.author_id:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+        PAKDocumentHistory.objects.create(
+            pak_source=obj,
+            user=request.user,
+            action=("Создан новый протокол" if not change else "Протокол отредактирован")
+        )
+
+        # Автоматически формируем PDF сразу после сохранения протокола.
+        # Ошибку генерации не «роняем» на пользователя — сохранение уже прошло,
+        # просто показываем предупреждение.
+        try:
+            generated = generate_pak_pdf_logic(obj, request.user)
+            self.message_user(
+                request,
+                f"✅ PDF протокола сформирован автоматически (версия {generated.version})."
+            )
+        except Exception as e:
+            self.message_user(
+                request,
+                f"⚠️ Протокол сохранён, но PDF не сформировался: {e}",
+                level=messages.WARNING,
+            )
+
+    # ---- Экшен генерации PDF ----
+    @admin.action(description="Сгенерировать PDF протокол ПАК СПМ")
+    def create_pak_pdf_action(self, request, queryset):
+        count = 0
+        for obj in queryset:
+            generate_pak_pdf_logic(obj, request.user)
+            count += 1
+        self.message_user(request, f"✅ PDF сформированы для {count} протокол(ов) ПАК СПМ.")
+
+
+#@admin.register(PAKGeneratedDocument)
+#class PAKGeneratedDocumentAdmin(admin.ModelAdmin):
+#    list_display = ('pak_source', 'version', 'open_pdf', 'generated_at')
+#    readonly_fields = ('generated_at',)
+
+    def open_pdf(self, obj):
+        if obj.file:
+            return format_html('<a href="{}" target="_blank">📄 Открыть PDF</a>', obj.file.url)
+        return "—"
+
+    open_pdf.short_description = 'Ссылка'
+
+
+#@admin.register(PAKDocumentHistory)
+#class PAKDocumentHistoryAdmin(admin.ModelAdmin):
+#    list_display = ('pak_source', 'action', 'user', 'timestamp')
+#    list_filter = ('timestamp', 'user')
+#    readonly_fields = ('pak_source', 'action', 'user', 'timestamp')
+
+
+# ============================================================================
+#  Скрытие моделей из индекса админ-панели БЕЗ снятия регистрации.
+#  get_model_perms -> {} убирает модель из списка приложения на главной
+#  админки, но модель остаётся зарегистрированной: прямые URL, автокомплит,
+#  выбор в ForeignKey (попапы "+"), инлайны — продолжают работать.
+# ============================================================================
+def _hide_from_admin_index(*models):
+    for _model in models:
+        _model_admin = admin.site._registry.get(_model)
+        if _model_admin is not None:
+            _model_admin.get_model_perms = (lambda request: {})
+
+_hide_from_admin_index(
+    Route,
+    WorkAssignmentDeadlineChange,
+    CheckDocumentWorkflow,
+    ApprovalDocumentWorkflow,
+)
