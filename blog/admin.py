@@ -6644,14 +6644,16 @@ class DocumentHistoryInline(admin.TabularInline):
     verbose_name_plural = "История изменений"
 
 class PSIDocumentForm(forms.ModelForm):
+    # Группа разработок, с которой работает эта сущность (см. лист замечаний 21.07.2026).
+    PRODUCT_GROUP_NAME = "ИБП СПМ"
+
     # Сопротивление изоляции вводим как текст: полный контроль над разделителем
     # (только запятая) и над округлением, чтобы «1» не превращалось в «0.96».
     insulation_res_value = forms.CharField(
-        required=False,
+        required=True,
         label="Фактическое значение сопротивления изоляции, МОм",
         help_text=(
-            "Необязательное поле. Десятичный разделитель — запятая (например: 1,25). "
-            "Пусто — статус «нет данных»; < 1 — «не соответствует»; ≥ 1 — «соответствует»."
+            "Введите измеренное значение в МОм. Статус устанавливается автоматически: при ≥ 1 МОм - Соответствует; при < 1 МОм - Не соответствует. "
         ),
         widget=forms.TextInput(attrs={"placeholder": "например: 1,25"}),
     )
@@ -6674,6 +6676,48 @@ class PSIDocumentForm(forms.ModelForm):
                 ('соответствует', 'Соответствует'),
                 ('не соответствует', 'Не соответствует'),
             ]
+
+        # --- Обязательные поля (лист замечаний 21.07.2026, п. 1-3) ---
+        # На уровне модели поля остаются null/blank, чтобы не ломать старые записи;
+        # обязательность включаем только в форме админки.
+        for req_name in ('shipment', 'developer_org'):
+            if req_name in self.fields:
+                self.fields[req_name].required = True
+
+        # «Представитель ОТК» и «Текущий ответственный» — обязательные поля
+        # (лист замечаний 23.07.2026). По умолчанию подставляется создатель
+        # протокола (см. PSIDocumentAdmin.get_changeform_initial_data), но
+        # остаётся выпадающий список всех пользователей — значение можно изменить.
+        _all_users = User.objects.all().order_by('last_name', 'first_name', 'username')
+        for _user_field in ('inspector', 'current_responsible'):
+            if _user_field in self.fields:
+                self.fields[_user_field].required = True
+                self.fields[_user_field].queryset = _all_users
+
+        # --- Каскад «Группа → Разработка (модификация) → Изделие к отгрузке» (п. 6) ---
+        # Разработку выбираем только из группы «ИБП СПМ».
+        if 'post' in self.fields:
+            self.fields['post'].required = True
+            self.fields['post'].queryset = Post.objects.filter(
+                product_group__name=self.PRODUCT_GROUP_NAME
+            ).order_by('name')
+
+        # «Изделие к отгрузке» — только отгрузки выбранной разработки.
+        if 'shipment' in self.fields:
+            selected_post = None
+            if self.is_bound:
+                selected_post = self.data.get(self.add_prefix('post')) or None
+            elif getattr(self.instance, 'post_id', None):
+                selected_post = self.instance.post_id
+            if selected_post:
+                self.fields['shipment'].queryset = Shipment.objects.filter(
+                    post_id=selected_post
+                ).order_by('serial_number')
+            else:
+                # До выбора разработки список ограничен изделиями группы «ИБП СПМ».
+                self.fields['shipment'].queryset = Shipment.objects.filter(
+                    post__product_group__name=self.PRODUCT_GROUP_NAME
+                ).order_by('serial_number')
 
     def clean_insulation_res_value(self):
         from decimal import Decimal, InvalidOperation
@@ -6708,8 +6752,17 @@ class PSIDocumentForm(forms.ModelForm):
                 'При статусе «Не соответствует» необходимо заполнить «Примечание (п. 5.6)».'
             )
 
-        # Один протокол ПСИ на один заводской номер (shipment).
+        # Прямая связь «Разработка → Изделие к отгрузке» (п. 6):
+        # изделие обязано принадлежать выбранной разработке.
+        post = cleaned_data.get('post')
         shipment = cleaned_data.get('shipment')
+        if post and shipment and shipment.post_id != post.id:
+            self.add_error(
+                'shipment',
+                'Выбранное изделие к отгрузке не относится к выбранной разработке (модификации).'
+            )
+
+        # Один протокол ПСИ на один заводской номер (shipment).
         if shipment:
             duplicates = PSIDocument.objects.filter(shipment=shipment)
             if self.instance and self.instance.pk:
@@ -6770,9 +6823,11 @@ class PSIDocumentAdmin(admin.ModelAdmin):
         'author',  # проставляется автоматически
         'last_editor',  # проставляется автоматически
         'date_of_creation',
+        'version',  # вычисляется программно (+1 при каждом изменении), вручную не редактируется
     )
 
-    autocomplete_fields = ('post', 'shipment', 'developer_org', 'workshop')
+    # post/shipment — обычные зависимые списки (каскад), поэтому убраны из autocomplete.
+    autocomplete_fields = ('developer_org', 'workshop')
 
     inlines = [GeneratedDocumentInline, DocumentHistoryInline]
 
@@ -6781,6 +6836,48 @@ class PSIDocumentAdmin(admin.ModelAdmin):
         css = {
             'all': ('blog/psi_admin_bold.css',)
         }
+        # Каскад «Разработка → Изделие к отгрузке».
+        js = ('blog/js/chained_shipment.js',)
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                'shipments-for-post/',
+                self.admin_site.admin_view(self.shipments_for_post_view),
+                name='blog_psidocument_shipments_for_post',
+            ),
+        ]
+        return custom + urls
+
+    def shipments_for_post_view(self, request):
+        """JSON-список изделий к отгрузке для выбранной разработки (каскад)."""
+        from django.http import JsonResponse
+        post_id = request.GET.get('post_id')
+        results = []
+        if post_id:
+            qs = Shipment.objects.filter(post_id=post_id).order_by('serial_number')
+            results = [{'id': s.pk, 'text': str(s)} for s in qs]
+        return JsonResponse({'results': results})
+
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        # Передаём JS URL для подгрузки изделий выбранной разработки.
+        if 'post' in form.base_fields:
+            form.base_fields['post'].widget.attrs['data-shipments-url'] = reverse(
+                'admin:blog_psidocument_shipments_for_post'
+            )
+        return form
+
+    def get_changeform_initial_data(self, request):
+        """Для нового протокола «Представитель ОТК» и «Текущий ответственный»
+        по умолчанию — его создатель. Значения остаются редактируемыми
+        (выпадающий список всех пользователей)."""
+        initial = super().get_changeform_initial_data(request)
+        if request.user.is_authenticated:
+            initial.setdefault('inspector', request.user.pk)
+            initial.setdefault('current_responsible', request.user.pk)
+        return initial
 
     fieldsets = (
         ('1. Идентификация изделия', {
@@ -6796,7 +6893,6 @@ class PSIDocumentAdmin(admin.ModelAdmin):
             'fields': ('visual_check', 'marking_check', 'insulation_res', 'insulation_res_value', 'insulation_strength')
         }),
         ('3. Проверка функционирования (1.2.5 ТУ, 5.8 ПМ)', {
-            'description': 'Установите статус, если тест пройден успешно',
             'fields': (
                 'func_power_on', 'func_display', 'func_navigation',
                 'func_battery_mode', 'func_bypass', 'func_audio', 'interface_file',      # <-- ПОЛЕ ДЛЯ ЗАГРУЗКИ ФАЙЛА
@@ -6883,16 +6979,44 @@ class PSIDocumentAdmin(admin.ModelAdmin):
         # Определяем были ли реальные изменения (для существующих объектов)
         has_changes = is_new or bool(form.changed_data)
 
+        # Автор / последний редактор проставляются автоматически (поля readonly).
+        if request.user.is_authenticated:
+            if not obj.author_id:
+                obj.author = request.user
+            obj.last_editor = request.user
+            # «Представитель ОТК» не должен сохраняться пустым («--------»):
+            # по умолчанию — тот, кто формирует протокол (переходный период, пока роли не работают).
+            if not obj.inspector_id:
+                obj.inspector = request.user
+            # «Текущий ответственный» по умолчанию — тот, кто последним вносил правки.
+            if not obj.current_responsible_id:
+                obj.current_responsible = request.user
+
+        # «Версия» вычисляется программно и проставляется после каждого реального
+        # изменения сущности (+1 по порядку). Поле только для чтения — вручную
+        # его менять нельзя. При создании версия = «1».
+        if is_new:
+            obj.version = "1"
+        elif has_changes:
+            try:
+                next_version = int(obj.version or "0") + 1
+            except (TypeError, ValueError):
+                next_version = 1
+            # version — CharField(max_length=3): не выходим за пределы столбца БД.
+            obj.version = str(min(next_version, 999))
+
         super().save_model(request, obj, form, change)
 
         action_text = "Создан новый протокол" if is_new else "Протокол отредактирован"
         if not is_new and has_changes:
             action_text += f" (изменены поля: {', '.join(form.changed_data)})"
 
+        # action — CharField(max_length=255): длинный список изменённых полей
+        # обрезаем, иначе PostgreSQL выдаёт ошибку StringDataRightTruncation.
         DocumentHistory.objects.create(
             psi_source=obj,
             user=request.user,
-            action=action_text
+            action=action_text[:255]
         )
 
         # Автогенерация PDF при создании или изменении
