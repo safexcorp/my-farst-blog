@@ -1687,6 +1687,8 @@ class WorkAssignment(models.Model):
 
     result = models.CharField(max_length=100, choices=RESULT_CHOICES, blank=True, null=True, verbose_name="Результат")
     result_description = models.TextField(max_length=5000, blank=True, null=True, verbose_name="Описание результата")
+    comment = models.TextField(max_length=5000, blank=True, null=True, verbose_name="Комментарий автора")
+    returned_for_rework = models.BooleanField(default=False, verbose_name="Возвращена на доработку")
     route = models.ForeignKey("Route", on_delete=models.CASCADE, related_name='routes', blank=True, null=True, verbose_name="Маршрут")
 
     target_deadline = models.DateField("Целевой срок выполнения", default=timezone.localdate, null=False, blank=False)

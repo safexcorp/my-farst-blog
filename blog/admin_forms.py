@@ -141,7 +141,7 @@ class WorkAssignmentCloseForm(forms.Form):
     comment = forms.CharField(
         required=False,
         label="Комментарий (необязательно)",
-        widget=forms.Textarea(attrs={"rows": 3, "cols": 60}),
+        widget=forms.Textarea(attrs={"rows": 3, "cols": 60, "class": "vLargeTextField"}),
     )
 
 
@@ -149,5 +149,13 @@ class WorkAssignmentReturnForm(forms.Form):
     comment = forms.CharField(
         required=False,
         label="Что нужно доработать",
-        widget=forms.Textarea(attrs={"rows": 3, "cols": 60}),
+        widget=forms.Textarea(attrs={"rows": 3, "cols": 60, "class": "vLargeTextField"}),
     )
+
+
+class WorkAssignmentSubmitReviewForm(forms.Form):
+    result_description = forms.CharField(
+        label="Описание результата",
+        widget=forms.Textarea(attrs={"rows": 4, "cols": 60, "class": "vLargeTextField"}),
+    )
+    file = forms.FileField(required=False, label="Файл")

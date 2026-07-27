@@ -83,6 +83,7 @@
   .pill-purple { background:#9C27B0; }
   .pill-type { background:#607D8B; }
   .pill-amber { background:#FFA000; } .pill-cyan { background:#00ACC1; }
+  .pill-red { background:#E53935; }
 
   .cab-actions { display:flex; gap:8px; flex-wrap:wrap; }
   .btn { padding:7px 15px; border-radius:6px; color:#fff; font-weight:600; font-size:13px; text-decoration:none; border:none; cursor:pointer; }
@@ -482,6 +483,7 @@
             {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
             {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
             {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+            {% elif wa.returned_for_rework %}<span class="pill pill-red">Возвращена на доработку</span>
             {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
             {% if wa.post %}{{ wa.post }}{% endif %}
           </div>
@@ -494,6 +496,9 @@
               {% if wa.target_deadline < today %} (просрочено){% endif %}
             {% endif %}
           </div>
+          {% if wa.returned_for_rework and wa.comment %}
+          <div class="note">Комментарий автора: {{ wa.comment|linebreaksbr }}</div>
+          {% endif %}
         </div>
         <div class="cab-actions">
           {% if wa.control_status == "assigned" %}
@@ -503,9 +508,7 @@
           {% elif wa.control_status == "review" %}
           <span class="cab-wa-btn cab-wa-btn--cyan">⏳ На проверке у автора</span>
           {% elif wa.control_status == "in_progress" or not wa.control_status %}
-          <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_submit_review' wa.pk %}">
-            {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--cyan">Сдать на проверку</button>
-          </form>
+          <a class="cab-wa-btn cab-wa-btn--cyan" href="{% url 'admin:blog_workassignment_submit_review' wa.pk %}">Сдать на проверку</a>
           {% endif %}
           <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
         </div>
@@ -590,6 +593,7 @@
             {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
             {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
             {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+            {% elif wa.returned_for_rework %}<span class="pill pill-red">Возвращена на доработку</span>
             {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
             {% if wa.executor %}
               Исполнитель: <strong>{{ wa.executor }}</strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
@@ -608,6 +612,15 @@
             {% if wa.subtask_total %} · Подзадач: {{ wa.subtask_total }}{% endif %}
             {% if wa.reschedule_count %} · Переносов: {{ wa.reschedule_count }}{% endif %}
           </div>
+          {% if wa.control_status == "review" and wa.result_description %}
+          <div class="meta">Описание результата: {{ wa.result_description|linebreaksbr }}</div>
+          {% endif %}
+          {% if wa.control_status == "review" and wa.review_attachments %}
+          <div class="meta">
+            Файлы:
+            {% for a in wa.review_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+          </div>
+          {% endif %}
         </div>
         <div class="cab-actions">
           {% if wa.control_status == "review" %}

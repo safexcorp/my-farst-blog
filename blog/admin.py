@@ -59,6 +59,7 @@ from .admin_forms import (
     WorkAssignmentAdminForm,
     WorkAssignmentCloseForm,
     WorkAssignmentReturnForm,
+    WorkAssignmentSubmitReviewForm,
 )
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
 from .helpers import (
@@ -339,6 +340,7 @@ class AttachmentInline(GenericTabularInline):
 
 
 class WorkAssignmentAttachmentInline(AttachmentInline):
+    verbose_name = "файл"
     verbose_name_plural = "Вложения"
 
 
@@ -4399,7 +4401,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             )
         }),
         ('Статус выполнения / Результат', {
-            'fields': ('control_status_display', 'control_date_display', 'result_description')
+            'fields': ('control_status_display', 'control_date_display', 'result_description', 'comment')
         }),
         ('Системные данные', {
             'fields': (
@@ -4745,7 +4747,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         return back
 
     def submit_review_view(self, request, object_id: int):
-        from django.shortcuts import redirect, get_object_or_404
+        from django.shortcuts import render, redirect, get_object_or_404
         obj = get_object_or_404(WorkAssignment, pk=object_id)
         back = redirect("admin:approvals_cabinet")
         if request.user.id != obj.executor_id:
@@ -4754,29 +4756,62 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if obj.control_status != WorkAssignment.STATUS_IN_PROGRESS:
             messages.warning(request, "Сдать на проверку можно только задачу в работе.")
             return back
-        if request.method != "POST":
-            return back
-        obj.control_status = WorkAssignment.STATUS_REVIEW
-        obj.control_date = timezone.localdate()
-        obj.current_responsible = obj.author
-        obj.last_editor = request.user
-        obj.save(update_fields=[
-            "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
-        ])
-        self._notify_wa(
-            obj.author,
-            "Задача сдана на проверку",
-            f"«{self._wa_label(obj)}» ожидает вашей проверки.",
-            obj,
-        )
-        messages.success(request, "Задача отправлена автору на проверку.")
-        return back
+
+        if request.method == "POST":
+            form = WorkAssignmentSubmitReviewForm(request.POST, request.FILES)
+            if form.is_valid():
+                self._append_text(obj, "result_description", form.cleaned_data["result_description"])
+                obj.control_status = WorkAssignment.STATUS_REVIEW
+                obj.control_date = timezone.localdate()
+                obj.current_responsible = obj.author
+                obj.last_editor = request.user
+                obj.returned_for_rework = False
+                obj.save(update_fields=[
+                    "result_description", "control_status", "control_date",
+                    "current_responsible", "last_editor", "date_of_change",
+                    "returned_for_rework",
+                ])
+                uploaded = form.cleaned_data.get("file")
+                if uploaded:
+                    Attachment.objects.create(content_object=obj, file=uploaded)
+                self._notify_wa(
+                    obj.author,
+                    "Задача сдана на проверку",
+                    f"«{self._wa_label(obj)}» ожидает вашей проверки.",
+                    obj,
+                )
+                messages.success(request, "Задача отправлена автору на проверку.")
+                return back
+        else:
+            form = WorkAssignmentSubmitReviewForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "original": obj,
+            "title": "Сдать задачу на проверку",
+            "form": form,
+            "object_id": object_id,
+        }
+        return render(request, "admin/blog/workassignment/submit_review.html", context)
 
     _CLOSE_STATUS_BY_CHOICE = {
         "partial": "partial",
         "not_done": "not_done",
     }
     _RESULT_TEXT = _WA_RESULT_TEXT
+
+    @staticmethod
+    def _append_text(obj, field_name, text):
+        text = (text or "").strip()
+        if not text:
+            return
+        existing = (getattr(obj, field_name) or "").strip()
+        setattr(obj, field_name, (existing + "\n\n" + text) if existing else text)
+
+    @classmethod
+    def _append_comment(cls, obj, text):
+        cls._append_text(obj, "comment", text)
 
     def close_view(self, request, object_id: int):
         from django.shortcuts import render, redirect, get_object_or_404
@@ -4808,8 +4843,8 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                     "current_responsible", "last_editor", "date_of_change",
                 ]
                 if comment:
-                    obj.result_description = comment
-                    fields.append("result_description")
+                    self._append_comment(obj, comment)
+                    fields.append("comment")
                 obj.save(update_fields=fields)
                 self._notify_wa(
                     obj.executor,
@@ -4856,9 +4891,15 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.control_date = timezone.localdate()
                 obj.current_responsible = obj.executor
                 obj.last_editor = request.user
-                obj.save(update_fields=[
+                obj.returned_for_rework = True
+                fields = [
                     "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
-                ])
+                    "returned_for_rework",
+                ]
+                if comment:
+                    self._append_comment(obj, comment)
+                    fields.append("comment")
+                obj.save(update_fields=fields)
                 self._notify_wa(
                     obj.executor,
                     "Задача возвращена на доработку",
