@@ -475,7 +475,7 @@
           <div class="title">
             {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
           </div>
-          {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
+          {% if wa.task %}<div class="issued-task">Задача - {{ wa.task }}</div>{% endif %}
           <div class="meta">
             {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
             {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
@@ -485,8 +485,10 @@
             {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
             {% elif wa.returned_for_rework %}<span class="pill pill-red">Возвращена на доработку</span>
             {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
-            {% if wa.post %}{{ wa.post }}{% endif %}
           </div>
+          {% if wa.post %}
+          <div class="meta">Связанная разработка/проект - {{ wa.post }}</div>
+          {% endif %}
           <div class="meta">
             Срок:
             {% if g.key == "done" %}
@@ -496,6 +498,12 @@
               {% if wa.target_deadline < today %} (просрочено){% endif %}
             {% endif %}
           </div>
+          {% if wa.control_status == "assigned" and wa.wa_attachments %}
+          <div class="meta">
+            Файлы:
+            {% for a in wa.wa_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+          </div>
+          {% endif %}
           {% if wa.returned_for_rework and wa.comment %}
           <div class="note">Комментарий автора: {{ wa.comment|linebreaksbr }}</div>
           {% endif %}
@@ -585,7 +593,7 @@
           <div class="title">
             {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
           </div>
-          {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
+          {% if wa.task %}<div class="issued-task">Задача - {{ wa.task }}</div>{% endif %}
           <div class="meta">
             {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
             {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
@@ -598,8 +606,10 @@
             {% if wa.executor %}
               Исполнитель: <strong>{{ wa.executor }}</strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
             {% endif %}
-            {% if wa.post %} · {{ wa.post }}{% endif %}
           </div>
+          {% if wa.post %}
+          <div class="meta">Связанная разработка/проект - {{ wa.post }}</div>
+          {% endif %}
           <div class="meta">
             Срок:
             {% if g.key == "done" %}

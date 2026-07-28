@@ -933,6 +933,22 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
         my_work_groups = _group_work_by_status(my_work)
         my_work_active_count = len(my_work_active)
 
+        assigned_ids = [
+            wa.pk for wa in my_work if wa.control_status == WorkAssignment.STATUS_ASSIGNED
+        ]
+        if assigned_ids:
+            from django.contrib.contenttypes.models import ContentType
+            from blog.models import Attachment
+
+            ct = ContentType.objects.get_for_model(WorkAssignment)
+            wa_attachments_by_wa = {}
+            for a in Attachment.objects.filter(
+                content_type=ct, object_id__in=assigned_ids
+            ).exclude(kind="result"):
+                wa_attachments_by_wa.setdefault(a.object_id, []).append(a)
+            for wa in my_work:
+                wa.wa_attachments = wa_attachments_by_wa.get(wa.pk, [])
+
         issued_base = (
             WorkAssignment.objects
             .filter(author=user)
@@ -959,7 +975,7 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
 
             ct = ContentType.objects.get_for_model(WorkAssignment)
             attachments_by_wa = {}
-            for a in Attachment.objects.filter(content_type=ct, object_id__in=review_ids):
+            for a in Attachment.objects.filter(content_type=ct, object_id__in=review_ids, kind="result"):
                 attachments_by_wa.setdefault(a.object_id, []).append(a)
             for wa in issued_work:
                 wa.review_attachments = attachments_by_wa.get(wa.pk, [])

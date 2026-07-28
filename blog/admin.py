@@ -4035,13 +4035,12 @@ class DeadlineChangeInline(admin.TabularInline):
     model = WorkAssignmentDeadlineChange
     extra = 0
     can_delete = False
-    readonly_fields = (
-        "old_target_deadline", "old_hard_deadline",
-        "old_time_window_start", "old_time_window_end",
-        "new_target_deadline", "new_hard_deadline",
-        "new_time_window_start", "new_time_window_end",
+    fields = (
+        "old_target_deadline", "new_target_deadline",
+        "old_hard_deadline", "new_hard_deadline",
         "reason", "changed_by", "changed_at",
     )
+    readonly_fields = fields
     show_change_link = False
 
     def get_changeform_initial_data(self, request):
@@ -4425,6 +4424,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if obj is not None:
             for name in (
                 "target_deadline_display",
+                "hard_deadline_display",
             ):
                 if name not in fields:
                     fields.append(name)
@@ -4436,15 +4436,21 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             return fieldsets
         rename = {
             "target_deadline": "target_deadline_display",
+            "hard_deadline": "hard_deadline_display",
         }
+        drop = {"requires_hard_deadline"}
         new_fieldsets = []
         for title, opts in fieldsets:
             opts = dict(opts)
             new_fields = []
             for f in opts.get("fields", ()):
                 if isinstance(f, (tuple, list)):
-                    new_fields.append(tuple(rename.get(x, x) for x in f))
+                    sub = tuple(rename.get(x, x) for x in f if x not in drop)
+                    if sub:
+                        new_fields.append(sub)
                 else:
+                    if f in drop:
+                        continue
                     new_fields.append(rename.get(f, f))
             opts["fields"] = tuple(new_fields)
             new_fieldsets.append((title, opts))
@@ -4470,6 +4476,10 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def target_deadline_display(self, obj):
         return self._readonly_date_input(obj.target_deadline)
 
+    @admin.display(description="Дедлайн")
+    def hard_deadline_display(self, obj):
+        return self._readonly_date_input(obj.hard_deadline)
+
     @admin.display(description="Статус выполнения / Результат")
     def control_status_display(self, obj):
         if not obj or not obj.pk or not obj.control_status:
@@ -4480,7 +4490,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def control_date_display(self, obj):
         if not obj or not obj.control_date:
             return "—"
-        return obj.control_date.strftime("%d.%m.%Y")
+        return timezone.localtime(obj.control_date).strftime("%d.%m.%Y %H:%M:%S")
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
@@ -4539,9 +4549,9 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             else:
                 if not old_status and obj.executor_id:
                     obj.control_status = WorkAssignment.STATUS_ASSIGNED
-                    obj.control_date = timezone.localdate()
+                    obj.control_date = timezone.now()
                 elif obj.control_status and obj.control_status != old_status:
-                    obj.control_date = timezone.localdate()
+                    obj.control_date = timezone.now()
                 obj.current_responsible = obj.executor
         else:
             obj.author = user
@@ -4554,7 +4564,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             else:
                 if not obj.control_status:
                     obj.control_status = WorkAssignment.STATUS_ASSIGNED
-                    obj.control_date = timezone.localdate()
+                    obj.control_date = timezone.now()
                 obj.current_responsible = obj.executor or user
 
         if obj.post_id:
@@ -4644,7 +4654,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             )
         return "—"
 
-    @admin.display(description="Просрочен абсолютный дедлайн")
+    @admin.display(description="Просрочен дедлайн")
     def overdue_hard_flag(self, obj):
         if not obj.hard_deadline:
             return "—"
@@ -4654,7 +4664,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if overdue:
             return mark_safe(
                 _admin_warning_triangle_html(
-                    title="Абсолютный дедлайн просрочен",
+                    title="Дедлайн просрочен",
                     color="#E53935",
                 )
             )
@@ -4705,6 +4715,12 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def _wa_label(obj):
         return obj.wa_full_code or obj.name or (obj.task or "").strip()[:80] or str(obj)
 
+    @staticmethod
+    def _wa_result_attachments(obj):
+        from django.contrib.contenttypes.models import ContentType
+        ct = ContentType.objects.get_for_model(WorkAssignment)
+        return Attachment.objects.filter(content_type=ct, object_id=obj.pk, kind="result")
+
     def _notify_wa(self, recipient, title, text, obj):
         if not recipient:
             return
@@ -4731,7 +4747,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if request.method != "POST":
             return back
         obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
-        obj.control_date = timezone.localdate()
+        obj.control_date = timezone.now()
         obj.current_responsible = obj.executor
         obj.last_editor = request.user
         obj.save(update_fields=[
@@ -4762,7 +4778,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             if form.is_valid():
                 self._append_text(obj, "result_description", form.cleaned_data["result_description"])
                 obj.control_status = WorkAssignment.STATUS_REVIEW
-                obj.control_date = timezone.localdate()
+                obj.control_date = timezone.now()
                 obj.current_responsible = obj.author
                 obj.last_editor = request.user
                 obj.returned_for_rework = False
@@ -4771,9 +4787,8 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                     "current_responsible", "last_editor", "date_of_change",
                     "returned_for_rework",
                 ])
-                uploaded = form.cleaned_data.get("file")
-                if uploaded:
-                    Attachment.objects.create(content_object=obj, file=uploaded)
+                for uploaded in form.cleaned_data.get("file") or []:
+                    Attachment.objects.create(content_object=obj, file=uploaded, kind="result")
                 self._notify_wa(
                     obj.author,
                     "Задача сдана на проверку",
@@ -4834,7 +4849,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 else:
                     status = self._CLOSE_STATUS_BY_CHOICE[choice]
                 obj.control_status = status
-                obj.control_date = timezone.localdate()
+                obj.control_date = timezone.now()
                 obj.result = self._RESULT_TEXT.get(status)
                 obj.current_responsible = obj.author
                 obj.last_editor = request.user
@@ -4869,6 +4884,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "form": form,
             "object_id": object_id,
             "rescheduled_note": bool(obj.reschedule_count),
+            "result_attachments": self._wa_result_attachments(obj),
         }
         return render(request, "admin/blog/workassignment/close.html", context)
 
@@ -4888,7 +4904,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             if form.is_valid():
                 comment = form.cleaned_data.get("comment", "").strip()
                 obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
-                obj.control_date = timezone.localdate()
+                obj.control_date = timezone.now()
                 obj.current_responsible = obj.executor
                 obj.last_editor = request.user
                 obj.returned_for_rework = True
@@ -4919,6 +4935,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "title": "Вернуть задачу на доработку",
             "form": form,
             "object_id": object_id,
+            "result_attachments": self._wa_result_attachments(obj),
         }
         return render(request, "admin/blog/workassignment/return.html", context)
 
@@ -4933,6 +4950,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                     assignment = WorkAssignmentService.reschedule_deadline(
                         obj,
                         new_target_deadline=form.cleaned_data.get("new_target_deadline"),
+                        new_hard_deadline=form.cleaned_data.get("new_hard_deadline"),
                         reason=form.cleaned_data.get("reason", ""),
                         user=request.user if request.user.is_authenticated else None,
                         expected_deadline_version=form.cleaned_data["expected_deadline_version"],
@@ -4942,18 +4960,13 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 except RuntimeError as e:
                     messages.error(request, str(e))  # конфликт версий
                 else:
-                    if getattr(assignment, "_hard_deadline_reset", False):
-                        messages.warning(
-                            request,
-                            "Целевой срок перенесён. Абсолютный дедлайн сброшен — "
-                            "при необходимости назначьте его заново в карточке задания.",
-                        )
-                    else:
-                        messages.success(request, "Срок успешно перенесён.")
+                    messages.success(request, "Срок успешно перенесён.")
                     return redirect(f"../change/")
         else:
             form = RescheduleAdminForm(initial={
                 "new_target_deadline": obj.target_deadline,
+                "requires_hard_deadline": bool(obj.hard_deadline),
+                "new_hard_deadline": obj.hard_deadline,
                 "expected_deadline_version": obj.deadline_version,
             })
 
@@ -4964,7 +4977,6 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "title": "Перенести срок",
             "form": form,
             "object_id": object_id,
-            "had_hard_deadline": bool(obj.hard_deadline),
             "has_view_permission": self.has_view_permission(request, obj),
             "has_change_permission": self.has_change_permission(request, obj),
         }

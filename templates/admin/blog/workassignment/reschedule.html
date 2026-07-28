@@ -1,14 +1,6 @@
 {% extends "admin/base_site.html" %}
 {% block content %}
   <h1>Перенести срок: {{ original }}</h1>
-  {% if had_hard_deadline %}
-  <ul class="messagelist">
-    <li class="warning">
-      При переносе целевого срока абсолютный дедлайн будет сброшен.
-      Если он нужен, назначьте его заново в карточке рабочего задания после переноса.
-    </li>
-  </ul>
-  {% endif %}
   <div class="module aligned">
     <form method="post" novalidate>
       {% csrf_token %}

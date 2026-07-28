@@ -1709,7 +1709,7 @@ class WorkAssignment(models.Model):
         blank=True,
         choices=TEMP_STATUS_CHOICES,
     )
-    control_date = models.DateField("Дата фиксации статуса", null=True, blank=True)
+    control_date = models.DateTimeField("Дата фиксации статуса", null=True, blank=True)
 
     def clean(self):
         super().clean()
@@ -1960,14 +1960,14 @@ class WorkAssignmentDeadlineChange(models.Model):
     )
 
     # что было
-    old_target_deadline = models.DateField(null=True, blank=True, verbose_name="старый целевой дедлайн")
-    old_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="старый абсолютный дедлайн")
+    old_target_deadline = models.DateField(null=True, blank=True, verbose_name="старый целевой срок")
+    old_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="старый дедлайн")
     old_time_window_start = models.DateField(null=True, blank=True, verbose_name="старое временное окно с")
     old_time_window_end   = models.DateField(null=True, blank=True, verbose_name="старое временное окно по")
 
     # что стало
-    new_target_deadline = models.DateField(null=True, blank=True, verbose_name="новый целевой дедлайн")
-    new_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="новый абсолютный дедлайн")
+    new_target_deadline = models.DateField(null=True, blank=True, verbose_name="новый целевой срок")
+    new_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="новый дедлайн")
     new_time_window_start = models.DateField(null=True, blank=True, verbose_name="новое временное окно с")
     new_time_window_end   = models.DateField(null=True, blank=True, verbose_name="новое временное окно по")
 
@@ -2218,6 +2218,10 @@ class Attachment(models.Model):
     content_object = GenericForeignKey("content_type", "object_id")
 
     file = models.FileField(upload_to="attachments/")
+    kind = models.CharField(max_length=20, blank=True, default="")
+
+    def __str__(self):
+        return self.file.name.rsplit("/", 1)[-1] if self.file else f"Вложение {self.pk}"
 
 
 class RKDDeveloper(models.Model):

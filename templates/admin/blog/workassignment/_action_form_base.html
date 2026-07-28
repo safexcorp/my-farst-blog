@@ -62,6 +62,14 @@
     border-top:1px solid rgba(121,174,200,.15); padding-top:18px;
   }
 
+  .waf-file-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .waf-file-row:last-of-type { margin-bottom:10px; }
+  .waf-file-remove {
+    border:none; background:none; color:#e35f5f; cursor:pointer; font-size:16px;
+    line-height:1; padding:2px 6px;
+  }
+  .waf-file-add { font-size:12.5px; padding:6px 12px; }
+
   /* Кнопки — один в один как в личном кабинете (cab-wa-btn) */
   .cab-wa-btn {
     display:inline-flex; align-items:center; gap:6px;
@@ -86,6 +94,7 @@
   <h1>{% block wa_title %}{% endblock %}</h1>
   <div class="waf-card">
     {% if original.task %}<div class="waf-task">{{ original.task }}</div>{% endif %}
+    {% block wa_result %}{% endblock %}
     {% block wa_note %}{% endblock %}
     <form method="post" {% block wa_form_attrs %}{% endblock %} novalidate>
       {% csrf_token %}
@@ -95,7 +104,18 @@
           {{ field.label }}{% if field.field.required %}<span class="waf-req">*</span>{% endif %}
         </label>
         {{ field.errors }}
+        {% if field.name == "file" %}
+        <div class="waf-file-group" data-waf-file-group>
+          <div class="waf-file-list" data-waf-file-list>
+            <div class="waf-file-row">
+              <input type="file" name="{{ field.html_name }}">
+            </div>
+          </div>
+          <button type="button" class="cab-wa-btn cab-wa-btn--outline waf-file-add" data-waf-file-add>+ Добавить ещё файл</button>
+        </div>
+        {% else %}
         {{ field }}
+        {% endif %}
         {% if field.help_text %}<span class="waf-help helptext">{{ field.help_text }}</span>{% endif %}
       </div>
       {% endfor %}
@@ -106,4 +126,29 @@
     </form>
   </div>
 </div>
+<script>
+  document.querySelectorAll('[data-waf-file-group]').forEach(function (group) {
+    var list = group.querySelector('[data-waf-file-list]');
+    var addBtn = group.querySelector('[data-waf-file-add]');
+    var fileName = list.querySelector('input[type=file]').name;
+
+    function addRow() {
+      var row = document.createElement('div');
+      row.className = 'waf-file-row';
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.name = fileName;
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'waf-file-remove';
+      remove.textContent = '×';
+      remove.addEventListener('click', function () { row.remove(); });
+      row.appendChild(input);
+      row.appendChild(remove);
+      list.appendChild(row);
+    }
+
+    addBtn.addEventListener('click', addRow);
+  });
+</script>
 {% endblock %}

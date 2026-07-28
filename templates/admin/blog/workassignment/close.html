@@ -1,5 +1,16 @@
 {% extends "admin/blog/workassignment/_action_form_base.html" %}
 {% block wa_title %}Проверить и закрыть задачу: {{ original }}{% endblock %}
+{% block wa_result %}
+<div class="waf-task">
+  Описание результата: {% if original.result_description %}{{ original.result_description|linebreaksbr }}{% endif %}
+  <br>Файлы:
+  {% if result_attachments %}
+    {% for a in result_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+  {% else %}
+    Прикреплённых файлов нет
+  {% endif %}
+</div>
+{% endblock %}
 {% block wa_note %}
 {% if rescheduled_note %}
 <div class="waf-note">
