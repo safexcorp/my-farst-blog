@@ -1,16 +1,20 @@
-{% extends "admin/base_site.html" %}
-{% block content %}
-  <h1>Перенести срок: {{ original }}</h1>
-  <div class="module aligned">
-    <form method="post" novalidate>
-      {% csrf_token %}
-      <table>
-        {{ form.as_table }}
-      </table>
-      <div class="submit-row">
-        <input type="submit" class="default" value="Сохранить перенос">
-        <a href="../change/" class="button cancel-link">Отмена</a>
-      </div>
-    </form>
-  </div>
+{% extends "admin/blog/workassignment/_action_form_base.html" %}
+{% block wa_title %}Перенести срок: {{ original }}{% endblock %}
+{% block wa_result %}
+<div class="waf-task">
+  Текущий целевой срок: <strong>{{ original.target_deadline|date:"d.m.Y" }}</strong>
+  {% if original.hard_deadline %} · Дедлайн: <strong>{{ original.hard_deadline|date:"d.m.Y" }}</strong>{% endif %}
+</div>
 {% endblock %}
+{% block wa_note %}
+{% if original.control_status == "reschedule_pending" %}
+<div class="waf-note">
+  Исполнитель просит перенести срок на {{ original.reschedule_request_date|date:"d.m.Y" }}.
+  Сохранение перенесёт срок и переведёт задачу обратно «В работе».
+</div>
+{% endif %}
+{% endblock %}
+{% block wa_extra_hidden %}<input type="hidden" name="next" value="{{ next_param|default_if_none:"" }}">{% endblock %}
+{% block wa_cancel_url %}{% if next_param == "cabinet" %}{% url 'admin:approvals_cabinet' %}{% else %}../change/{% endif %}{% endblock %}
+{% block wa_btn_class %}cab-wa-btn--green{% endblock %}
+{% block wa_submit_label %}Сохранить перенос{% endblock %}

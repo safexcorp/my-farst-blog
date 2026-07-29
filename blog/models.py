@@ -1636,6 +1636,7 @@ class WorkAssignment(models.Model):
     TEMP_STATUS_CHOICES = [
         ('assigned', 'Ожидает принятия'),
         ('in_progress', 'В работе'),
+        ('reschedule_pending', 'Согласование переноса срока'),
         ('review', 'На проверке'),
         ('on_time', 'Выполнено в срок'),
         ('rescheduled', 'Выполнено с переносом сроков'),
@@ -1646,8 +1647,9 @@ class WorkAssignment(models.Model):
     STATUS_ASSIGNED = 'assigned'
     STATUS_IN_PROGRESS = 'in_progress'
     STATUS_REVIEW = 'review'
+    STATUS_RESCHEDULE_PENDING = 'reschedule_pending'
 
-    ACTIVE_STATUSES = ('assigned', 'in_progress', 'review')
+    ACTIVE_STATUSES = ('assigned', 'in_progress', 'review', 'reschedule_pending')
     TERMINAL_STATUSES = ('on_time', 'rescheduled', 'partial', 'not_done')
 
     name = models.CharField(max_length=100, unique=True, blank=True, null=True, verbose_name="Наименование")
@@ -1692,10 +1694,13 @@ class WorkAssignment(models.Model):
     route = models.ForeignKey("Route", on_delete=models.CASCADE, related_name='routes', blank=True, null=True, verbose_name="Маршрут")
 
     target_deadline = models.DateField("Целевой срок выполнения", default=timezone.localdate, null=False, blank=False)
-    hard_deadline = models.DateField("Абсолютный дедлайн", null=True, blank=True)
+    hard_deadline = models.DateField("Дедлайн", null=True, blank=True)
     time_window_start = models.DateField("Временное окно: с", null=True, blank=True)
     time_window_end = models.DateField("Временное окно: по", null=True, blank=True)
     conditional_deadline = models.CharField("Условия/ограничения", max_length=1000, blank=True)
+
+    reschedule_request_reason = models.TextField("Причина запроса переноса срока", blank=True, default="")
+    reschedule_request_date = models.DateField("Желаемая дата выполнения", null=True, blank=True)
 
     version_diff = models.TextField(
         "Сравнение версий",
@@ -2098,13 +2103,15 @@ class CheckDocumentWorkflow(models.Model):
     check_it_requirements_date_of_signature = models.DateTimeField(null=True, blank=True)
 
     # --- Блок «Проверка 3D-моделей» ---
-    check_3D_model = models.CharField(max_length=3, choices=YES_NO_CHOICES, blank=True)
-    check_3D_model_responsible = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True, related_name="check_3D_model_responsibles")
-    check_3D_model_resolution = models.CharField(max_length=10, choices=RESOLUTION_CHOICES, blank=True)
-    check_3D_model_comment = models.TextField(max_length=5000, blank=True)
-    check_3D_model_date_of_resolution = models.DateTimeField(null=True, blank=True)
-    check_3D_model_signature = models.BooleanField(default=False)
-    check_3D_model_date_of_signature = models.DateTimeField(null=True, blank=True)
+    # db_column указан явно: реальные колонки в БД в нижнем регистре
+    # (check_3d_model...), а не check_3D_model..., как получилось бы по умолчанию.
+    check_3D_model = models.CharField(max_length=3, choices=YES_NO_CHOICES, blank=True, db_column="check_3d_model")
+    check_3D_model_responsible = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True, related_name="check_3D_model_responsibles", db_column="check_3d_model_responsible_id")
+    check_3D_model_resolution = models.CharField(max_length=10, choices=RESOLUTION_CHOICES, blank=True, db_column="check_3d_model_resolution")
+    check_3D_model_comment = models.TextField(max_length=5000, blank=True, db_column="check_3d_model_comment")
+    check_3D_model_date_of_resolution = models.DateTimeField(null=True, blank=True, db_column="check_3d_model_date_of_resolution")
+    check_3D_model_signature = models.BooleanField(default=False, db_column="check_3d_model_signature")
+    check_3D_model_date_of_signature = models.DateTimeField(null=True, blank=True, db_column="check_3d_model_date_of_signature")
 
     # --- Блок «Нормоконтроль» ---
     norm_control = models.CharField(max_length=3, choices=YES_NO_CHOICES, blank=True)

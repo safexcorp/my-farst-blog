@@ -1,4 +1,5 @@
 {% extends "admin/base_site.html" %}
+{% block extrahead %}{{ block.super }}{{ form.media }}{% endblock %}
 {% block content %}
 <style>
   .waf-wrap { max-width: 640px; }
@@ -44,6 +45,24 @@
   html[data-theme="light"] .waf-field textarea, html[data-theme="light"] .waf-field input[type=text] {
     background:#eef4f7; color:#1b232b; border-color:#b9cbd4;
   }
+
+  .waf-field input.vDateField {
+    display:inline-block; width:auto; border-radius:8px; padding:10px 12px; font:inherit; font-size:13px;
+    background:#eef4f7; color:#1b232b; border:1px solid #b9cbd4;
+  }
+  .waf-field input.vDateField:focus {
+    border-color:#417690; outline:none; box-shadow:0 0 0 2px rgba(65,118,144,.25);
+  }
+  @media (prefers-color-scheme: dark) {
+    .waf-field input.vDateField { background:#232c33; color:#eef4f7; border-color:#3d4d59; }
+  }
+  html[data-theme="dark"] .waf-field input.vDateField { background:#232c33; color:#eef4f7; border-color:#3d4d59; }
+  html[data-theme="light"] .waf-field input.vDateField { background:#eef4f7; color:#1b232b; border-color:#b9cbd4; }
+  .waf-checkbox-label {
+    display:inline-flex; align-items:center; gap:8px; font-size:13px; font-weight:600;
+    color:var(--body-fg); cursor:pointer;
+  }
+  .waf-checkbox-label input[type=checkbox] { width:16px; height:16px; accent-color:#417690; cursor:pointer; }
 
   .waf-field ul { list-style:none; margin:0; padding:0; display:flex; gap:10px; flex-wrap:wrap; }
   .waf-field ul li label {
@@ -98,7 +117,19 @@
     {% block wa_note %}{% endblock %}
     <form method="post" {% block wa_form_attrs %}{% endblock %} novalidate>
       {% csrf_token %}
+      {% block wa_extra_hidden %}{% endblock %}
       {% for field in form %}
+      {% if field.is_hidden %}
+      {{ field }}
+      {% elif field.field.widget.input_type == "checkbox" %}
+      <div class="waf-field waf-field--checkbox">
+        <label class="waf-checkbox-label">
+          {{ field }} {{ field.label }}{% if field.field.required %}<span class="waf-req">*</span>{% endif %}
+        </label>
+        {{ field.errors }}
+        {% if field.help_text %}<span class="waf-help helptext">{{ field.help_text }}</span>{% endif %}
+      </div>
+      {% else %}
       <div class="waf-field">
         <label class="waf-label" for="{{ field.id_for_label }}">
           {{ field.label }}{% if field.field.required %}<span class="waf-req">*</span>{% endif %}
@@ -118,10 +149,11 @@
         {% endif %}
         {% if field.help_text %}<span class="waf-help helptext">{{ field.help_text }}</span>{% endif %}
       </div>
+      {% endif %}
       {% endfor %}
       <div class="waf-actions">
         <button type="submit" class="cab-wa-btn {% block wa_btn_class %}cab-wa-btn--cyan{% endblock %}">{% block wa_submit_label %}Сохранить{% endblock %}</button>
-        <a href="{% url 'admin:approvals_cabinet' %}" class="cab-wa-btn cab-wa-btn--outline">Отмена</a>
+        <a href="{% block wa_cancel_url %}{% url 'admin:approvals_cabinet' %}{% endblock %}" class="cab-wa-btn cab-wa-btn--outline">Отмена</a>
       </div>
     </form>
   </div>

@@ -16,6 +16,13 @@ def validate_file_size(value):
         raise ValidationError('Размер файла не должен превышать 50 МБ')
 
 
+def validate_avatar_size(value):
+    """Ограничение аватарки 5 МБ"""
+    limit = 5 * 1024 * 1024  # 5 MB
+    if value.size > limit:
+        raise ValidationError('Размер фото не должен превышать 5 МБ')
+
+
 class SharedRepository(models.Model):
 
     id = models.AutoField(
@@ -1231,6 +1238,14 @@ class EmployeeProfile(models.Model):
     )
     patronymic = models.CharField('Отчество', max_length=100, blank=True)
     phone = models.CharField('Телефон', max_length=20, blank=True)
+    birth_date = models.DateField('Дата рождения', null=True, blank=True)
+    avatar = models.ImageField(
+        'Фото',
+        upload_to='avatars/%Y/%m/',
+        null=True,
+        blank=True,
+        validators=[validate_avatar_size],
+    )
     org_department = models.ForeignKey(
         'Department',
         on_delete=models.SET_NULL,
@@ -1255,5 +1270,10 @@ class EmployeeProfile(models.Model):
         verbose_name = 'Профиль сотрудника'
         verbose_name_plural = 'Профили сотрудников'
 
+    def full_name(self):
+        """ФИО в порядке Фамилия Имя Отчество, с запасным вариантом — username."""
+        parts = [p for p in [self.user.last_name, self.user.first_name, self.patronymic] if p]
+        return ' '.join(parts) if parts else self.user.username
+
     def __str__(self):
-        return f"Профиль: {self.user.get_full_name() or self.user.username}"
+        return f"Профиль: {self.full_name()}"

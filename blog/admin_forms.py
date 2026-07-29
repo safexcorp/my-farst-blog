@@ -165,6 +165,17 @@ class WorkAssignmentReturnForm(forms.Form):
     )
 
 
+class WorkAssignmentRescheduleRequestForm(forms.Form):
+    reason = forms.CharField(
+        label="Причина переноса",
+        widget=forms.Textarea(attrs={"rows": 3, "cols": 60, "class": "vLargeTextField"}),
+    )
+    desired_date = forms.DateField(
+        label="Желаемая дата выполнения",
+        widget=AdminDateWidget,
+    )
+
+
 class MultipleFileInput(forms.ClearableFileInput):
     allow_multiple_selected = True
 
