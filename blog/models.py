@@ -2103,15 +2103,13 @@ class CheckDocumentWorkflow(models.Model):
     check_it_requirements_date_of_signature = models.DateTimeField(null=True, blank=True)
 
     # --- Блок «Проверка 3D-моделей» ---
-    # db_column указан явно: реальные колонки в БД в нижнем регистре
-    # (check_3d_model...), а не check_3D_model..., как получилось бы по умолчанию.
-    check_3D_model = models.CharField(max_length=3, choices=YES_NO_CHOICES, blank=True, db_column="check_3d_model")
-    check_3D_model_responsible = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True, related_name="check_3D_model_responsibles", db_column="check_3d_model_responsible_id")
-    check_3D_model_resolution = models.CharField(max_length=10, choices=RESOLUTION_CHOICES, blank=True, db_column="check_3d_model_resolution")
-    check_3D_model_comment = models.TextField(max_length=5000, blank=True, db_column="check_3d_model_comment")
-    check_3D_model_date_of_resolution = models.DateTimeField(null=True, blank=True, db_column="check_3d_model_date_of_resolution")
-    check_3D_model_signature = models.BooleanField(default=False, db_column="check_3d_model_signature")
-    check_3D_model_date_of_signature = models.DateTimeField(null=True, blank=True, db_column="check_3d_model_date_of_signature")
+    check_3D_model = models.CharField(max_length=3, choices=YES_NO_CHOICES, blank=True)
+    check_3D_model_responsible = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True, related_name="check_3D_model_responsibles")
+    check_3D_model_resolution = models.CharField(max_length=10, choices=RESOLUTION_CHOICES, blank=True)
+    check_3D_model_comment = models.TextField(max_length=5000, blank=True)
+    check_3D_model_date_of_resolution = models.DateTimeField(null=True, blank=True)
+    check_3D_model_signature = models.BooleanField(default=False)
+    check_3D_model_date_of_signature = models.DateTimeField(null=True, blank=True)
 
     # --- Блок «Нормоконтроль» ---
     norm_control = models.CharField(max_length=3, choices=YES_NO_CHOICES, blank=True)
