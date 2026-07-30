@@ -1,5 +1,7 @@
 {% extends "admin/base_site.html" %}
 
+{% block extrahead %}{{ block.super }}{{ my_profile_form.media }}{% endblock %}
+
 {% block content %}
 <style>
   .cab-wrap { max-width: 1150px; }
@@ -76,6 +78,10 @@
   .cab-card .subtitle { font-size:13px; color:var(--body-quiet-color,#aaa); margin-top:2px; }
   .cab-card .meta { font-size:12px; color:var(--body-quiet-color,#999); margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .cab-card .note { font-size:12px; margin-top:6px; padding:6px 10px; border-radius:6px; background:rgba(229,57,53,.10); }
+  .cab-archive-note {
+    font-size:12px; color:var(--body-quiet-color,#999); margin-bottom:10px;
+    padding:6px 10px; border-radius:6px; background:rgba(121,174,200,.08); border-left:3px solid #79aec8;
+  }
 
   .pill { border-radius:12px; padding:2px 10px; font-size:11px; font-weight:600; color:#fff; display:inline-block; }
   .pill-blue { background:#2196F3; } .pill-green { background:#4CAF50; }
@@ -83,8 +89,14 @@
   .pill-purple { background:#9C27B0; }
   .pill-type { background:#607D8B; }
   .pill-amber { background:#FFA000; } .pill-cyan { background:#00ACC1; }
+  .pill-red { background:#E53935; }
 
   .cab-actions { display:flex; gap:8px; flex-wrap:wrap; }
+  .cab-actions--col { flex-direction:column; align-items:stretch; }
+  .cab-actions--col .cab-wa-btn,
+  .cab-actions--col .cab-wform,
+  .cab-actions--col .cab-wform button,
+  .cab-actions--col .btn { width:100%; text-align:center; box-sizing:border-box; justify-content:center; }
   .btn { padding:7px 15px; border-radius:6px; color:#fff; font-weight:600; font-size:13px; text-decoration:none; border:none; cursor:pointer; }
   .btn-green { background:#4CAF50; } .btn-red { background:#E53935; }
   .btn-blue { background:#2196F3; } .btn-gray { background:#777; }
@@ -272,8 +284,78 @@
     font-size:13px; line-height:1.45; color:var(--body-quiet-color,#b0b0b0);
     white-space:pre-line; word-break:break-word;
   }
+
+  .cab-avatar {
+    border-radius:50%; object-fit:cover; background:#79aec8; color:#fff;
+    display:flex; align-items:center; justify-content:center; font-weight:700;
+    flex-shrink:0;
+  }
+  .cab-avatar--lg { width:130px; height:130px; font-size:46px; }
+  .cab-avatar--clickable { cursor:zoom-in; }
+  .cab-lightbox {
+    display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,.75);
+    align-items:center; justify-content:center; padding:24px; cursor:zoom-out;
+  }
+  .cab-lightbox.open { display:flex; }
+  .cab-lightbox img { max-width:90vw; max-height:90vh; border-radius:8px; }
+  .cab-profile-header { display:flex; align-items:center; gap:18px; margin-bottom:18px; flex-wrap:wrap; }
+  .cab-profile-readonly {
+    margin-top:18px; padding-top:14px; border-top:1px solid rgba(121,174,200,.15);
+    font-size:12px; color:var(--body-quiet-color,#999);
+  }
+  .cab-profile-readonly .meta { margin-top:4px; }
+  .cab-field { margin-bottom:14px; max-width:420px; }
+  .cab-field label { display:block; font-size:12px; font-weight:600; color:var(--body-fg); margin-bottom:5px; }
+  .cab-field input[type=text], .cab-field input[type=email] {
+    display:block; width:100%; box-sizing:border-box; border-radius:8px; padding:9px 11px;
+    font:inherit; font-size:13px; background:#eef4f7; color:#1b232b; border:1px solid #b9cbd4;
+  }
+  .cab-field input.vDateField {
+    width:auto; border-radius:8px; padding:9px 11px; font:inherit; font-size:13px;
+    background:#eef4f7; color:#1b232b; border:1px solid #b9cbd4;
+  }
+  @media (prefers-color-scheme: dark) {
+    .cab-field input[type=text], .cab-field input[type=email], .cab-field input.vDateField { background:#232c33; color:#eef4f7; border-color:#3d4d59; }
+  }
+  html[data-theme="dark"] .cab-field input[type=text], html[data-theme="dark"] .cab-field input[type=email], html[data-theme="dark"] .cab-field input.vDateField {
+    background:#232c33; color:#eef4f7; border-color:#3d4d59;
+  }
+  html[data-theme="light"] .cab-field input[type=text], html[data-theme="light"] .cab-field input[type=email], html[data-theme="light"] .cab-field input.vDateField {
+    background:#eef4f7; color:#1b232b; border-color:#b9cbd4;
+  }
 </style>
 
+{% if profile_user %}
+<div id="content-main" class="cab-wrap">
+  <div class="cab-card" style="align-items:flex-start;">
+    <div class="cab-profile-header" style="margin-bottom:0;">
+      {% if viewed_profile.avatar %}
+      <img src="{{ viewed_profile.avatar.url }}" alt="" class="cab-avatar cab-avatar--lg cab-avatar--clickable" data-avatar-full="{{ viewed_profile.avatar.url }}">
+      {% else %}
+      <div class="cab-avatar cab-avatar--lg">{{ profile_user.username|slice:":1"|upper }}</div>
+      {% endif %}
+      <div class="cab-info">
+        <div class="title">{{ viewed_profile.full_name }}</div>
+        {% if viewed_profile.position %}<div class="subtitle">{{ viewed_profile.position }}</div>{% endif %}
+        <div class="meta">
+          {% if viewed_profile.org_department %}<span class="pill pill-blue">{{ viewed_profile.org_department }}</span>{% endif %}
+          {% if viewed_profile.is_head %}<span class="pill pill-orange">Руководитель отдела</span>{% endif %}
+        </div>
+        <div class="meta">
+          {% if profile_user.email %}Email: {{ profile_user.email }}{% endif %}
+          {% if viewed_profile.phone %} · Телефон: {{ viewed_profile.phone }}{% endif %}
+        </div>
+        {% if viewed_profile.supervisor %}
+        <div class="meta">Руководитель: {{ viewed_profile.supervisor.profile.full_name|default:viewed_profile.supervisor.username }}</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% if is_own_profile %}
+  <a class="btn btn-gray" style="margin-top:14px;display:inline-block;" href="{% url 'admin:approvals_cabinet' %}?tab=profile">Редактировать в личном кабинете</a>
+  {% endif %}
+</div>
+{% else %}
 <div id="content-main" class="cab-wrap">
 
   <nav class="cab-nav" aria-label="Разделы личного кабинета">
@@ -319,7 +401,7 @@
     </div>
     <div class="cab-nav-row">
       <span class="cab-nav-label"><span class="cab-nav-label-icon">📌</span> Прочее</span>
-      <div class="cab-tabs cab-tabs--3">
+      <div class="cab-tabs cab-tabs--4">
         <button type="button" class="cab-tab" data-tab="assigned">
           <span class="cab-tab-icon" aria-hidden="true">🎯</span>
           <span class="cab-tab-label">Мне назначено (Текущий ответственный)</span>
@@ -334,6 +416,10 @@
           <span class="cab-tab-icon" aria-hidden="true">🔔</span>
           <span class="cab-tab-label">Уведомления</span>
           {% if unread_count %}<span class="cab-badge">{{ unread_count }}</span>{% endif %}
+        </button>
+        <button type="button" class="cab-tab" data-tab="profile">
+          <span class="cab-tab-icon" aria-hidden="true">👤</span>
+          <span class="cab-tab-label">Мой профиль</span>
         </button>
       </div>
     </div>
@@ -358,7 +444,7 @@
         <a class="btn btn-doc" href="{{ t.doc_ctx.file_url }}" target="_blank">Открыть документ</a>
         {% endif %}
         {% if t.doc_ctx.admin_url %}
-        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка</a>
+        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка документа</a>
         {% endif %}
         <a class="btn btn-green" href="{% url 'admin:approvals_task_sign' t.pk %}">✍ Подписать (ЭЦП)</a>
         <a class="btn btn-red" href="{% url 'admin:approvals_task_reject' t.pk %}">Отклонить</a>
@@ -387,7 +473,7 @@
         <a class="btn btn-doc" href="{{ t.doc_ctx.file_url }}" target="_blank">Открыть документ</a>
         {% endif %}
         {% if t.doc_ctx.admin_url %}
-        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка</a>
+        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка документа</a>
         {% endif %}
         <a class="btn btn-green" href="{% url 'admin:approvals_task_sign' t.pk %}">✍ Подписать (ЭЦП)</a>
       </div>
@@ -415,7 +501,7 @@
         <a class="btn btn-doc" href="{{ t.doc_ctx.file_url }}" target="_blank">Открыть документ</a>
         {% endif %}
         {% if t.doc_ctx.admin_url %}
-        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка</a>
+        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка документа</a>
         {% endif %}
         <a class="btn btn-blue" href="{% url 'admin:approvals_task_resubmit' t.pk %}">Отправить на повторную проверку</a>
       </div>
@@ -465,49 +551,69 @@
     {% for g in my_work_groups %}{% if g.count %}
     <details class="cab-wstatus-section" data-wgroup="{{ g.key }}">
       <summary class="cab-wstatus-head">
-        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'reschedule_pending' %}pill-purple{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
         <span class="cab-group-count">{{ g.count }}</span>
       </summary>
+      {% if g.key == "done" %}
+      <div class="cab-archive-note">Показаны только последние 30 завершённых задач</div>
+      {% endif %}
       {% for wa in g.items %}
       <div class="cab-card">
         <div class="cab-info">
           <div class="title">
             {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
           </div>
-          {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
+          {% if wa.task %}<div class="issued-task">Задача - {{ wa.task }}</div>{% endif %}
           <div class="meta">
             {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
             {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
+            {% elif wa.control_status == "reschedule_pending" %}<span class="pill pill-purple">Согласование переноса срока</span>
             {% elif wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
             {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
             {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
             {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+            {% elif wa.returned_for_rework %}<span class="pill pill-red">Возвращена на доработку</span>
             {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
-            {% if wa.post %}{{ wa.post }}{% endif %}
           </div>
+          {% if wa.post %}
+          <div class="meta">Связанная разработка/проект - {{ wa.post }}</div>
+          {% endif %}
           <div class="meta">
-            Срок:
+            Целевой срок выполнения:
             {% if g.key == "done" %}
               <strong>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
             {% else %}
-              <strong {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
-              {% if wa.target_deadline < today %} (просрочено){% endif %}
+              <strong{% if wa.target_deadline < today %} class="cab-overdue"{% endif %}>{{ wa.target_deadline|date:"d.m.Y" }}</strong>{% if wa.reschedule_count or wa.target_deadline < today %} ({% if wa.reschedule_count %}срок был перенесён{% endif %}{% if wa.reschedule_count and wa.target_deadline < today %}, {% endif %}{% if wa.target_deadline < today %}просрочено{% endif %}){% endif %}
             {% endif %}
           </div>
+          {% if wa.hard_deadline %}
+          <div class="meta">Дедлайн: <strong>{{ wa.hard_deadline|date:"d.m.Y" }}</strong></div>
+          {% endif %}
+          {% if wa.wa_attachments %}
+          <div class="meta">
+            Файлы:
+            {% for a in wa.wa_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+          </div>
+          {% endif %}
+          {% if wa.returned_for_rework and wa.comment %}
+          <div class="note">Комментарий автора: {{ wa.comment|linebreaksbr }}</div>
+          {% endif %}
         </div>
-        <div class="cab-actions">
+        <div class="cab-actions cab-actions--col">
           {% if wa.control_status == "assigned" %}
           <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_acknowledge' wa.pk %}">
             {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--amber">Принять в работу</button>
           </form>
+          <a class="cab-wa-btn cab-wa-btn--outline" href="{% url 'admin:blog_workassignment_request_reschedule' wa.pk %}">Запрос переноса срока задачи</a>
           {% elif wa.control_status == "review" %}
           <span class="cab-wa-btn cab-wa-btn--cyan">⏳ На проверке у автора</span>
+          {% elif wa.control_status == "reschedule_pending" %}
+          <span class="cab-wa-btn cab-wa-btn--outline">⏳ Ожидает решения автора</span>
           {% elif wa.control_status == "in_progress" or not wa.control_status %}
-          <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_submit_review' wa.pk %}">
-            {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--cyan">Сдать на проверку</button>
-          </form>
+          <a class="cab-wa-btn cab-wa-btn--cyan" href="{% url 'admin:blog_workassignment_submit_review' wa.pk %}">Сдать на проверку</a>
+          <a class="cab-wa-btn cab-wa-btn--outline" href="{% url 'admin:blog_workassignment_request_reschedule' wa.pk %}">Запрос переноса срока задачи</a>
           {% endif %}
-          <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
+          <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть карточку задания</a>
         </div>
       </div>
       {% endfor %}
@@ -573,48 +679,75 @@
     {% for g in issued_work_groups %}{% if g.count %}
     <details class="cab-wstatus-section" data-wgroup="{{ g.key }}">
       <summary class="cab-wstatus-head">
-        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'reschedule_pending' %}pill-purple{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
         <span class="cab-group-count">{{ g.count }}</span>
       </summary>
+      {% if g.key == "done" %}
+      <div class="cab-archive-note">Показаны только последние 30 завершённых задач</div>
+      {% endif %}
       {% for wa in g.items %}
       <div class="cab-card">
         <div class="cab-info">
           <div class="title">
             {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
           </div>
-          {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
+          {% if wa.task %}<div class="issued-task">Задача - {{ wa.task }}</div>{% endif %}
           <div class="meta">
             {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
             {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
+            {% elif wa.control_status == "reschedule_pending" %}<span class="pill pill-purple">Согласование переноса срока</span>
             {% elif wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
             {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
             {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
             {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+            {% elif wa.returned_for_rework %}<span class="pill pill-red">Возвращена на доработку</span>
             {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
             {% if wa.executor %}
-              Исполнитель: <strong>{{ wa.executor }}</strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
+              Исполнитель: <strong><a href="{% url 'admin:approvals_user_profile' wa.executor_id %}">{{ wa.executor }}</a></strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
             {% endif %}
-            {% if wa.post %} · {{ wa.post }}{% endif %}
           </div>
+          {% if wa.post %}
+          <div class="meta">Связанная разработка/проект - {{ wa.post }}</div>
+          {% endif %}
           <div class="meta">
-            Срок:
+            Целевой срок выполнения:
             {% if g.key == "done" %}
               <strong>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
             {% else %}
-              <strong {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
-              {% if wa.target_deadline < today %} (просрочено){% endif %}
+              <strong{% if wa.target_deadline < today %} class="cab-overdue"{% endif %}>{{ wa.target_deadline|date:"d.m.Y" }}</strong>{% if wa.reschedule_count or wa.target_deadline < today %} ({% if wa.reschedule_count %}срок был перенесён{% endif %}{% if wa.reschedule_count and wa.target_deadline < today %}, {% endif %}{% if wa.target_deadline < today %}просрочено{% endif %}){% endif %}
             {% endif %}
             · Создано: {{ wa.date_of_creation|date:"d.m.Y" }}
             {% if wa.subtask_total %} · Подзадач: {{ wa.subtask_total }}{% endif %}
             {% if wa.reschedule_count %} · Переносов: {{ wa.reschedule_count }}{% endif %}
           </div>
+          {% if wa.hard_deadline %}
+          <div class="meta">Дедлайн: <strong>{{ wa.hard_deadline|date:"d.m.Y" }}</strong></div>
+          {% endif %}
+          {% if wa.control_status == "review" and wa.result_description %}
+          <div class="meta">Описание результата: {{ wa.result_description|linebreaksbr }}</div>
+          {% endif %}
+          {% if wa.control_status == "review" and wa.review_attachments %}
+          <div class="meta">
+            Файлы:
+            {% for a in wa.review_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+          </div>
+          {% endif %}
+          {% if wa.control_status == "reschedule_pending" %}
+          <div class="meta">Причина переноса: {{ wa.reschedule_request_reason|linebreaksbr }}</div>
+          <div class="meta">Желаемый срок: {{ wa.reschedule_request_date|date:"d.m.Y" }}</div>
+          {% endif %}
         </div>
-        <div class="cab-actions">
+        <div class="cab-actions cab-actions--col">
           {% if wa.control_status == "review" %}
           <a class="cab-wa-btn cab-wa-btn--green" href="{% url 'admin:blog_workassignment_close' wa.pk %}">Проверить и закрыть</a>
           <a class="cab-wa-btn cab-wa-btn--outline" href="{% url 'admin:blog_workassignment_return' wa.pk %}">Вернуть на доработку</a>
+          {% elif wa.control_status == "reschedule_pending" %}
+          <a class="cab-wa-btn cab-wa-btn--green" href="{% url 'admin:blog_workassignment_reschedule' wa.pk %}?next=cabinet">Согласовать перенос срока</a>
+          <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_deny_reschedule' wa.pk %}">
+            {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--outline">Отказать</button>
+          </form>
           {% endif %}
-          <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
+          <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть карточку задания</a>
         </div>
       </div>
       {% endfor %}
@@ -640,7 +773,7 @@
       </div>
       <div class="cab-actions">
         {% if p.doc_ctx.admin_url %}
-        <a class="btn btn-gray" href="{{ p.doc_ctx.admin_url }}">Карточка</a>
+        <a class="btn btn-gray" href="{{ p.doc_ctx.admin_url }}">Карточка документа</a>
         {% endif %}
       </div>
     </div>
@@ -679,6 +812,67 @@
     {% endfor %}
   </div>
 
+  <div class="cab-panel" data-panel="profile">
+    <div class="cab-card" style="flex-direction:column; align-items:stretch;">
+      <form method="post" action="{% url 'admin:approvals_my_profile_save' %}" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="cab-profile-header">
+          {% if my_profile.avatar %}
+          <img src="{{ my_profile.avatar.url }}" alt="" class="cab-avatar cab-avatar--lg cab-avatar--clickable" data-avatar-full="{{ my_profile.avatar.url }}">
+          {% else %}
+          <div class="cab-avatar cab-avatar--lg">{{ request.user.username|slice:":1"|upper }}</div>
+          {% endif %}
+          <div class="cab-field" style="margin-bottom:0;">
+            <label for="{{ my_profile_form.avatar.id_for_label }}">{{ my_profile_form.avatar.label }}</label>
+            {{ my_profile_form.avatar }}
+          </div>
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.last_name.id_for_label }}">{{ my_profile_form.last_name.label }}</label>
+          {{ my_profile_form.last_name }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.first_name.id_for_label }}">{{ my_profile_form.first_name.label }}</label>
+          {{ my_profile_form.first_name }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.patronymic.id_for_label }}">{{ my_profile_form.patronymic.label }}</label>
+          {{ my_profile_form.patronymic }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.birth_date.id_for_label }}">{{ my_profile_form.birth_date.label }}</label>
+          {{ my_profile_form.birth_date }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.phone.id_for_label }}">{{ my_profile_form.phone.label }}</label>
+          {{ my_profile_form.phone }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.email.id_for_label }}">{{ my_profile_form.email.label }}</label>
+          {{ my_profile_form.email }}
+        </div>
+        <button type="submit" class="cab-wa-btn cab-wa-btn--green">Сохранить</button>
+      </form>
+      <div class="cab-profile-readonly">
+        <div class="meta">Логин: <strong>{{ request.user.username }}</strong></div>
+        <div class="meta">Отдел: <strong>{{ my_profile.org_department|default:"—" }}</strong></div>
+        <div class="meta">Должность: <strong>{{ my_profile.position|default:"—" }}</strong></div>
+        {% if my_profile.is_head %}<div class="meta">Руководитель отдела</div>{% endif %}
+        {% if my_profile.supervisor %}
+        <div class="meta">Руководитель: <strong>{{ my_profile.supervisor.profile.full_name|default:my_profile.supervisor.username }}</strong></div>
+        {% endif %}
+        <div class="meta" style="font-style:italic; margin-top:8px;">
+          Отдел, должность и руководителя может изменить только администратор — раздел «Пользователи».
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endif %}
+
+<div class="cab-lightbox" id="cab-lightbox">
+  <img src="" alt="">
 </div>
 
 <script>
@@ -693,10 +887,12 @@
     tabs.forEach(function (t) {
       t.addEventListener("click", function () { activate(t.dataset.tab); });
     });
+    var qtab = new URLSearchParams(location.search).get("tab");
     var saved;
     try { saved = localStorage.getItem("cabinetTab"); } catch (e) {}
-    var exists = saved && document.querySelector('.cab-panel[data-panel="' + saved + '"]');
-    if (exists) activate(saved);
+    var target = qtab || saved;
+    var exists = target && document.querySelector('.cab-panel[data-panel="' + target + '"]');
+    if (exists) activate(target);
   })();
 
   // Фильтр задач по статусу внутри панелей «Мои задачи» / «Выданные задачи».
@@ -717,6 +913,23 @@
           });
         });
       });
+    });
+  })();
+
+  // Лайтбокс — увеличенный просмотр аватарки по клику.
+  (function () {
+    var lightbox = document.getElementById("cab-lightbox");
+    if (!lightbox) return;
+    var lightboxImg = lightbox.querySelector("img");
+    document.querySelectorAll("[data-avatar-full]").forEach(function (el) {
+      el.addEventListener("click", function () {
+        lightboxImg.src = el.dataset.avatarFull;
+        lightbox.classList.add("open");
+      });
+    });
+    lightbox.addEventListener("click", function () {
+      lightbox.classList.remove("open");
+      lightboxImg.src = "";
     });
   })();
 </script>

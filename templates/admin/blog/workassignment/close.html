@@ -1,23 +1,23 @@
-{% extends "admin/base_site.html" %}
-{% block content %}
-  <h1>Проверить и закрыть задачу: {{ original }}</h1>
-  <div class="module aligned">
-    {% if original.task %}<p style="margin:0 0 10px;color:var(--body-quiet-color,#666);">{{ original.task }}</p>{% endif %}
-    {% if rescheduled_note %}
-    <p style="margin:0 0 12px;padding:8px 12px;border-left:3px solid #FF9800;background:rgba(255,152,0,.12);">
-      У задачи были переносы срока ({{ original.reschedule_count }}). При выборе «Выполнено» статус будет
-      автоматически зафиксирован как «Выполнено с переносом сроков».
-    </p>
-    {% endif %}
-    <form method="post" novalidate>
-      {% csrf_token %}
-      <table>
-        {{ form.as_table }}
-      </table>
-      <div class="submit-row">
-        <input type="submit" class="default" value="Закрыть задачу">
-        <a href="{% url 'admin:approvals_cabinet' %}" class="button cancel-link">Отмена</a>
-      </div>
-    </form>
-  </div>
+{% extends "admin/blog/workassignment/_action_form_base.html" %}
+{% block wa_title %}Проверить и закрыть задачу: {{ original }}{% endblock %}
+{% block wa_result %}
+<div class="waf-task">
+  Описание результата: {% if original.result_description %}{{ original.result_description|linebreaksbr }}{% endif %}
+  <br>Файлы:
+  {% if result_attachments %}
+    {% for a in result_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+  {% else %}
+    Прикреплённых файлов нет
+  {% endif %}
+</div>
 {% endblock %}
+{% block wa_note %}
+{% if rescheduled_note %}
+<div class="waf-note">
+  У задачи были переносы срока ({{ original.reschedule_count }}). При выборе «Выполнено» статус будет
+  автоматически зафиксирован как «Выполнено с переносом сроков».
+</div>
+{% endif %}
+{% endblock %}
+{% block wa_btn_class %}cab-wa-btn--green{% endblock %}
+{% block wa_submit_label %}Закрыть задачу{% endblock %}

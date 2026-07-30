@@ -3,6 +3,8 @@ from django.utils import timezone
 
 from .models import WorkAssignment, WorkAssignmentDeadlineChange
 
+_UNSET = object()
+
 class WorkAssignmentService:
     @staticmethod
     @transaction.atomic
@@ -11,6 +13,7 @@ class WorkAssignmentService:
         new_target_deadline=None,
         new_time_window_start=None,
         new_time_window_end=None,
+        new_hard_deadline=_UNSET,
         reason: str = "",
         user=None,
         expected_deadline_version: int | None = None,
@@ -35,14 +38,16 @@ class WorkAssignmentService:
         # 3) применим только переданные поля
         hard_reset = False
         if new_target_deadline is not None:
-            if new_target_deadline != old["target"] and old["hard"] is not None:
-                assignment.hard_deadline = None
-                hard_reset = True
             assignment.target_deadline = new_target_deadline
         if new_time_window_start is not None:
             assignment.time_window_start = new_time_window_start
         if new_time_window_end is not None:
             assignment.time_window_end = new_time_window_end
+        if new_hard_deadline is not _UNSET:
+            assignment.hard_deadline = new_hard_deadline
+        elif new_target_deadline is not None and new_target_deadline != old["target"] and old["hard"] is not None:
+            assignment.hard_deadline = None
+            hard_reset = True
 
         # 4) проверки
         today = timezone.localdate()

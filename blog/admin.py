@@ -58,7 +58,9 @@ from .admin_forms import (
     RescheduleAdminForm,
     WorkAssignmentAdminForm,
     WorkAssignmentCloseForm,
+    WorkAssignmentRescheduleRequestForm,
     WorkAssignmentReturnForm,
+    WorkAssignmentSubmitReviewForm,
 )
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
 from .helpers import (
@@ -339,6 +341,7 @@ class AttachmentInline(GenericTabularInline):
 
 
 class WorkAssignmentAttachmentInline(AttachmentInline):
+    verbose_name = "файл"
     verbose_name_plural = "Вложения"
 
 
@@ -4033,13 +4036,12 @@ class DeadlineChangeInline(admin.TabularInline):
     model = WorkAssignmentDeadlineChange
     extra = 0
     can_delete = False
-    readonly_fields = (
-        "old_target_deadline", "old_hard_deadline",
-        "old_time_window_start", "old_time_window_end",
-        "new_target_deadline", "new_hard_deadline",
-        "new_time_window_start", "new_time_window_end",
+    fields = (
+        "old_target_deadline", "new_target_deadline",
+        "old_hard_deadline", "new_hard_deadline",
         "reason", "changed_by", "changed_at",
     )
+    readonly_fields = fields
     show_change_link = False
 
     def get_changeform_initial_data(self, request):
@@ -4350,14 +4352,12 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
 
     list_display = (
         'wa_code_column',
-        'name', 'author', 'executor', 'post',
+        'name', 'author_link', 'executor_link', 'post',
         'overdue_target_flag',
         'overdue_hard_flag',
         'control_status_colored',
         'control_date',
         'target_deadline', 'hard_deadline',
-        'version',
-        'deadline_version', 'reschedule_count',
     )
     list_display_links = ('wa_code_column', 'name')
     ordering = ('post__wa_code', 'wa_number', 'pk')
@@ -4372,6 +4372,26 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     @admin.display(description='Код', ordering='post__wa_code')
     def wa_code_column(self, obj):
         return obj.wa_full_code or '—'
+
+    @admin.display(description='Автор', ordering='author')
+    def author_link(self, obj):
+        if not obj.author_id:
+            return '—'
+        return format_html(
+            '<a href="{}">{}</a>',
+            reverse('admin:approvals_user_profile', args=[obj.author_id]),
+            obj.author,
+        )
+
+    @admin.display(description='Исполнитель', ordering='executor')
+    def executor_link(self, obj):
+        if not obj.executor_id:
+            return '—'
+        return format_html(
+            '<a href="{}">{}</a>',
+            reverse('admin:approvals_user_profile', args=[obj.executor_id]),
+            obj.executor,
+        )
 
     readonly_fields = (
         'author', 'last_editor',
@@ -4399,7 +4419,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             )
         }),
         ('Статус выполнения / Результат', {
-            'fields': ('control_status_display', 'control_date_display', 'result_description')
+            'fields': ('control_status_display', 'control_date_display', 'result_description', 'comment')
         }),
         ('Системные данные', {
             'fields': (
@@ -4413,7 +4433,10 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
 
     def get_exclude(self, request, obj=None):
         excl = list(super().get_exclude(request, obj) or [])
-        for name in ('control_status', 'control_date', 'route'):
+        for name in (
+            'control_status', 'control_date', 'route',
+            'reschedule_request_reason', 'reschedule_request_date',
+        ):
             if name not in excl:
                 excl.append(name)
         return excl
@@ -4423,9 +4446,12 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if obj is not None:
             for name in (
                 "target_deadline_display",
+                "hard_deadline_display",
             ):
                 if name not in fields:
                     fields.append(name)
+            if request.user.id != obj.author_id and "comment" not in fields:
+                fields.append("comment")
         return fields
 
     def get_fieldsets(self, request, obj=None):
@@ -4434,15 +4460,21 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             return fieldsets
         rename = {
             "target_deadline": "target_deadline_display",
+            "hard_deadline": "hard_deadline_display",
         }
+        drop = {"requires_hard_deadline"}
         new_fieldsets = []
         for title, opts in fieldsets:
             opts = dict(opts)
             new_fields = []
             for f in opts.get("fields", ()):
                 if isinstance(f, (tuple, list)):
-                    new_fields.append(tuple(rename.get(x, x) for x in f))
+                    sub = tuple(rename.get(x, x) for x in f if x not in drop)
+                    if sub:
+                        new_fields.append(sub)
                 else:
+                    if f in drop:
+                        continue
                     new_fields.append(rename.get(f, f))
             opts["fields"] = tuple(new_fields)
             new_fieldsets.append((title, opts))
@@ -4468,6 +4500,10 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def target_deadline_display(self, obj):
         return self._readonly_date_input(obj.target_deadline)
 
+    @admin.display(description="Дедлайн")
+    def hard_deadline_display(self, obj):
+        return self._readonly_date_input(obj.hard_deadline)
+
     @admin.display(description="Статус выполнения / Результат")
     def control_status_display(self, obj):
         if not obj or not obj.pk or not obj.control_status:
@@ -4478,7 +4514,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def control_date_display(self, obj):
         if not obj or not obj.control_date:
             return "—"
-        return obj.control_date.strftime("%d.%m.%Y")
+        return timezone.localtime(obj.control_date).strftime("%d.%m.%Y %H:%M:%S")
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
@@ -4537,9 +4573,9 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             else:
                 if not old_status and obj.executor_id:
                     obj.control_status = WorkAssignment.STATUS_ASSIGNED
-                    obj.control_date = timezone.localdate()
+                    obj.control_date = timezone.now()
                 elif obj.control_status and obj.control_status != old_status:
-                    obj.control_date = timezone.localdate()
+                    obj.control_date = timezone.now()
                 obj.current_responsible = obj.executor
         else:
             obj.author = user
@@ -4552,7 +4588,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             else:
                 if not obj.control_status:
                     obj.control_status = WorkAssignment.STATUS_ASSIGNED
-                    obj.control_date = timezone.localdate()
+                    obj.control_date = timezone.now()
                 obj.current_responsible = obj.executor or user
 
         if obj.post_id:
@@ -4642,7 +4678,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             )
         return "—"
 
-    @admin.display(description="Просрочен абсолютный дедлайн")
+    @admin.display(description="Просрочен дедлайн")
     def overdue_hard_flag(self, obj):
         if not obj.hard_deadline:
             return "—"
@@ -4652,7 +4688,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if overdue:
             return mark_safe(
                 _admin_warning_triangle_html(
-                    title="Абсолютный дедлайн просрочен",
+                    title="Дедлайн просрочен",
                     color="#E53935",
                 )
             )
@@ -4696,12 +4732,28 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.return_view),
                 name="blog_workassignment_return",
             ),
+            path(
+                "<int:object_id>/request-reschedule/",
+                self.admin_site.admin_view(self.request_reschedule_view),
+                name="blog_workassignment_request_reschedule",
+            ),
+            path(
+                "<int:object_id>/deny-reschedule/",
+                self.admin_site.admin_view(self.deny_reschedule_view),
+                name="blog_workassignment_deny_reschedule",
+            ),
         ]
         return custom + urls
 
     @staticmethod
     def _wa_label(obj):
         return obj.wa_full_code or obj.name or (obj.task or "").strip()[:80] or str(obj)
+
+    @staticmethod
+    def _wa_result_attachments(obj):
+        from django.contrib.contenttypes.models import ContentType
+        ct = ContentType.objects.get_for_model(WorkAssignment)
+        return Attachment.objects.filter(content_type=ct, object_id=obj.pk, kind="result")
 
     def _notify_wa(self, recipient, title, text, obj):
         if not recipient:
@@ -4729,7 +4781,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if request.method != "POST":
             return back
         obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
-        obj.control_date = timezone.localdate()
+        obj.control_date = timezone.now()
         obj.current_responsible = obj.executor
         obj.last_editor = request.user
         obj.save(update_fields=[
@@ -4745,7 +4797,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         return back
 
     def submit_review_view(self, request, object_id: int):
-        from django.shortcuts import redirect, get_object_or_404
+        from django.shortcuts import render, redirect, get_object_or_404
         obj = get_object_or_404(WorkAssignment, pk=object_id)
         back = redirect("admin:approvals_cabinet")
         if request.user.id != obj.executor_id:
@@ -4754,29 +4806,64 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if obj.control_status != WorkAssignment.STATUS_IN_PROGRESS:
             messages.warning(request, "Сдать на проверку можно только задачу в работе.")
             return back
-        if request.method != "POST":
-            return back
-        obj.control_status = WorkAssignment.STATUS_REVIEW
-        obj.control_date = timezone.localdate()
-        obj.current_responsible = obj.author
-        obj.last_editor = request.user
-        obj.save(update_fields=[
-            "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
-        ])
-        self._notify_wa(
-            obj.author,
-            "Задача сдана на проверку",
-            f"«{self._wa_label(obj)}» ожидает вашей проверки.",
-            obj,
-        )
-        messages.success(request, "Задача отправлена автору на проверку.")
-        return back
+
+        if request.method == "POST":
+            form = WorkAssignmentSubmitReviewForm(request.POST, request.FILES)
+            if form.is_valid():
+                self._append_text(obj, "result_description", form.cleaned_data["result_description"])
+                obj.control_status = WorkAssignment.STATUS_REVIEW
+                obj.control_date = timezone.now()
+                obj.current_responsible = obj.author
+                obj.last_editor = request.user
+                obj.returned_for_rework = False
+                obj.save(update_fields=[
+                    "result_description", "control_status", "control_date",
+                    "current_responsible", "last_editor", "date_of_change",
+                    "returned_for_rework",
+                ])
+                for uploaded in form.cleaned_data.get("file") or []:
+                    Attachment.objects.create(content_object=obj, file=uploaded, kind="result")
+                self._notify_wa(
+                    obj.author,
+                    "Задача сдана на проверку",
+                    f"«{self._wa_label(obj)}» ожидает вашей проверки.",
+                    obj,
+                )
+                messages.success(request, "Задача отправлена автору на проверку.")
+                return back
+        else:
+            form = WorkAssignmentSubmitReviewForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "original": obj,
+            "title": "Сдать задачу на проверку",
+            "form": form,
+            "object_id": object_id,
+        }
+        return render(request, "admin/blog/workassignment/submit_review.html", context)
 
     _CLOSE_STATUS_BY_CHOICE = {
         "partial": "partial",
         "not_done": "not_done",
     }
     _RESULT_TEXT = _WA_RESULT_TEXT
+
+    @staticmethod
+    def _append_text(obj, field_name, text, label=None):
+        text = (text or "").strip()
+        if not text:
+            return
+        ts = timezone.localtime().strftime("%d.%m.%Y %H:%M")
+        header = f"{label} — {ts}" if label else ts
+        entry = f"{header}\n{text}"
+        existing = (getattr(obj, field_name) or "").strip()
+        setattr(obj, field_name, (existing + "\n\n" + entry) if existing else entry)
+
+    @classmethod
+    def _append_comment(cls, obj, text, label=None):
+        cls._append_text(obj, "comment", text, label=label)
 
     def close_view(self, request, object_id: int):
         from django.shortcuts import render, redirect, get_object_or_404
@@ -4799,7 +4886,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 else:
                     status = self._CLOSE_STATUS_BY_CHOICE[choice]
                 obj.control_status = status
-                obj.control_date = timezone.localdate()
+                obj.control_date = timezone.now()
                 obj.result = self._RESULT_TEXT.get(status)
                 obj.current_responsible = obj.author
                 obj.last_editor = request.user
@@ -4808,8 +4895,8 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                     "current_responsible", "last_editor", "date_of_change",
                 ]
                 if comment:
-                    obj.result_description = comment
-                    fields.append("result_description")
+                    self._append_comment(obj, comment, label=self._RESULT_TEXT.get(status))
+                    fields.append("comment")
                 obj.save(update_fields=fields)
                 self._notify_wa(
                     obj.executor,
@@ -4834,6 +4921,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "form": form,
             "object_id": object_id,
             "rescheduled_note": bool(obj.reschedule_count),
+            "result_attachments": self._wa_result_attachments(obj),
         }
         return render(request, "admin/blog/workassignment/close.html", context)
 
@@ -4853,12 +4941,18 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             if form.is_valid():
                 comment = form.cleaned_data.get("comment", "").strip()
                 obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
-                obj.control_date = timezone.localdate()
+                obj.control_date = timezone.now()
                 obj.current_responsible = obj.executor
                 obj.last_editor = request.user
-                obj.save(update_fields=[
+                obj.returned_for_rework = True
+                fields = [
                     "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
-                ])
+                    "returned_for_rework",
+                ]
+                if comment:
+                    self._append_comment(obj, comment, label="Отказано в приёмке (возврат на доработку)")
+                    fields.append("comment")
+                obj.save(update_fields=fields)
                 self._notify_wa(
                     obj.executor,
                     "Задача возвращена на доработку",
@@ -4878,12 +4972,23 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "title": "Вернуть задачу на доработку",
             "form": form,
             "object_id": object_id,
+            "result_attachments": self._wa_result_attachments(obj),
         }
         return render(request, "admin/blog/workassignment/return.html", context)
 
     def reschedule_view(self, request, object_id: int):
         from django.shortcuts import render, redirect, get_object_or_404
         obj = get_object_or_404(WorkAssignment, pk=object_id)
+
+        next_param = request.POST.get("next") or request.GET.get("next")
+
+        if request.user.id != obj.author_id:
+            messages.error(request, "Перенести срок может только автор рабочего задания.")
+            if next_param == "cabinet":
+                return redirect("admin:approvals_cabinet")
+            return redirect("admin:blog_workassignment_changelist")
+
+        was_pending_approval = obj.control_status == WorkAssignment.STATUS_RESCHEDULE_PENDING
 
         if request.method == "POST":
             form = RescheduleAdminForm(request.POST)
@@ -4892,6 +4997,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                     assignment = WorkAssignmentService.reschedule_deadline(
                         obj,
                         new_target_deadline=form.cleaned_data.get("new_target_deadline"),
+                        new_hard_deadline=form.cleaned_data.get("new_hard_deadline"),
                         reason=form.cleaned_data.get("reason", ""),
                         user=request.user if request.user.is_authenticated else None,
                         expected_deadline_version=form.cleaned_data["expected_deadline_version"],
@@ -4901,20 +5007,37 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 except RuntimeError as e:
                     messages.error(request, str(e))  # конфликт версий
                 else:
-                    if getattr(assignment, "_hard_deadline_reset", False):
-                        messages.warning(
-                            request,
-                            "Целевой срок перенесён. Абсолютный дедлайн сброшен — "
-                            "при необходимости назначьте его заново в карточке задания.",
+                    if was_pending_approval:
+                        assignment.control_status = WorkAssignment.STATUS_IN_PROGRESS
+                        assignment.reschedule_request_reason = ""
+                        assignment.reschedule_request_date = None
+                        assignment.current_responsible = assignment.executor
+                        assignment.control_date = timezone.now()
+                        assignment.last_editor = request.user
+                        assignment.save(update_fields=[
+                            "control_status", "reschedule_request_reason", "reschedule_request_date",
+                            "current_responsible", "control_date", "last_editor", "date_of_change",
+                        ])
+                        self._notify_wa(
+                            assignment.executor,
+                            "Перенос срока согласован",
+                            f"«{self._wa_label(assignment)}»: автор согласовал перенос срока.",
+                            assignment,
                         )
-                    else:
-                        messages.success(request, "Срок успешно перенесён.")
+                    messages.success(request, "Срок успешно перенесён.")
+                    if next_param == "cabinet":
+                        return redirect("admin:approvals_cabinet")
                     return redirect(f"../change/")
         else:
-            form = RescheduleAdminForm(initial={
-                "new_target_deadline": obj.target_deadline,
+            initial = {
+                "new_target_deadline": obj.reschedule_request_date or obj.target_deadline,
+                "requires_hard_deadline": bool(obj.hard_deadline),
+                "new_hard_deadline": obj.hard_deadline,
                 "expected_deadline_version": obj.deadline_version,
-            })
+            }
+            if was_pending_approval and obj.reschedule_request_reason:
+                initial["reason"] = obj.reschedule_request_reason
+            form = RescheduleAdminForm(initial=initial)
 
         context = {
             **self.admin_site.each_context(request),
@@ -4923,11 +5046,88 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "title": "Перенести срок",
             "form": form,
             "object_id": object_id,
-            "had_hard_deadline": bool(obj.hard_deadline),
             "has_view_permission": self.has_view_permission(request, obj),
             "has_change_permission": self.has_change_permission(request, obj),
+            "next_param": next_param,
         }
         return render(request, "admin/blog/workassignment/reschedule.html", context)
+
+    def request_reschedule_view(self, request, object_id: int):
+        from django.shortcuts import render, redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.executor_id:
+            messages.error(request, "Запросить перенос срока может только исполнитель.")
+            return back
+        if obj.control_status not in (WorkAssignment.STATUS_ASSIGNED, WorkAssignment.STATUS_IN_PROGRESS):
+            messages.warning(request, "Запросить перенос срока можно только для задачи в работе.")
+            return back
+
+        if request.method == "POST":
+            form = WorkAssignmentRescheduleRequestForm(request.POST)
+            if form.is_valid():
+                obj.control_status = WorkAssignment.STATUS_RESCHEDULE_PENDING
+                obj.reschedule_request_reason = form.cleaned_data["reason"]
+                obj.reschedule_request_date = form.cleaned_data["desired_date"]
+                obj.current_responsible = obj.author
+                obj.control_date = timezone.now()
+                obj.last_editor = request.user
+                obj.save(update_fields=[
+                    "control_status", "reschedule_request_reason", "reschedule_request_date",
+                    "current_responsible", "control_date", "last_editor", "date_of_change",
+                ])
+                self._notify_wa(
+                    obj.author,
+                    "Запрос на перенос срока",
+                    f"«{self._wa_label(obj)}»: исполнитель просит перенести срок на "
+                    f"{obj.reschedule_request_date:%d.%m.%Y}.",
+                    obj,
+                )
+                messages.success(request, "Запрос на перенос срока отправлен автору.")
+                return back
+        else:
+            form = WorkAssignmentRescheduleRequestForm(initial={"desired_date": obj.target_deadline})
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "original": obj,
+            "title": "Запрос переноса срока задачи",
+            "form": form,
+            "object_id": object_id,
+        }
+        return render(request, "admin/blog/workassignment/request_reschedule.html", context)
+
+    def deny_reschedule_view(self, request, object_id: int):
+        from django.shortcuts import redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.author_id:
+            messages.error(request, "Отказать в переносе срока может только автор рабочего задания.")
+            return back
+        if obj.control_status != WorkAssignment.STATUS_RESCHEDULE_PENDING:
+            messages.warning(request, "Эта задача не ожидает согласования переноса срока.")
+            return back
+        if request.method != "POST":
+            return back
+        obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
+        obj.reschedule_request_reason = ""
+        obj.reschedule_request_date = None
+        obj.current_responsible = obj.executor
+        obj.control_date = timezone.now()
+        obj.last_editor = request.user
+        obj.save(update_fields=[
+            "control_status", "reschedule_request_reason", "reschedule_request_date",
+            "current_responsible", "control_date", "last_editor", "date_of_change",
+        ])
+        self._notify_wa(
+            obj.executor,
+            "Отказано в переносе срока",
+            f"«{self._wa_label(obj)}»: автор отказал в переносе срока.",
+            obj,
+        )
+        messages.success(request, "В переносе срока отказано, задача возвращена исполнителю.")
+        return back
 
 @admin.register(WorkAssignmentDeadlineChange)
 class WorkAssignmentDeadlineChangeAdmin(admin.ModelAdmin):
@@ -7215,6 +7415,8 @@ class UserWithProfileForm(UserChangeForm):
     """Поля профиля сотрудника (EmployeeProfile) """
     patronymic = forms.CharField(label='Отчество', max_length=100, required=False)
     phone = forms.CharField(label='Телефон', max_length=20, required=False)
+    birth_date = forms.DateField(label='Дата рождения', required=False, widget=AdminDateWidget)
+    avatar = forms.ImageField(label='Фото', required=False)
     org_department = forms.ModelChoiceField(
         label='Структурное подразделение (Отдел)',
         queryset=Department.objects.all(),
@@ -7239,6 +7441,8 @@ class UserWithProfileForm(UserChangeForm):
         if profile:
             self.fields['patronymic'].initial = profile.patronymic
             self.fields['phone'].initial = profile.phone
+            self.fields['birth_date'].initial = profile.birth_date
+            self.fields['avatar'].initial = profile.avatar
             self.fields['org_department'].initial = profile.org_department_id
             self.fields['is_head'].initial = profile.is_head
             self.fields['position'].initial = profile.position
@@ -7274,14 +7478,14 @@ class CustomUserAdmin(BaseUserAdmin):
     form = UserWithProfileForm
 
     _PROFILE_FIELDS = (
-        'patronymic', 'phone', 'org_department',
+        'patronymic', 'phone', 'birth_date', 'avatar', 'org_department',
         'is_head', 'position', 'supervisor', 'roles_responsibilities',
     )
 
     fieldsets = (
         (None, {'fields': ('username', 'password')}),
         ('Персональные данные', {
-            'fields': ('first_name', 'last_name', 'patronymic', 'phone', 'email'),
+            'fields': ('first_name', 'last_name', 'patronymic', 'birth_date', 'phone', 'email', 'avatar'),
         }),
         ('Профиль сотрудника', {
             'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities'),
@@ -7302,6 +7506,12 @@ class CustomUserAdmin(BaseUserAdmin):
             profile, _ = EmployeeProfile.objects.get_or_create(user=obj)
             profile.patronymic = form.cleaned_data.get('patronymic', '')
             profile.phone = form.cleaned_data.get('phone', '')
+            profile.birth_date = form.cleaned_data.get('birth_date')
+            avatar = form.cleaned_data.get('avatar')
+            if avatar is False:
+                profile.avatar = None
+            elif avatar:
+                profile.avatar = avatar
             profile.org_department = form.cleaned_data.get('org_department')
             profile.is_head = form.cleaned_data.get('is_head', False)
             profile.position = form.cleaned_data.get('position', '')
@@ -7326,13 +7536,8 @@ class CustomUserAdmin(BaseUserAdmin):
     @admin.display(description='ФИО (Фамилия Имя Отчество)', ordering='last_name')
     def get_full_name_with_patronymic(self, obj):
         """Полное ФИО: Фамилия Имя Отчество из профиля."""
-        last = obj.last_name or ''
-        first = obj.first_name or ''
-        patronymic = ''
-        if hasattr(obj, 'profile') and obj.profile.patronymic:
-            patronymic = obj.profile.patronymic
-        parts = [p for p in [last, first, patronymic] if p]
-        return ' '.join(parts) if parts else obj.username
+        profile = getattr(obj, 'profile', None)
+        return profile.full_name() if profile else obj.username
 
     # оставляем для обратной совместимости, но прячем из list_display
     def get_full_name(self, obj):

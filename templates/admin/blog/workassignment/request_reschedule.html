@@ -1,0 +1,5 @@
+{% extends "admin/blog/workassignment/_action_form_base.html" %}
+{% block wa_title %}Запрос переноса срока задачи: {{ original }}{% endblock %}
+{% block wa_note %}<div class="waf-note">Задача перейдёт в статус «Согласование переноса срока» и будет ждать решения автора.</div>{% endblock %}
+{% block wa_btn_class %}cab-wa-btn--amber{% endblock %}
+{% block wa_submit_label %}Отправить запрос на перенос срока{% endblock %}

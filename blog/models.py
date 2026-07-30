@@ -1636,6 +1636,7 @@ class WorkAssignment(models.Model):
     TEMP_STATUS_CHOICES = [
         ('assigned', 'Ожидает принятия'),
         ('in_progress', 'В работе'),
+        ('reschedule_pending', 'Согласование переноса срока'),
         ('review', 'На проверке'),
         ('on_time', 'Выполнено в срок'),
         ('rescheduled', 'Выполнено с переносом сроков'),
@@ -1646,8 +1647,9 @@ class WorkAssignment(models.Model):
     STATUS_ASSIGNED = 'assigned'
     STATUS_IN_PROGRESS = 'in_progress'
     STATUS_REVIEW = 'review'
+    STATUS_RESCHEDULE_PENDING = 'reschedule_pending'
 
-    ACTIVE_STATUSES = ('assigned', 'in_progress', 'review')
+    ACTIVE_STATUSES = ('assigned', 'in_progress', 'review', 'reschedule_pending')
     TERMINAL_STATUSES = ('on_time', 'rescheduled', 'partial', 'not_done')
 
     name = models.CharField(max_length=100, unique=True, blank=True, null=True, verbose_name="Наименование")
@@ -1687,13 +1689,18 @@ class WorkAssignment(models.Model):
 
     result = models.CharField(max_length=100, choices=RESULT_CHOICES, blank=True, null=True, verbose_name="Результат")
     result_description = models.TextField(max_length=5000, blank=True, null=True, verbose_name="Описание результата")
+    comment = models.TextField(max_length=5000, blank=True, null=True, verbose_name="Комментарий автора")
+    returned_for_rework = models.BooleanField(default=False, verbose_name="Возвращена на доработку")
     route = models.ForeignKey("Route", on_delete=models.CASCADE, related_name='routes', blank=True, null=True, verbose_name="Маршрут")
 
     target_deadline = models.DateField("Целевой срок выполнения", default=timezone.localdate, null=False, blank=False)
-    hard_deadline = models.DateField("Абсолютный дедлайн", null=True, blank=True)
+    hard_deadline = models.DateField("Дедлайн", null=True, blank=True)
     time_window_start = models.DateField("Временное окно: с", null=True, blank=True)
     time_window_end = models.DateField("Временное окно: по", null=True, blank=True)
     conditional_deadline = models.CharField("Условия/ограничения", max_length=1000, blank=True)
+
+    reschedule_request_reason = models.TextField("Причина запроса переноса срока", blank=True, default="")
+    reschedule_request_date = models.DateField("Желаемая дата выполнения", null=True, blank=True)
 
     version_diff = models.TextField(
         "Сравнение версий",
@@ -1707,7 +1714,7 @@ class WorkAssignment(models.Model):
         blank=True,
         choices=TEMP_STATUS_CHOICES,
     )
-    control_date = models.DateField("Дата фиксации статуса", null=True, blank=True)
+    control_date = models.DateTimeField("Дата фиксации статуса", null=True, blank=True)
 
     def clean(self):
         super().clean()
@@ -1958,14 +1965,14 @@ class WorkAssignmentDeadlineChange(models.Model):
     )
 
     # что было
-    old_target_deadline = models.DateField(null=True, blank=True, verbose_name="старый целевой дедлайн")
-    old_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="старый абсолютный дедлайн")
+    old_target_deadline = models.DateField(null=True, blank=True, verbose_name="старый целевой срок")
+    old_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="старый дедлайн")
     old_time_window_start = models.DateField(null=True, blank=True, verbose_name="старое временное окно с")
     old_time_window_end   = models.DateField(null=True, blank=True, verbose_name="старое временное окно по")
 
     # что стало
-    new_target_deadline = models.DateField(null=True, blank=True, verbose_name="новый целевой дедлайн")
-    new_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="новый абсолютный дедлайн")
+    new_target_deadline = models.DateField(null=True, blank=True, verbose_name="новый целевой срок")
+    new_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="новый дедлайн")
     new_time_window_start = models.DateField(null=True, blank=True, verbose_name="новое временное окно с")
     new_time_window_end   = models.DateField(null=True, blank=True, verbose_name="новое временное окно по")
 
@@ -2216,6 +2223,10 @@ class Attachment(models.Model):
     content_object = GenericForeignKey("content_type", "object_id")
 
     file = models.FileField(upload_to="attachments/")
+    kind = models.CharField(max_length=20, blank=True, default="")
+
+    def __str__(self):
+        return self.file.name.rsplit("/", 1)[-1] if self.file else f"Вложение {self.pk}"
 
 
 class RKDDeveloper(models.Model):

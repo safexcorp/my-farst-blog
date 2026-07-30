@@ -1,0 +1,10 @@
+{% extends "admin/blog/workassignment/_action_form_base.html" %}
+{% block wa_title %}Сдать задачу на проверку: {{ original }}{% endblock %}
+{% block wa_note %}
+<div class="waf-note" style="background:rgba(0,172,193,.10);border-left-color:#00ACC1;">
+  Задача уйдёт автору на проверку в статус «На проверке».
+</div>
+{% endblock %}
+{% block wa_form_attrs %}enctype="multipart/form-data"{% endblock %}
+{% block wa_btn_class %}cab-wa-btn--cyan{% endblock %}
+{% block wa_submit_label %}Сдать на проверку{% endblock %}
