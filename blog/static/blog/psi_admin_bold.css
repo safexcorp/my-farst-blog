@@ -1,6 +1,8 @@
 /* Пункты 3 и 4 (сопротивление и прочность изоляции) —
    жирные подписи полей на странице редактирования протокола ПСИ. */
-.field-insulation_res label,
+.field-insulation_res label {
+    font-weight: 700 !important;
+}
 .field-insulation_strength label {
     font-weight: 700 !important;
 }
