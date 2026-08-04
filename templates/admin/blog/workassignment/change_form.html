@@ -2,6 +2,7 @@
 {% load i18n admin_urls %}
 
 {% block submit_buttons_bottom %}
+{% if has_change_permission %}
 <div class="submit-row">
   <input type="submit" value="Сохранить и отправить исполнителю" class="default" name="_save">
   {% if not original or not original.executor_id %}
@@ -12,15 +13,22 @@
     <a href="{% url opts|admin_urlname:'changelist' %}" class="closelink">{% translate 'Close' %}</a>
   {% endif %}
 </div>
+{% else %}
+<div class="submit-row">
+  <a href="{% url opts|admin_urlname:'changelist' %}" class="closelink">{% translate 'Close' %}</a>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block object-tools-items %}
   {{ block.super }}
+  {% if has_change_permission %}
   <li>
     <a id="reschedule-link" href="{% url 'admin:blog_workassignment_reschedule' original.pk %}">
       Перенести срок
     </a>
   </li>
+  {% endif %}
 {% endblock %}
 
 {% block extrahead %}

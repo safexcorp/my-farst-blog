@@ -3,11 +3,17 @@
 {% block wa_result %}
 <div class="waf-task">
   Описание результата: {% if original.result_description %}{{ original.result_description|linebreaksbr }}{% endif %}
-  <br>Файлы:
+  <br>Файлы, приложенные к результату:
   {% if result_attachments %}
     {% for a in result_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
   {% else %}
-    Прикреплённых файлов нет
+    нет
+  {% endif %}
+  <br>Файлы приложенные к заданию:
+  {% if task_attachments %}
+    {% for a in task_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+  {% else %}
+    нет
   {% endif %}
 </div>
 {% endblock %}

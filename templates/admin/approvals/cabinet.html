@@ -78,9 +78,16 @@
   .cab-card .subtitle { font-size:13px; color:var(--body-quiet-color,#aaa); margin-top:2px; }
   .cab-card .meta { font-size:12px; color:var(--body-quiet-color,#999); margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .cab-card .note { font-size:12px; margin-top:6px; padding:6px 10px; border-radius:6px; background:rgba(229,57,53,.10); }
+  .cab-card .note--orange { background:rgba(244,151,142,.16); }
   .cab-archive-note {
     font-size:12px; color:var(--body-quiet-color,#999); margin-bottom:10px;
     padding:6px 10px; border-radius:6px; background:rgba(121,174,200,.08); border-left:3px solid #79aec8;
+  }
+
+  .cab-card--urgent {
+    border-color:#E53935; border-left-width:4px;
+    background:rgba(229,57,53,.06);
+    box-shadow:0 0 0 1px rgba(229,57,53,.20);
   }
 
   .pill { border-radius:12px; padding:2px 10px; font-size:11px; font-weight:600; color:#fff; display:inline-block; }
@@ -90,6 +97,9 @@
   .pill-type { background:#607D8B; }
   .pill-amber { background:#FFA000; } .pill-cyan { background:#00ACC1; }
   .pill-red { background:#E53935; }
+  .pill-peach { background:#F4978E; }
+  .pill-urgent { background:#E53935; margin-right:6px; animation:cab-urgent-pulse 1.8s ease-in-out infinite; }
+  @keyframes cab-urgent-pulse { 0%,100% { opacity:1; } 50% { opacity:.65; } }
 
   .cab-actions { display:flex; gap:8px; flex-wrap:wrap; }
   .cab-actions--col { flex-direction:column; align-items:stretch; }
@@ -162,6 +172,11 @@
     border-color:rgba(76,175,80,.45);
   }
   .cab-wa-btn--green:hover { background:rgba(76,175,80,.22); }
+  .cab-wa-btn--red {
+    color:#c62828; background:rgba(229,57,53,.12);
+    border-color:rgba(229,57,53,.45);
+  }
+  .cab-wa-btn--red:hover { background:rgba(229,57,53,.22); }
   .cab-wa-btn--outline {
     color:#417690; background:transparent;
     border-color:rgba(65,118,144,.55);
@@ -558,7 +573,7 @@
       <div class="cab-archive-note">Показаны только последние 30 завершённых задач</div>
       {% endif %}
       {% for wa in g.items %}
-      <div class="cab-card">
+      <div class="cab-card{% if wa.is_urgent %} cab-card--urgent{% endif %}">
         <div class="cab-info">
           <div class="title">
             {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
@@ -572,8 +587,9 @@
             {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
             {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
             {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
-            {% elif wa.returned_for_rework %}<span class="pill pill-red">Возвращена на доработку</span>
             {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
+            {% if wa.returned_for_rework and wa.control_status == "in_progress" %}<span class="pill pill-peach">Возвращена на доработку</span>{% endif %}
+            {% if wa.is_urgent %}<span class="pill pill-urgent">🔥 Срочно</span>{% endif %}
           </div>
           {% if wa.post %}
           <div class="meta">Связанная разработка/проект - {{ wa.post }}</div>
@@ -591,12 +607,15 @@
           {% endif %}
           {% if wa.wa_attachments %}
           <div class="meta">
-            Файлы:
+            Файлы, приложенные к заданию:
             {% for a in wa.wa_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
           </div>
           {% endif %}
           {% if wa.returned_for_rework and wa.comment %}
-          <div class="note">Комментарий автора: {{ wa.comment|linebreaksbr }}</div>
+          <div class="note note--orange">Комментарий автора: {{ wa.comment|linebreaksbr }}</div>
+          {% endif %}
+          {% if wa.author %}
+          <div class="meta">Автор: <strong><a href="{% url 'admin:approvals_user_profile' wa.author_id %}">{{ wa.author }}</a></strong></div>
           {% endif %}
         </div>
         <div class="cab-actions cab-actions--col">
@@ -686,7 +705,7 @@
       <div class="cab-archive-note">Показаны только последние 30 завершённых задач</div>
       {% endif %}
       {% for wa in g.items %}
-      <div class="cab-card">
+      <div class="cab-card{% if wa.is_urgent %} cab-card--urgent{% endif %}">
         <div class="cab-info">
           <div class="title">
             {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
@@ -700,8 +719,9 @@
             {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
             {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
             {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
-            {% elif wa.returned_for_rework %}<span class="pill pill-red">Возвращена на доработку</span>
             {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
+            {% if wa.returned_for_rework and wa.control_status == "in_progress" %}<span class="pill pill-peach">Возвращена на доработку</span>{% endif %}
+            {% if wa.is_urgent %}<span class="pill pill-urgent">🔥 Срочно</span>{% endif %}
             {% if wa.executor %}
               Исполнитель: <strong><a href="{% url 'admin:approvals_user_profile' wa.executor_id %}">{{ wa.executor }}</a></strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
             {% endif %}
@@ -728,8 +748,14 @@
           {% endif %}
           {% if wa.control_status == "review" and wa.review_attachments %}
           <div class="meta">
-            Файлы:
+            Файлы, приложенные к результату:
             {% for a in wa.review_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+          </div>
+          {% endif %}
+          {% if wa.control_status == "review" and wa.review_task_attachments %}
+          <div class="meta">
+            Файлы, приложенные к заданию:
+            {% for a in wa.review_task_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
           </div>
           {% endif %}
           {% if wa.control_status == "reschedule_pending" %}
@@ -745,6 +771,11 @@
           <a class="cab-wa-btn cab-wa-btn--green" href="{% url 'admin:blog_workassignment_reschedule' wa.pk %}?next=cabinet">Согласовать перенос срока</a>
           <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_deny_reschedule' wa.pk %}">
             {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--outline">Отказать</button>
+          </form>
+          {% endif %}
+          {% if wa.control_status == "assigned" or wa.control_status == "in_progress" or not wa.control_status %}
+          <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_toggle_urgent' wa.pk %}">
+            {% csrf_token %}<button type="submit" class="cab-wa-btn {% if wa.is_urgent %}cab-wa-btn--outline{% else %}cab-wa-btn--cyan{% endif %}">{% if wa.is_urgent %}Снять повышенный приоритет{% else %}🔥 Повысить приоритет{% endif %}</button>
           </form>
           {% endif %}
           <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть карточку задания</a>
