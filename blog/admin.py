@@ -6924,14 +6924,34 @@ class DocumentHistoryInline(admin.TabularInline):
     verbose_name = "Запись истории"
     verbose_name_plural = "История изменений"
 
+class ShipmentSelect(forms.Select):
+    """Выпадающий список «Изделие к отгрузке»: синим цветом подсвечивает
+    заводские номера, на которые ещё нет Протокола ПСИ (задача по ПСИ ИБП СПМ)."""
+
+    no_psi_ids = frozenset()
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs
+        )
+        # value для реальных пунктов — ModelChoiceIteratorValue (pk в .value),
+        # для «---------» — пустая строка.
+        raw = getattr(value, "value", value)
+        if raw not in ("", None) and raw in self.no_psi_ids:
+            option["attrs"]["style"] = "color: #1a56db;"
+            option["attrs"]["data-no-psi"] = "1"
+        return option
+
+
 class PSIDocumentForm(forms.ModelForm):
     # Группа разработок, с которой работает эта сущность (см. лист замечаний 21.07.2026).
     PRODUCT_GROUP_NAME = "ИБП СПМ"
 
     # Сопротивление изоляции вводим как текст: полный контроль над разделителем
     # (только запятая) и над округлением, чтобы «1» не превращалось в «0.96».
+    # Поле необязательное: пусто → статус «нет данных» (лист замечаний по ПСИ ИБП СПМ).
     insulation_res_value = forms.CharField(
-        required=True,
+        required=False,
         label="Фактическое значение сопротивления изоляции, МОм",
         help_text=(
             "Введите измеренное значение в МОм. Статус устанавливается автоматически: при ≥ 1 МОм - Соответствует; при < 1 МОм - Не соответствует. "
@@ -6985,20 +7005,39 @@ class PSIDocumentForm(forms.ModelForm):
 
         # «Изделие к отгрузке» — только отгрузки выбранной разработки.
         if 'shipment' in self.fields:
+            field = self.fields['shipment']
+            # Свой виджет: синим подсвечивает изделия без Протокола ПСИ.
+            # Меняем виджет ДО присвоения queryset, чтобы choices попали в него.
+            field.widget = ShipmentSelect(attrs=field.widget.attrs)
+            field.widget.is_required = field.required
+            field.help_text = (
+                "Выбрать через функцию «Сохранить и продолжить редактирование»"
+            )
+
             selected_post = None
             if self.is_bound:
                 selected_post = self.data.get(self.add_prefix('post')) or None
             elif getattr(self.instance, 'post_id', None):
                 selected_post = self.instance.post_id
             if selected_post:
-                self.fields['shipment'].queryset = Shipment.objects.filter(
+                qs = Shipment.objects.filter(
                     post_id=selected_post
                 ).order_by('serial_number')
             else:
                 # До выбора разработки список ограничен изделиями группы «ИБП СПМ».
-                self.fields['shipment'].queryset = Shipment.objects.filter(
+                qs = Shipment.objects.filter(
                     post__product_group__name=self.PRODUCT_GROUP_NAME
                 ).order_by('serial_number')
+            # Присвоение queryset пробрасывает choices в новый виджет.
+            field.queryset = qs
+
+            # Заводские номера без Протокола ПСИ — для синей подсветки.
+            ship_ids = list(qs.values_list('pk', flat=True))
+            with_psi = set(
+                PSIDocument.objects.filter(shipment_id__in=ship_ids)
+                .values_list('shipment_id', flat=True)
+            )
+            field.widget.no_psi_ids = frozenset(set(ship_ids) - with_psi)
 
     def clean_insulation_res_value(self):
         from decimal import Decimal, InvalidOperation
@@ -7132,13 +7171,24 @@ class PSIDocumentAdmin(admin.ModelAdmin):
         return custom + urls
 
     def shipments_for_post_view(self, request):
-        """JSON-список изделий к отгрузке для выбранной разработки (каскад)."""
+        """JSON-список изделий к отгрузке для выбранной разработки (каскад).
+        Флаг no_psi=true → на изделие ещё нет Протокола ПСИ (синяя подсветка)."""
         from django.http import JsonResponse
         post_id = request.GET.get('post_id')
         results = []
         if post_id:
-            qs = Shipment.objects.filter(post_id=post_id).order_by('serial_number')
-            results = [{'id': s.pk, 'text': str(s)} for s in qs]
+            shipments = list(
+                Shipment.objects.filter(post_id=post_id).order_by('serial_number')
+            )
+            ship_ids = [s.pk for s in shipments]
+            with_psi = set(
+                PSIDocument.objects.filter(shipment_id__in=ship_ids)
+                .values_list('shipment_id', flat=True)
+            )
+            results = [
+                {'id': s.pk, 'text': str(s), 'no_psi': s.pk not in with_psi}
+                for s in shipments
+            ]
         return JsonResponse({'results': results})
 
     def get_form(self, request, obj=None, **kwargs):
@@ -7254,11 +7304,20 @@ class PSIDocumentAdmin(admin.ModelAdmin):
     display_files_list.short_description = 'Файлы PDF'
 
     def save_model(self, request, obj, form, change):
-        """Сохранение с логированием и автогенерацией PDF при изменениях."""
+        """Сохранение с логированием и автогенерацией PDF при изменениях.
+
+        PDF формируется ТОЛЬКО по кнопке «Сохранить» (и «Сохранить и добавить
+        другой»), но не по «Сохранить и продолжить редактирование» (_continue).
+        Изменения, внесённые при промежуточных сохранениях, копятся в сессии
+        (без изменения схемы БД) и попадают в PDF при финальном «Сохранить»."""
         is_new = obj.pk is None
 
         # Определяем были ли реальные изменения (для существующих объектов)
         has_changes = is_new or bool(form.changed_data)
+
+        # Кнопка «Сохранить и продолжить редактирование» присылает _continue.
+        # По ней PDF не генерируем — только сохраняем данные.
+        is_continue = '_continue' in request.POST
 
         # Автор / последний редактор проставляются автоматически (поля readonly).
         if request.user.is_authenticated:
@@ -7300,18 +7359,45 @@ class PSIDocumentAdmin(admin.ModelAdmin):
             action=action_text[:255]
         )
 
-        # Автогенерация PDF при создании или изменении
-        if has_changes:
+        # --- Генерация PDF по кнопке ---
+        # PDF формируем ТОЛЬКО по финальному «Сохранить» (или «Сохранить и
+        # добавить другой»), но не по «Сохранить и продолжить редактирование».
+        # Признак «есть изменения без PDF» копим в сессии по id протокола, чтобы
+        # правки из промежуточных сохранений попали в PDF при финальном «Сохранить»
+        # (form.changed_data к тому моменту уже пустой). Схему БД не трогаем.
+        session_key = 'psi_pdf_pending_ids'
+        pending_ids = request.session.get(session_key, [])
+        obj_key = str(obj.pk)
+
+        if has_changes and obj_key not in pending_ids:
+            pending_ids.append(obj_key)
+
+        if is_continue:
+            # Промежуточное сохранение — PDF не создаём, изменения запоминаем.
+            if has_changes:
+                self.message_user(
+                    request,
+                    "💾 Изменения сохранены. Новый PDF будет сформирован "
+                    "при нажатии «Сохранить».",
+                    level='info'
+                )
+        elif obj_key in pending_ids:
+            # Финальное «Сохранить»: есть накопленные изменения → формируем PDF.
             try:
                 from blog.utils import generate_pdf_logic
                 generate_pdf_logic(obj, request.user)
+                pending_ids = [i for i in pending_ids if i != obj_key]
                 self.message_user(request, "✅ PDF протокол автоматически сгенерирован.")
             except Exception as e:
+                # При ошибке отметку не снимаем — повторим при следующем «Сохранить».
                 self.message_user(
                     request,
                     f"⚠️ Протокол сохранён, но PDF не удалось сгенерировать: {e}",
                     level='warning'
                 )
+
+        request.session[session_key] = pending_ids
+        request.session.modified = True
 
     def get_queryset(self, request):
         """Оптимизация запросов"""

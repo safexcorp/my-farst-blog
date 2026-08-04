@@ -60,6 +60,11 @@
                         var option = document.createElement("option");
                         option.value = item.id;
                         option.textContent = item.text;
+                        // Синим подсвечиваем изделия без Протокола ПСИ.
+                        if (item.no_psi) {
+                            option.style.color = "#1a56db";
+                            option.setAttribute("data-no-psi", "1");
+                        }
                         shipmentSelect.appendChild(option);
                     });
                 })
