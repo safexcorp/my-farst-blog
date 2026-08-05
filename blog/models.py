@@ -1660,6 +1660,7 @@ class WorkAssignment(models.Model):
         verbose_name="Порядковый номер в рамках разработки",
     )
     category = models.CharField(max_length=100, default="РЗ", verbose_name="Категория")
+    is_urgent = models.BooleanField(default=False, verbose_name="Срочно?")
     executor = models.ForeignKey(User, on_delete=models.CASCADE, null= True, related_name= "executed_workassignments", verbose_name="Исполнитель")
     post = models.ForeignKey('Post', on_delete=models.CASCADE, null=True, blank=True, related_name='work_assignments', verbose_name="Связанная разработка/проект")
     author = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Автор")

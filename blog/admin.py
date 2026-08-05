@@ -344,6 +344,24 @@ class WorkAssignmentAttachmentInline(AttachmentInline):
     verbose_name = "файл"
     verbose_name_plural = "Вложения"
 
+    def _wa_locked(self, obj):
+        return obj is not None and obj.control_status in WorkAssignment.TERMINAL_STATUSES
+
+    def has_add_permission(self, request, obj=None):
+        if self._wa_locked(obj):
+            return False
+        return super().has_add_permission(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        if self._wa_locked(obj):
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if self._wa_locked(obj):
+            return False
+        return super().has_delete_permission(request, obj)
+
 
 def _tp_docs_section_header(title: str):
     return mark_safe(
@@ -4089,6 +4107,16 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         return False
 
+    def has_change_permission(self, request, obj=None):
+        if obj is not None and obj.control_status in WorkAssignment.TERMINAL_STATUSES:
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and obj.control_status in WorkAssignment.TERMINAL_STATUSES:
+            return False
+        return super().has_delete_permission(request, obj)
+
     @admin.display(description="РЗ")
     def parent_rz_display(self, obj):
         wa = getattr(obj, "work_assignment", None)
@@ -4239,6 +4267,12 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
             return WorkAssignment.objects.get(pk=wa_id)
         except (WorkAssignment.DoesNotExist, ValueError, TypeError):
             return None
+
+    def has_change_permission(self, request, obj=None):
+        parent = self._get_parent_wa(request, obj)
+        if parent is not None and parent.control_status in WorkAssignment.TERMINAL_STATUSES:
+            return False
+        return super().has_change_permission(request, obj)
 
     def get_fieldsets(self, request, obj=None):
         fieldsets = super().get_fieldsets(request, obj)
@@ -4407,6 +4441,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         ('Основная информация', {
             'fields': (
                 'name', 'executor', 'category', 'post',
+                'is_urgent',
                 'task', 'acceptance_criteria',
             )
         }),
@@ -4452,7 +4487,14 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                     fields.append(name)
             if request.user.id != obj.author_id and "comment" not in fields:
                 fields.append("comment")
+            if request.user.id != obj.author_id and "is_urgent" not in fields:
+                fields.append("is_urgent")
         return fields
+
+    def has_change_permission(self, request, obj=None):
+        if obj is not None and obj.control_status in WorkAssignment.TERMINAL_STATUSES:
+            return False
+        return super().has_change_permission(request, obj)
 
     def get_fieldsets(self, request, obj=None):
         fieldsets = super().get_fieldsets(request, obj)
@@ -4742,6 +4784,11 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.deny_reschedule_view),
                 name="blog_workassignment_deny_reschedule",
             ),
+            path(
+                "<int:object_id>/toggle-urgent/",
+                self.admin_site.admin_view(self.toggle_urgent_view),
+                name="blog_workassignment_toggle_urgent",
+            ),
         ]
         return custom + urls
 
@@ -4754,6 +4801,12 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         from django.contrib.contenttypes.models import ContentType
         ct = ContentType.objects.get_for_model(WorkAssignment)
         return Attachment.objects.filter(content_type=ct, object_id=obj.pk, kind="result")
+
+    @staticmethod
+    def _wa_task_attachments(obj):
+        from django.contrib.contenttypes.models import ContentType
+        ct = ContentType.objects.get_for_model(WorkAssignment)
+        return Attachment.objects.filter(content_type=ct, object_id=obj.pk).exclude(kind="result")
 
     def _notify_wa(self, recipient, title, text, obj):
         if not recipient:
@@ -4794,6 +4847,32 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             obj,
         )
         messages.success(request, "Задача принята в работу.")
+        return back
+
+    def toggle_urgent_view(self, request, object_id: int):
+        from django.shortcuts import redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.author_id:
+            messages.error(request, "Повысить приоритет задачи может только её автор.")
+            return back
+        if obj.control_status not in (WorkAssignment.STATUS_ASSIGNED, WorkAssignment.STATUS_IN_PROGRESS):
+            messages.warning(request, "Повысить приоритет можно, пока задача ожидает принятия или в работе.")
+            return back
+        if request.method != "POST":
+            return back
+        obj.is_urgent = not obj.is_urgent
+        obj.save(update_fields=["is_urgent"])
+        if obj.is_urgent:
+            self._notify_wa(
+                obj.executor,
+                "Приоритет задачи повышен",
+                f"«{self._wa_label(obj)}» отмечена автором как срочная.",
+                obj,
+            )
+            messages.success(request, "Приоритет задачи повышен.")
+        else:
+            messages.success(request, "Повышенный приоритет снят.")
         return back
 
     def submit_review_view(self, request, object_id: int):
@@ -4922,6 +5001,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "object_id": object_id,
             "rescheduled_note": bool(obj.reschedule_count),
             "result_attachments": self._wa_result_attachments(obj),
+            "task_attachments": self._wa_task_attachments(obj),
         }
         return render(request, "admin/blog/workassignment/close.html", context)
 
@@ -4973,6 +5053,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "form": form,
             "object_id": object_id,
             "result_attachments": self._wa_result_attachments(obj),
+            "task_attachments": self._wa_task_attachments(obj),
         }
         return render(request, "admin/blog/workassignment/return.html", context)
 

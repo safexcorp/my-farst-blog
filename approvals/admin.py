@@ -207,6 +207,8 @@ def _group_work_by_status(items):
         else:
             key = "in_progress"
         buckets[key].append(item)
+    for key in ("assigned", "in_progress"):
+        buckets[key].sort(key=lambda wa: not wa.is_urgent)
     return [
         {
             "key": key,
@@ -1000,10 +1002,15 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
 
             ct = ContentType.objects.get_for_model(WorkAssignment)
             attachments_by_wa = {}
-            for a in Attachment.objects.filter(content_type=ct, object_id__in=review_ids, kind="result"):
-                attachments_by_wa.setdefault(a.object_id, []).append(a)
+            task_attachments_by_wa = {}
+            for a in Attachment.objects.filter(content_type=ct, object_id__in=review_ids):
+                if a.kind == "result":
+                    attachments_by_wa.setdefault(a.object_id, []).append(a)
+                else:
+                    task_attachments_by_wa.setdefault(a.object_id, []).append(a)
             for wa in issued_work:
                 wa.review_attachments = attachments_by_wa.get(wa.pk, [])
+                wa.review_task_attachments = task_attachments_by_wa.get(wa.pk, [])
 
         my_subtasks = list(
             WorkAssignmentSubtask.objects
