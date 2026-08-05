@@ -132,6 +132,58 @@
     })();
 
     document.addEventListener("DOMContentLoaded", function () {
+      // Вложения к заданию — тот же приём «+ добавить ещё файл», что и на
+      // страницах «Сдать на проверку»/«Вернуть на доработку»: несколько
+      // однофайловых input'ов с одинаковым name, вместо системного
+      // мультивыбора в одном input[multiple]. Кнопка — блочная, отдельной
+      // строкой под полями, не сбоку.
+      var input = document.getElementById("id_attachments");
+      if (input) {
+        var fieldName = input.name;
+        input.removeAttribute("multiple");
+        var list = document.createElement("div");
+        input.parentNode.insertBefore(list, input);
+
+        function addRow(existingInput) {
+          var row = document.createElement("div");
+          row.style.marginBottom = "6px";
+          var fileInput = existingInput || document.createElement("input");
+          if (!existingInput) {
+            fileInput.type = "file";
+            fileInput.name = fieldName;
+          }
+          row.appendChild(fileInput);
+          if (!existingInput) {
+            var removeBtn = document.createElement("a");
+            removeBtn.href = "#";
+            removeBtn.className = "deletelink";
+            removeBtn.style.marginLeft = "10px";
+            removeBtn.addEventListener("click", function (e) {
+              e.preventDefault();
+              row.remove();
+            });
+            row.appendChild(removeBtn);
+          }
+          list.appendChild(row);
+        }
+
+        addRow(input);
+
+        var addBtn = document.createElement("a");
+        addBtn.href = "#";
+        addBtn.className = "addlink";
+        addBtn.style.display = "block";
+        addBtn.style.marginTop = "4px";
+        addBtn.textContent = "Добавить ещё файл";
+        addBtn.addEventListener("click", function (e) {
+          e.preventDefault();
+          addRow();
+        });
+        list.after(addBtn);
+      }
+    });
+
+    document.addEventListener("DOMContentLoaded", function () {
       var form =
         document.querySelector("#workassignment_form") ||
         document.querySelector("#content-main form");

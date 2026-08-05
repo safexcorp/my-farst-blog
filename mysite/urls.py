@@ -26,6 +26,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import login
 from django.conf import settings
 from django.conf.urls.static import static
+from django.views.generic.base import RedirectView
 
 def register(request):
     if request.method == 'POST':
@@ -39,6 +40,7 @@ def register(request):
     return render(request, 'registration/register.html', {'form': form})
 
 urlpatterns = [
+    path('', RedirectView.as_view(url='/admin/', permanent=False)),
     path(
         "crm/api/decision-makers-by-customer/",
         decision_makers_by_customer_json,

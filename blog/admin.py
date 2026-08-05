@@ -6,7 +6,7 @@ from django.shortcuts import redirect, render
 from django.urls import path, reverse
 from django.utils import timezone
 from datetime import timedelta
-from django.utils.html import escape, format_html
+from django.utils.html import escape, format_html, format_html_join
 from django.template.defaultfilters import linebreaksbr
 from django.utils.safestring import mark_safe
 import re
@@ -338,29 +338,6 @@ class AttachmentInline(GenericTabularInline):
     formset = RequiredFileGenericFormSet
     extra = 1
     fields = ("file",)
-
-
-class WorkAssignmentAttachmentInline(AttachmentInline):
-    verbose_name = "файл"
-    verbose_name_plural = "Вложения"
-
-    def _wa_locked(self, obj):
-        return obj is not None and obj.control_status in WorkAssignment.TERMINAL_STATUSES
-
-    def has_add_permission(self, request, obj=None):
-        if self._wa_locked(obj):
-            return False
-        return super().has_add_permission(request, obj)
-
-    def has_change_permission(self, request, obj=None):
-        if self._wa_locked(obj):
-            return False
-        return super().has_change_permission(request, obj)
-
-    def has_delete_permission(self, request, obj=None):
-        if self._wa_locked(obj):
-            return False
-        return super().has_delete_permission(request, obj)
 
 
 def _tp_docs_section_header(title: str):
@@ -4398,7 +4375,6 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     search_fields = (
         'name',
         'author__username',
-        'current_responsible__username',
         'post__wa_code',
     )
     list_filter = ('control_status', WorkAssignmentDraftFilter, OverdueFilter)
@@ -4433,9 +4409,11 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         'version', 'version_diff_display',
         'deadline_version', 'reschedule_count',
         'control_status_display', 'control_date_display',
+        'task_attachments_display', 'result_attachments_display',
+        'result_description_display', 'comment_display',
     )
 
-    inlines = [DeadlineChangeInline, WorkAssignmentSubtaskInline, WorkAssignmentAttachmentInline]
+    inlines = [DeadlineChangeInline, WorkAssignmentSubtaskInline]
 
     fieldsets = (
         ('Основная информация', {
@@ -4443,6 +4421,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 'name', 'executor', 'category', 'post',
                 'is_urgent',
                 'task', 'acceptance_criteria',
+                'task_attachments_display', 'attachments',
             )
         }),
         ('Сроки (изменять через «Перенести срок»)', {
@@ -4454,11 +4433,15 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             )
         }),
         ('Статус выполнения / Результат', {
-            'fields': ('control_status_display', 'control_date_display', 'result_description', 'comment')
+            'fields': (
+                'control_status_display', 'control_date_display',
+                'result_description_display', 'comment_display',
+                'result_attachments_display',
+            )
         }),
         ('Системные данные', {
             'fields': (
-                'author', 'last_editor', 'current_responsible',
+                'author', 'last_editor',
                 'version', 'version_diff_display',
                 'date_of_creation', 'date_of_change',
                 'deadline_version', 'reschedule_count',
@@ -4471,6 +4454,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         for name in (
             'control_status', 'control_date', 'route',
             'reschedule_request_reason', 'reschedule_request_date',
+            'result_description', 'comment',
         ):
             if name not in excl:
                 excl.append(name)
@@ -4485,8 +4469,6 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             ):
                 if name not in fields:
                     fields.append(name)
-            if request.user.id != obj.author_id and "comment" not in fields:
-                fields.append("comment")
             if request.user.id != obj.author_id and "is_urgent" not in fields:
                 fields.append("is_urgent")
         return fields
@@ -4611,14 +4593,12 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.executor = None
                 obj.control_status = None
                 obj.control_date = None
-                obj.current_responsible = user
             else:
                 if not old_status and obj.executor_id:
                     obj.control_status = WorkAssignment.STATUS_ASSIGNED
                     obj.control_date = timezone.now()
                 elif obj.control_status and obj.control_status != old_status:
                     obj.control_date = timezone.now()
-                obj.current_responsible = obj.executor
         else:
             obj.author = user
             obj.last_editor = user
@@ -4626,12 +4606,10 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.executor = None
                 obj.control_status = None
                 obj.control_date = None
-                obj.current_responsible = user
             else:
                 if not obj.control_status:
                     obj.control_status = WorkAssignment.STATUS_ASSIGNED
                     obj.control_date = timezone.now()
-                obj.current_responsible = obj.executor or user
 
         if obj.post_id:
             from .helpers import assign_wa_code_to_post, next_wa_number_for_post
@@ -4640,6 +4618,9 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.wa_number = next_wa_number_for_post(obj.post, exclude_pk=obj.pk)
 
         super().save_model(request, obj, form, change)
+
+        for uploaded in form.cleaned_data.get("attachments") or []:
+            Attachment.objects.create(content_object=obj, file=uploaded, kind="")
 
         if (
             not is_draft
@@ -4808,6 +4789,40 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         ct = ContentType.objects.get_for_model(WorkAssignment)
         return Attachment.objects.filter(content_type=ct, object_id=obj.pk).exclude(kind="result")
 
+    @staticmethod
+    def _attachments_links(files):
+        if not files:
+            return "—"
+        return format_html_join(
+            ", ",
+            '<a href="{}" target="_blank">{}</a>',
+            ((a.file.url, a.file.name.rsplit("/", 1)[-1]) for a in files),
+        )
+
+    @admin.display(description="Уже загруженные файлы")
+    def task_attachments_display(self, obj):
+        if obj is None or not obj.pk:
+            return "—"
+        return self._attachments_links(self._wa_task_attachments(obj))
+
+    @admin.display(description="Загруженные файлы к результату")
+    def result_attachments_display(self, obj):
+        if obj is None or not obj.pk:
+            return "—"
+        return self._attachments_links(self._wa_result_attachments(obj))
+
+    @admin.display(description="Описание результата")
+    def result_description_display(self, obj):
+        if obj is None or not obj.result_description:
+            return "—"
+        return linebreaksbr(obj.result_description)
+
+    @admin.display(description="Комментарий автора")
+    def comment_display(self, obj):
+        if obj is None or not obj.comment:
+            return "—"
+        return linebreaksbr(obj.comment)
+
     def _notify_wa(self, recipient, title, text, obj):
         if not recipient:
             return
@@ -4835,10 +4850,9 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             return back
         obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
         obj.control_date = timezone.now()
-        obj.current_responsible = obj.executor
         obj.last_editor = request.user
         obj.save(update_fields=[
-            "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
+            "control_status", "control_date", "last_editor", "date_of_change",
         ])
         self._notify_wa(
             obj.author,
@@ -4892,12 +4906,11 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 self._append_text(obj, "result_description", form.cleaned_data["result_description"])
                 obj.control_status = WorkAssignment.STATUS_REVIEW
                 obj.control_date = timezone.now()
-                obj.current_responsible = obj.author
                 obj.last_editor = request.user
                 obj.returned_for_rework = False
                 obj.save(update_fields=[
                     "result_description", "control_status", "control_date",
-                    "current_responsible", "last_editor", "date_of_change",
+                    "last_editor", "date_of_change",
                     "returned_for_rework",
                 ])
                 for uploaded in form.cleaned_data.get("file") or []:
@@ -4967,11 +4980,10 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.control_status = status
                 obj.control_date = timezone.now()
                 obj.result = self._RESULT_TEXT.get(status)
-                obj.current_responsible = obj.author
                 obj.last_editor = request.user
                 fields = [
                     "control_status", "control_date", "result",
-                    "current_responsible", "last_editor", "date_of_change",
+                    "last_editor", "date_of_change",
                 ]
                 if comment:
                     self._append_comment(obj, comment, label=self._RESULT_TEXT.get(status))
@@ -5022,11 +5034,10 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 comment = form.cleaned_data.get("comment", "").strip()
                 obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
                 obj.control_date = timezone.now()
-                obj.current_responsible = obj.executor
                 obj.last_editor = request.user
                 obj.returned_for_rework = True
                 fields = [
-                    "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
+                    "control_status", "control_date", "last_editor", "date_of_change",
                     "returned_for_rework",
                 ]
                 if comment:
@@ -5092,12 +5103,11 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                         assignment.control_status = WorkAssignment.STATUS_IN_PROGRESS
                         assignment.reschedule_request_reason = ""
                         assignment.reschedule_request_date = None
-                        assignment.current_responsible = assignment.executor
                         assignment.control_date = timezone.now()
                         assignment.last_editor = request.user
                         assignment.save(update_fields=[
                             "control_status", "reschedule_request_reason", "reschedule_request_date",
-                            "current_responsible", "control_date", "last_editor", "date_of_change",
+                            "control_date", "last_editor", "date_of_change",
                         ])
                         self._notify_wa(
                             assignment.executor,
@@ -5150,12 +5160,11 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.control_status = WorkAssignment.STATUS_RESCHEDULE_PENDING
                 obj.reschedule_request_reason = form.cleaned_data["reason"]
                 obj.reschedule_request_date = form.cleaned_data["desired_date"]
-                obj.current_responsible = obj.author
                 obj.control_date = timezone.now()
                 obj.last_editor = request.user
                 obj.save(update_fields=[
                     "control_status", "reschedule_request_reason", "reschedule_request_date",
-                    "current_responsible", "control_date", "last_editor", "date_of_change",
+                    "control_date", "last_editor", "date_of_change",
                 ])
                 self._notify_wa(
                     obj.author,
@@ -5194,12 +5203,11 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
         obj.reschedule_request_reason = ""
         obj.reschedule_request_date = None
-        obj.current_responsible = obj.executor
         obj.control_date = timezone.now()
         obj.last_editor = request.user
         obj.save(update_fields=[
             "control_status", "reschedule_request_reason", "reschedule_request_date",
-            "current_responsible", "control_date", "last_editor", "date_of_change",
+            "control_date", "last_editor", "date_of_change",
         ])
         self._notify_wa(
             obj.executor,
