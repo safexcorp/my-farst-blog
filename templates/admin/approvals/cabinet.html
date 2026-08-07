@@ -77,6 +77,7 @@
   .cab-card .title { font-size:15px; font-weight:700; }
   .cab-card .subtitle { font-size:13px; color:var(--body-quiet-color,#aaa); margin-top:2px; }
   .cab-card .meta { font-size:12px; color:var(--body-quiet-color,#999); margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .meta-label { font-weight:600; color:var(--body-fg); }
   .cab-card .note { font-size:12px; margin-top:6px; padding:6px 10px; border-radius:6px; background:rgba(229,57,53,.10); }
   .cab-card .note--orange { background:rgba(244,151,142,.16); }
   .cab-archive-note {
@@ -578,7 +579,7 @@
           <div class="title">
             {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
           </div>
-          {% if wa.task %}<div class="issued-task">Задача - {{ wa.task }}</div>{% endif %}
+          {% if wa.task %}<div class="issued-task"><span class="meta-label">Задача</span> - {{ wa.task }}</div>{% endif %}
           <div class="meta">
             {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
             {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
@@ -591,11 +592,14 @@
             {% if wa.returned_for_rework and wa.control_status == "in_progress" %}<span class="pill pill-peach">Возвращена на доработку</span>{% endif %}
             {% if wa.is_urgent %}<span class="pill pill-urgent">🔥 Срочно</span>{% endif %}
           </div>
+          {% if wa.acceptance_criteria and wa.acceptance_criteria != "---" %}
+          <div class="meta"><span class="meta-label">Критерий выполнения:</span> {{ wa.acceptance_criteria }}</div>
+          {% endif %}
           {% if wa.post %}
-          <div class="meta">Связанная разработка/проект - {{ wa.post }}</div>
+          <div class="meta"><span class="meta-label">Связанная разработка/проект</span> - {{ wa.post }}</div>
           {% endif %}
           <div class="meta">
-            Целевой срок выполнения:
+            <span class="meta-label">Целевой срок выполнения:</span>
             {% if g.key == "done" %}
               <strong>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
             {% else %}
@@ -607,7 +611,7 @@
           {% endif %}
           {% if wa.wa_attachments %}
           <div class="meta">
-            Файлы, приложенные к заданию:
+            <span class="meta-label">Файлы, приложенные к заданию:</span>
             {% for a in wa.wa_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
           </div>
           {% endif %}
@@ -615,7 +619,7 @@
           <div class="note note--orange">Комментарий автора: {{ wa.comment|linebreaksbr }}</div>
           {% endif %}
           {% if wa.author %}
-          <div class="meta">Автор: <strong><a href="{% url 'admin:approvals_user_profile' wa.author_id %}">{{ wa.author }}</a></strong></div>
+          <div class="meta"><span class="meta-label">Автор:</span> <strong><a href="{% url 'admin:approvals_user_profile' wa.author_id %}">{{ wa.author }}</a></strong></div>
           {% endif %}
         </div>
         <div class="cab-actions cab-actions--col">

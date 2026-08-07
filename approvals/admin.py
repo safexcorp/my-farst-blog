@@ -981,7 +981,7 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             .filter(author=user)
             .filter(published_filter)
             .annotate(subtask_total=Count("subtasks"))
-            .select_related("executor", "post", "current_responsible")
+            .select_related("executor", "post")
         )
         issued_active = list(issued_base.filter(active_filter).order_by("target_deadline"))
         issued_done = list(

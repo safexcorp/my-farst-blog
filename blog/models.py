@@ -1652,7 +1652,7 @@ class WorkAssignment(models.Model):
     ACTIVE_STATUSES = ('assigned', 'in_progress', 'review', 'reschedule_pending')
     TERMINAL_STATUSES = ('on_time', 'rescheduled', 'partial', 'not_done')
 
-    name = models.CharField(max_length=100, unique=True, blank=True, null=True, verbose_name="Наименование")
+    name = models.CharField(max_length=100, blank=True, null=True, verbose_name="Наименование")
     wa_number = models.PositiveIntegerField(
         null=True,
         blank=True,
@@ -1671,11 +1671,6 @@ class WorkAssignment(models.Model):
         verbose_name="Последний редактор"
     )
     date_of_change = models.DateTimeField(auto_now=True, verbose_name="Дата и время последнего изменения")
-    current_responsible = models.ForeignKey(
-        User, on_delete=models.CASCADE,
-        related_name="responsible_workassignments",
-        verbose_name="Текущий ответственный"
-    )
     version = models.CharField(max_length=3, blank=True, null=True, verbose_name="Версия")
     task = models.TextField(
         verbose_name="Задача",

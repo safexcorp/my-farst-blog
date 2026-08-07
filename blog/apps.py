@@ -70,8 +70,32 @@ class BlogConfig(AppConfig):
 
     def ready(self):
         from django.contrib import admin
+        from django.contrib.admin.options import BaseModelAdmin
+        from django.contrib.auth import get_user_model
+        from django.core.exceptions import ValidationError
 
         post_migrate.connect(_backfill_wa_codes, sender=self)
+
+        #выбрать неактивного пользователя нельзя -
+        # при сохранении формы падает ошибка валидации.
+        User = get_user_model()
+        _orig_formfield_for_foreignkey = BaseModelAdmin.formfield_for_foreignkey
+
+        def formfield_for_foreignkey(self, db_field, request, **kwargs):
+            field = _orig_formfield_for_foreignkey(self, db_field, request, **kwargs)
+            if field is not None and db_field.related_model is User:
+                orig_clean = field.clean
+
+                def clean(value, _orig_clean=orig_clean):
+                    user = _orig_clean(value)
+                    if user is not None and not user.is_active:
+                        raise ValidationError("Этот пользователь неактивен, его нельзя выбрать.")
+                    return user
+
+                field.clean = clean
+            return field
+
+        BaseModelAdmin.formfield_for_foreignkey = formfield_for_foreignkey
 
         site = admin.site
         _orig_get_app_list = site.get_app_list

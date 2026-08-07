@@ -4,11 +4,32 @@ from django.contrib.admin.widgets import AdminDateWidget
 from .models import WorkAssignment, _as_date, _INVALID_DATE_MSG
 
 
+class MultipleFileInput(forms.ClearableFileInput):
+    allow_multiple_selected = True
+
+
+class MultipleFileField(forms.FileField):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("widget", MultipleFileInput())
+        super().__init__(*args, **kwargs)
+
+    def clean(self, data, initial=None):
+        single_file_clean = super().clean
+        if isinstance(data, (list, tuple)):
+            return [single_file_clean(d, initial) for d in data]
+        return single_file_clean(data, initial)
+
+
 class WorkAssignmentAdminForm(forms.ModelForm):
     requires_hard_deadline = forms.BooleanField(
         required=False,
         initial=False,
         label="Требуется установить дед-лайн?",
+    )
+    attachments = MultipleFileField(
+        required=False,
+        label="Вложения (к заданию)",
+        help_text="Можно выбрать сразу несколько файлов.",
     )
 
     class Meta:
@@ -176,25 +197,9 @@ class WorkAssignmentRescheduleRequestForm(forms.Form):
     )
 
 
-class MultipleFileInput(forms.ClearableFileInput):
-    allow_multiple_selected = True
-
-
-class MultipleFileField(forms.FileField):
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("widget", MultipleFileInput())
-        super().__init__(*args, **kwargs)
-
-    def clean(self, data, initial=None):
-        single_file_clean = super().clean
-        if isinstance(data, (list, tuple)):
-            return [single_file_clean(d, initial) for d in data]
-        return single_file_clean(data, initial)
-
-
 class WorkAssignmentSubmitReviewForm(forms.Form):
     result_description = forms.CharField(
         label="Описание результата",
         widget=forms.Textarea(attrs={"rows": 4, "cols": 60, "class": "vLargeTextField"}),
     )
-    file = MultipleFileField(required=False, label="Файлы")
+    file = MultipleFileField(required=False, label="Вложения (приложенные к результату)")
