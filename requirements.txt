@@ -2,3 +2,4 @@ Django==5.1.11
 weasyprint==68.1
 xhtml2pdf==0.2.17
 asn1crypto==1.5.1
+bleach==6.4.0

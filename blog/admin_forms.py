@@ -1,7 +1,35 @@
+import re
+
+import bleach
 from django import forms
 from django.contrib.admin.widgets import AdminDateWidget
 
 from .models import WorkAssignment, _as_date, _INVALID_DATE_MSG
+from .widgets import RichTextWidget
+
+# Matches exactly what the "task" field's Quill toolbar can produce
+# (assets/js/richtext_widget.js) - font, size, bold/italic/underline/strike, lists+indent, align.
+# Quill 2.x renders both bullet and numbered lists as <ol>, distinguished by
+# li[data-list] - see assets/vendor/quill/quill.snow.css.
+TASK_ALLOWED_TAGS = ["p", "br", "strong", "em", "u", "s", "ol", "ul", "li", "span"]
+_TASK_ALLOWED_CLASS_RE = re.compile(r"^ql-(font|size|indent|align|direction)-[a-z0-9-]+$")
+
+
+def _task_attr_filter(tag, name, value):
+    if name == "data-list":
+        return tag == "li" and value in ("bullet", "ordered")
+    if name != "class":
+        return False
+    return all(_TASK_ALLOWED_CLASS_RE.match(cls) for cls in value.split())
+
+
+def sanitize_task_html(value):
+    return bleach.clean(
+        value or "",
+        tags=TASK_ALLOWED_TAGS,
+        attributes=_task_attr_filter,
+        strip=True,
+    )
 
 
 class MultipleFileInput(forms.ClearableFileInput):
@@ -37,6 +65,7 @@ class WorkAssignmentAdminForm(forms.ModelForm):
         fields = "__all__"
         widgets = {
             "conditional_deadline": forms.Textarea(attrs={"rows": 4, "cols": 80}),
+            "task": RichTextWidget(),
         }
         labels = {
             "hard_deadline": "Установить дедлайн",
@@ -55,6 +84,9 @@ class WorkAssignmentAdminForm(forms.ModelForm):
             self.fields["requires_hard_deadline"].initial = bool(instance.hard_deadline)
         if "executor" in self.fields:
             self.fields["executor"].required = False
+
+    def clean_task(self):
+        return sanitize_task_html(self.cleaned_data.get("task"))
 
     def clean(self):
         cleaned = super().clean()

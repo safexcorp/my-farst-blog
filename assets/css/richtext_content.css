@@ -1,0 +1,85 @@
+/* Custom font whitelist labels/previews for the Quill "font" picker.
+   Must match FONT_WHITELIST in assets/js/richtext_widget.js. */
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=arial]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=arial]::before { content: 'Arial'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=times-new-roman]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=times-new-roman]::before { content: 'Times New Roman'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=courier-new]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=courier-new]::before { content: 'Courier New'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=georgia]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=georgia]::before { content: 'Georgia'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=verdana]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=verdana]::before { content: 'Verdana'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=tahoma]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=tahoma]::before { content: 'Tahoma'; }
+
+.ql-editor .ql-font-arial { font-family: Arial, Helvetica, sans-serif; }
+.ql-editor .ql-font-times-new-roman { font-family: 'Times New Roman', Times, serif; }
+.ql-editor .ql-font-courier-new { font-family: 'Courier New', Courier, monospace; }
+.ql-editor .ql-font-georgia { font-family: Georgia, serif; }
+.ql-editor .ql-font-verdana { font-family: Verdana, sans-serif; }
+.ql-editor .ql-font-tahoma { font-family: Tahoma, sans-serif; }
+
+/* The longest label ("Times New Roman") no longer wraps/gets clipped inside
+   the picker's fixed-height row. */
+.richtext-field .ql-snow .ql-picker.ql-font { width: 176px; }
+.richtext-field .ql-snow .ql-picker.ql-font .ql-picker-label::before,
+.richtext-field .ql-snow .ql-picker.ql-font .ql-picker-item::before {
+  white-space: nowrap;
+}
+
+/* Editor instance (admin form). .ql-editor itself needs the min-height too:
+   its base rule is height:100% of .ql-container, which resolves to nothing
+   against an auto-height parent, so without this the editable area was only
+   as tall as the typed content - clicking the empty space below the first
+   line landed on the container, not the editor, and didn't focus it. */
+.richtext-field .ql-container {
+  height: auto;
+  min-height: 180px;
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+.richtext-field .ql-editor {
+  min-height: 180px;
+}
+.richtext-field .ql-toolbar.ql-snow {
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
+/* Read-only rendering (cabinet, action forms) reuses .ql-editor for
+   identical font/list/indent rules, without the editor's fixed height. */
+.ql-editor.rich-readonly {
+  height: auto;
+  overflow: visible;
+  padding: 0;
+}
+
+/* Dark theme: reuse Django admin's own dark-mode variables (base.css /
+   dark_mode.css) instead of a custom palette, so the field matches the
+   admin's actual default black rather than an invented color.
+   Toolbar row (icons + closed picker label, on --body-bg) vs. the open
+   dropdown panel (own background below) need separate text colors -
+   conflating them is what made the open font/size list white-on-white. */
+@media (prefers-color-scheme: dark) {
+  .richtext-field .ql-toolbar.ql-snow,
+  .richtext-field .ql-container.ql-snow { border-color: var(--border-color); background: var(--body-bg); }
+  .richtext-field .ql-snow .ql-stroke { stroke: var(--body-fg); }
+  .richtext-field .ql-snow .ql-fill { fill: var(--body-fg); }
+  .richtext-field .ql-snow .ql-picker-label { color: var(--body-fg); }
+  .richtext-field .ql-snow .ql-picker-options {
+    background: var(--darkened-bg); border: 1px solid var(--border-color);
+  }
+  .richtext-field .ql-snow .ql-picker-item { color: var(--body-fg); }
+  .richtext-field .ql-editor { background: var(--body-bg); color: var(--body-fg); }
+}
+html[data-theme="dark"] .richtext-field .ql-toolbar.ql-snow,
+html[data-theme="dark"] .richtext-field .ql-container.ql-snow { border-color: var(--border-color); background: var(--body-bg); }
+html[data-theme="dark"] .richtext-field .ql-snow .ql-stroke { stroke: var(--body-fg); }
+html[data-theme="dark"] .richtext-field .ql-snow .ql-fill { fill: var(--body-fg); }
+html[data-theme="dark"] .richtext-field .ql-snow .ql-picker-label { color: var(--body-fg); }
+html[data-theme="dark"] .richtext-field .ql-snow .ql-picker-options {
+  background: var(--darkened-bg); border: 1px solid var(--border-color);
+}
+html[data-theme="dark"] .richtext-field .ql-snow .ql-picker-item { color: var(--body-fg); }
+html[data-theme="dark"] .richtext-field .ql-editor { background: var(--body-bg); color: var(--body-fg); }

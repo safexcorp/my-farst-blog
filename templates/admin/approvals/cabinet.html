@@ -1,6 +1,7 @@
 {% extends "admin/base_site.html" %}
+{% load static richtext %}
 
-{% block extrahead %}{{ block.super }}{{ my_profile_form.media }}{% endblock %}
+{% block extrahead %}{{ block.super }}{{ my_profile_form.media }}<link rel="stylesheet" href="{% static 'vendor/quill/quill.snow.css' %}"><link rel="stylesheet" href="{% static 'css/richtext_content.css' %}">{% endblock %}
 
 {% block content %}
 <style>
@@ -579,7 +580,7 @@
           <div class="title">
             {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
           </div>
-          {% if wa.task %}<div class="issued-task"><span class="meta-label">Задача</span> - {{ wa.task }}</div>{% endif %}
+          {% if wa.task %}<div class="issued-task"><span class="meta-label">Задача</span>{{ wa.task|rich_text }}</div>{% endif %}
           <div class="meta">
             {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
             {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
@@ -692,6 +693,9 @@
   </div>
 
   <div class="cab-panel" data-panel="issued">
+    <div style="display:flex; justify-content:flex-end; margin-bottom:14px;">
+      <a class="btn btn-green" href="{% url 'admin:blog_workassignment_add' %}">+ Новое РЗ</a>
+    </div>
     {% if issued_work %}
     <div class="cab-wfilter" data-wfilter-for="issued">
       <button type="button" class="active" data-wfilter="all">Все</button>
@@ -714,7 +718,7 @@
           <div class="title">
             {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
           </div>
-          {% if wa.task %}<div class="issued-task">Задача - {{ wa.task }}</div>{% endif %}
+          {% if wa.task %}<div class="issued-task"><span class="meta-label">Задача</span>{{ wa.task|rich_text }}</div>{% endif %}
           <div class="meta">
             {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
             {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>

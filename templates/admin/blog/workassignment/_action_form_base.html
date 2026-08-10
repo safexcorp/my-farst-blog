@@ -1,5 +1,6 @@
 {% extends "admin/base_site.html" %}
-{% block extrahead %}{{ block.super }}{{ form.media }}{% endblock %}
+{% load static richtext %}
+{% block extrahead %}{{ block.super }}{{ form.media }}<link rel="stylesheet" href="{% static 'vendor/quill/quill.snow.css' %}"><link rel="stylesheet" href="{% static 'css/richtext_content.css' %}">{% endblock %}
 {% block content %}
 <style>
   .waf-wrap { max-width: 640px; }
@@ -112,7 +113,7 @@
 <div class="waf-wrap">
   <h1>{% block wa_title %}{% endblock %}</h1>
   <div class="waf-card">
-    {% if original.task %}<div class="waf-task">{{ original.task }}</div>{% endif %}
+    {% if original.task %}<div class="waf-task">{{ original.task|rich_text }}</div>{% endif %}
     {% block wa_result %}{% endblock %}
     {% block wa_note %}{% endblock %}
     <form method="post" {% block wa_form_attrs %}{% endblock %} novalidate>
