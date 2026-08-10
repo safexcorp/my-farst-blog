@@ -55,6 +55,73 @@
   padding: 0;
 }
 
+/* List markers (numbers/bullets) outside the live editor - Quill only paints
+   them via JS-injected <li> > .ql-ui elements that don't exist in saved
+   HTML, so quill.snow.css's own counters fire but nothing ever displays
+   them here. Fully self-contained (doesn't rely on quill.snow.css's own
+   li::before rules - those set conflicting display/margin/width on the same
+   pseudo-element, which combined with position:absolute broke marker
+   position, especially on nested levels - so every property below is
+   explicit rather than assuming quill.snow.css already unset it).
+   Ordered numbering cycles per indent level like the live editor does:
+   1,2,3 -> a,b,c -> i,ii,iii. Works with both li[data-list=...] (current
+   Quill 2.x save format) and a bare <ol>/<ul><li> with no attribute. */
+.rich-readonly ol,
+.rich-readonly ul { margin: 4px 0; padding-left: 0; }
+.rich-readonly ol { counter-reset: rt0 rt1 rt2 rt3; }
+.rich-readonly li {
+  list-style: none; position: relative; padding-left: 1.4em; margin-left: 0;
+}
+.rich-readonly li::before {
+  position: absolute; left: 0; top: 0;
+  display: inline-block; width: 1.2em; margin: 0;
+  text-align: right; white-space: nowrap;
+}
+.rich-readonly li.ql-indent-1 { padding-left: 2.8em; }
+.rich-readonly li.ql-indent-1::before { left: 1.4em; }
+.rich-readonly li.ql-indent-2 { padding-left: 4.2em; }
+.rich-readonly li.ql-indent-2::before { left: 2.8em; }
+.rich-readonly li.ql-indent-3 { padding-left: 5.6em; }
+.rich-readonly li.ql-indent-3::before { left: 4.2em; }
+
+.rich-readonly li[data-list=ordered],
+.rich-readonly ol > li:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked]) {
+  counter-increment: rt0; counter-reset: rt1 rt2 rt3;
+}
+.rich-readonly li[data-list=ordered]::before,
+.rich-readonly ol > li:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked])::before {
+  content: counter(rt0, decimal) '. ';
+}
+.rich-readonly li.ql-indent-1[data-list=ordered],
+.rich-readonly ol > li.ql-indent-1:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked]) {
+  counter-increment: rt1; counter-reset: rt2 rt3;
+}
+.rich-readonly li.ql-indent-1[data-list=ordered]::before,
+.rich-readonly ol > li.ql-indent-1:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked])::before {
+  content: counter(rt1, lower-alpha) '. ';
+}
+.rich-readonly li.ql-indent-2[data-list=ordered],
+.rich-readonly ol > li.ql-indent-2:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked]) {
+  counter-increment: rt2; counter-reset: rt3;
+}
+.rich-readonly li.ql-indent-2[data-list=ordered]::before,
+.rich-readonly ol > li.ql-indent-2:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked])::before {
+  content: counter(rt2, lower-roman) '. ';
+}
+.rich-readonly li.ql-indent-3[data-list=ordered],
+.rich-readonly ol > li.ql-indent-3:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked]) {
+  counter-increment: rt3;
+}
+.rich-readonly li.ql-indent-3[data-list=ordered]::before,
+.rich-readonly ol > li.ql-indent-3:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked])::before {
+  content: counter(rt3, decimal) '. ';
+}
+
+.rich-readonly li[data-list=bullet]::before,
+.rich-readonly ul > li:not([data-list])::before { content: '\2022'; }
+.rich-readonly li[data-list=checked]::before { content: '\2611'; }
+.rich-readonly li[data-list=unchecked]::before { content: '\2610'; }
+
 /* Dark theme: reuse Django admin's own dark-mode variables (base.css /
    dark_mode.css) instead of a custom palette, so the field matches the
    admin's actual default black rather than an invented color.

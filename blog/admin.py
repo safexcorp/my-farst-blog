@@ -6,7 +6,7 @@ from django.shortcuts import redirect, render
 from django.urls import path, reverse
 from django.utils import timezone
 from datetime import timedelta
-from django.utils.html import escape, format_html, format_html_join
+from django.utils.html import escape, format_html, format_html_join, strip_tags
 from django.template.defaultfilters import linebreaksbr
 from django.utils.safestring import mark_safe
 import re
@@ -190,6 +190,21 @@ def _file_link_marker(file_field) -> str:
     return f"[{name}]({url})"
 
 
+_HTML_BLOCK_BOUNDARY_RE = re.compile(r"<(br\s*/?|/(p|li|div|h[1-6]|ol|ul))\s*>", re.IGNORECASE)
+
+
+def _plain_text_for_diff(value):
+    """History entries compare raw field values as text - rich-text fields
+    (WorkAssignment.task) store sanitized HTML there, which without this
+    would dump raw markup into the diff. Strip tags for a readable diff,
+    keeping block boundaries (</p>, </li>, <br>...) as spaces so words don't
+    run together."""
+    text = str(value) if value is not None else ""
+    if "<" not in text:
+        return value
+    return strip_tags(_HTML_BLOCK_BOUNDARY_RE.sub(" ", text)).strip()
+
+
 def _build_version_diff_block(*, old_obj, new_obj, model_cls, skip_fields,
                               user, version_to: str) -> str:
     """Строит блок изменений между `old_obj` и `new_obj` по полям модели.
@@ -234,8 +249,10 @@ def _build_version_diff_block(*, old_obj, new_obj, model_cls, skip_fields,
         old_val = getattr(old_obj, field.name, None)
         new_val = getattr(new_obj, field.name, None)
         if str(old_val) != str(new_val):
-            old_disp = old_val if old_val not in (None, "") else "—"
-            new_disp = new_val if new_val not in (None, "") else "—"
+            old_disp = _plain_text_for_diff(old_val)
+            new_disp = _plain_text_for_diff(new_val)
+            old_disp = old_disp if old_disp not in (None, "") else "—"
+            new_disp = new_disp if new_disp not in (None, "") else "—"
             if field.choices:
                 choices_map = dict(field.choices)
                 old_disp = choices_map.get(old_val, old_disp)
@@ -4354,12 +4371,79 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
                 kind=Notification.KIND_WORK,
             )
 
+class _ExecutorSelect(forms.Select):
+    """Select widget for WorkAssignment.executor that greys out inactive users
+    (still selectable - the existing save-time validation is what blocks them;
+    this is display-only, see WorkAssignmentAdmin.get_form)."""
+
+    inactive_pks = frozenset()
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        raw_value = getattr(value, "value", value)
+        if raw_value in self.inactive_pks:
+            # Native <select> popups are inconsistent about honoring CSS on
+            # <option> (var() in particular often gets silently dropped there),
+            # so the text suffix is the part that's guaranteed to show up;
+            # the color is a best-effort bonus where the browser supports it.
+            option["attrs"]["style"] = "color: #888;"
+            option["label"] = f"{option['label']} (неактивен)"
+        return option
+
+
 @admin.register(WorkAssignment)
 class WorkAssignmentAdmin(admin.ModelAdmin):
     form = WorkAssignmentAdminForm
     formfield_overrides = {
         DateField: {"widget": AdminDateWidget},
     }
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _WorkAssignmentForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                executor_field = self.fields.get("executor")
+                if executor_field is None:
+                    return
+
+                author_user = (
+                    self.instance.author
+                    if (self.instance and self.instance.pk and self.instance.author_id)
+                    else request.user
+                )
+                dept_id = getattr(
+                    getattr(author_user, "profile", None), "org_department_id", None
+                )
+
+                # Order of When clauses is precedence: inactive always sinks to
+                # the bottom, even if it happens to be the author or same dept.
+                priority_whens = [
+                    When(is_active=False, then=Value(3)),
+                    When(pk=author_user.pk, then=Value(0)),
+                ]
+                if dept_id is not None:
+                    priority_whens.append(
+                        When(profile__org_department_id=dept_id, then=Value(1))
+                    )
+
+                executor_field.queryset = executor_field.queryset.annotate(
+                    _priority=Case(
+                        *priority_whens, default=Value(2), output_field=IntegerField()
+                    )
+                ).order_by("_priority", "username")
+
+                inactive_pks = set(
+                    executor_field.queryset.filter(is_active=False)
+                    .values_list("pk", flat=True)
+                )
+                old_select = executor_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                executor_field.widget.widget = new_select
+
+        return _WorkAssignmentForm
 
     list_display = (
         'wa_code_column',

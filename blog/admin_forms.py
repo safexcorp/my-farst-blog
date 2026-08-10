@@ -52,7 +52,7 @@ class WorkAssignmentAdminForm(forms.ModelForm):
     requires_hard_deadline = forms.BooleanField(
         required=False,
         initial=False,
-        label="Требуется установить дед-лайн?",
+        label="Требуется установить дедлайн?",
     )
     attachments = MultipleFileField(
         required=False,
@@ -166,7 +166,7 @@ class RescheduleAdminForm(forms.Form):
     )
     requires_hard_deadline = forms.BooleanField(
         required=False,
-        label="Требуется установить дед-лайн?",
+        label="Требуется установить дедлайн?",
     )
     new_hard_deadline = forms.DateField(
         required=False,
