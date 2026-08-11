@@ -715,7 +715,6 @@ class WorkAssignmentInline(admin.TabularInline):
         "author",
         "date_of_creation",
         "last_editor",
-        "current_responsible",
         "version",
         "task",
         "target_deadline",
@@ -4182,13 +4181,19 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
         extra["title"] = "Добавить подзадачу рабочего задания"
         return super().add_view(request, form_url, extra_context=extra)
 
+    def response_post_save_add(self, request, obj):
+        return redirect(f"{reverse('admin:approvals_cabinet')}?tab=subtasks")
+
+    def response_post_save_change(self, request, obj):
+        return redirect(f"{reverse('admin:approvals_cabinet')}?tab=subtasks")
+
     list_display = (
         "id", "work_assignment", "task_short",
         "target_deadline", "executor",
         "control_status_colored", "comment_short",
     )
     search_fields = ("task", "work_assignment__name")
-    readonly_fields = ("date_of_creation", "date_of_change")
+    readonly_fields = ("date_of_creation", "date_of_change", "control_date")
 
     fieldsets = (
         (
@@ -4209,9 +4214,6 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "target_deadline",
-                    "hard_deadline",
-                    ("time_window_start", "time_window_end"),
-                    "conditional_deadline",
                 )
             },
         ),
@@ -4319,6 +4321,7 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
             initial.setdefault("author", request.user.pk)
             initial.setdefault("last_editor", request.user.pk)
             initial.setdefault("current_responsible", request.user.pk)
+        initial.setdefault("control_status", WorkAssignment.STATUS_ASSIGNED)
         return initial
 
     def get_form(self, request, obj=None, change=False, **kwargs):

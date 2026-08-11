@@ -406,7 +406,7 @@
         <button type="button" class="cab-tab" data-tab="subtasks">
           <span class="cab-tab-icon" aria-hidden="true">🧩</span>
           <span class="cab-tab-label">Мои подзадачи</span>
-          {% if my_subtasks %}<span class="cab-badge muted">{{ my_subtasks|length }}</span>{% endif %}
+          {% if my_subtasks_active_count %}<span class="cab-badge muted">{{ my_subtasks_active_count }}</span>{% endif %}
         </button>
         <button type="button" class="cab-tab" data-tab="issued">
           <span class="cab-tab-icon" aria-hidden="true">📤</span>
@@ -648,47 +648,76 @@
   </div>
 
   <div class="cab-panel" data-panel="subtasks">
-    {% regroup my_subtasks by work_assignment as subtask_groups %}
-    {% for group in subtask_groups %}
-    <div class="cab-st-group">
-      <div class="cab-st-parent">
-        <div class="cab-st-parent-head">
-          <span class="cab-st-code">
-            📋 {{ group.grouper.wa_full_code|default:group.grouper.name|default:"Рабочее задание" }}
-          </span>
-          <span class="cab-st-pill">Мои подзадачи: {{ group.list|length }}</span>
-          <a class="btn btn-ghost btn-sm" style="margin-left:auto;"
-             href="{% url 'admin:blog_workassignment_change' group.grouper.pk %}">Открыть РЗ</a>
-        </div>
-        {% if group.grouper.task %}
-        <div class="cab-st-parent-task clamp2" title="{{ group.grouper.task }}">{{ group.grouper.task }}</div>
-        {% endif %}
-      </div>
-      <div class="cab-st-children">
-        {% for st in group.list %}
-        <div class="cab-st-child">
-          <div class="cab-info">
-            <div class="task-text clamp2" title="{{ st.task }}">
-              {% if st.subtask_full_code %}<span class="num">{{ st.subtask_full_code }}</span>{% endif %}
-              {{ st.task }}
-            </div>
-            <div class="meta">
-              Срок:
-              <span {% if st.target_deadline < today %}class="cab-overdue"{% endif %}>
-                {{ st.target_deadline|date:"d.m.Y" }}{% if st.target_deadline < today %} (просрочено){% endif %}
-              </span>
-            </div>
-          </div>
-          <div class="cab-actions">
-            <a class="btn btn-gray btn-sm" href="{% url 'admin:blog_workassignmentsubtask_change' st.pk %}">Открыть</a>
-          </div>
-        </div>
-        {% endfor %}
-      </div>
+    {% if my_subtasks %}
+    <div class="cab-wfilter" data-wfilter-for="subtasks">
+      <button type="button" class="active" data-wfilter="all">Все</button>
+      {% for g in my_subtasks_groups %}{% if g.count %}
+      <button type="button" data-wfilter="{{ g.key }}">{{ g.label }} ({{ g.count }})</button>
+      {% endif %}{% endfor %}
     </div>
-    {% empty %}
-    <div class="cab-empty">У вас нет активных подзадач.</div>
-    {% endfor %}
+    {% for g in my_subtasks_groups %}{% if g.count %}
+    <details class="cab-wstatus-section" data-wgroup="{{ g.key }}">
+      <summary class="cab-wstatus-head">
+        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'reschedule_pending' %}pill-purple{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+        <span class="cab-group-count">{{ g.count }}</span>
+      </summary>
+      {% if g.key == "done" %}
+      <div class="cab-archive-note">Показаны только последние 30 завершённых подзадач</div>
+      {% endif %}
+      {% regroup g.items by work_assignment as subtask_groups %}
+      {% for group in subtask_groups %}
+      <div class="cab-st-group">
+        <div class="cab-st-parent">
+          <div class="cab-st-parent-head">
+            <span class="cab-st-code">
+              📋 {{ group.grouper.wa_full_code|default:group.grouper.name|default:"Рабочее задание" }}
+            </span>
+            <span class="cab-st-pill">Подзадач: {{ group.list|length }}</span>
+            <a class="btn btn-ghost btn-sm" style="margin-left:auto;"
+               href="{% url 'admin:blog_workassignment_change' group.grouper.pk %}">Открыть карточку РЗ</a>
+          </div>
+          {% if group.grouper.task %}
+          <div class="cab-st-parent-task" title="{{ group.grouper.task|striptags }}"><span class="meta-label">Задача -</span> {{ group.grouper.task|rich_text }}</div>
+          {% endif %}
+        </div>
+        <div class="cab-st-children">
+          {% for st in group.list %}
+          <div class="cab-st-child">
+            <div class="cab-info">
+              <div class="task-text clamp2" title="{{ st.task }}">
+                {% if st.subtask_full_code %}<span class="num">{{ st.subtask_full_code }}</span>{% endif %}
+                <span class="meta-label">Подзадача -</span> {{ st.task }}
+              </div>
+              <div class="meta">
+                {% if st.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
+                {% elif st.control_status == "reschedule_pending" %}<span class="pill pill-purple">Согласование переноса срока</span>
+                {% elif st.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
+                {% elif st.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
+                {% elif st.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
+                {% elif st.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+                {% elif st.control_status == "in_progress" %}<span class="pill pill-blue">В работе</span>
+                {% else %}<span class="pill pill-amber">Ожидает принятия</span>{% endif %}
+              </div>
+              <div class="meta">
+                Срок:
+                <span {% if st.target_deadline < today %}class="cab-overdue"{% endif %}>
+                  {{ st.target_deadline|date:"d.m.Y" }}{% if st.target_deadline < today %} (просрочено){% endif %}
+                </span>
+              </div>
+            </div>
+            <div class="cab-actions">
+              <a class="btn btn-gray btn-sm" href="{% url 'admin:blog_workassignmentsubtask_change' st.pk %}">Открыть карточку подзадачи</a>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </details>
+    {% endif %}{% endfor %}
+    {% else %}
+    <div class="cab-empty">У вас нет подзадач.</div>
+    {% endif %}
   </div>
 
   <div class="cab-panel" data-panel="issued">

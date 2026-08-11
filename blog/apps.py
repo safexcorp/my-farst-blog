@@ -63,6 +63,25 @@ def _backfill_wa_codes(sender, **kwargs):
             )
 
 
+def _close_subtasks_for_closed_parents(sender, **kwargs):
+    from django.db.models import Q
+    from django.utils import timezone
+    from .models import WorkAssignment, WorkAssignmentSubtask
+
+    non_terminal = Q(control_status__isnull=True) | Q(
+        control_status__in=WorkAssignment.ACTIVE_STATUSES
+    )
+    stale = WorkAssignmentSubtask.objects.filter(non_terminal).filter(
+        work_assignment__control_status__in=WorkAssignment.TERMINAL_STATUSES
+    ).select_related("work_assignment")
+
+    today = timezone.localdate()
+    for subtask in stale:
+        subtask.control_status = subtask.work_assignment.control_status
+        subtask.control_date = today
+        subtask.save(update_fields=["control_status", "control_date"])
+
+
 class BlogConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "blog"
@@ -75,6 +94,7 @@ class BlogConfig(AppConfig):
         from django.core.exceptions import ValidationError
 
         post_migrate.connect(_backfill_wa_codes, sender=self)
+        post_migrate.connect(_close_subtasks_for_closed_parents, sender=self)
 
         #выбрать неактивного пользователя нельзя -
         # при сохранении формы падает ошибка валидации.
