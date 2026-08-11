@@ -3354,26 +3354,26 @@ class PAKDocument(models.Model):
     )
 
     # --- Основная информация ---
-    fw_version = models.CharField('Версия ПО', max_length=50)
+    fw_version = models.CharField('Версия ПО', max_length=50, blank=True, default='')
     test_date_start = models.DateField('Дата начала проведения испытаний')
-    test_date_end = models.DateField('Дата окончания испытаний')
+    test_date_end = models.DateField('Дата окончания испытаний', null=True, blank=True)
 
     # --- Проверки (Таблица 1) ---
     check_marking = models.CharField(
         '1 Проверка содержания маркировки (1.5.2 ТУ, 3.1 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_kd_appearance = models.CharField(
         '2 Проверка соответствия ПАК СПМ КД и внешнего вида (1.1.1, 1.1.9 ТУ, 3.2 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_server_link = models.CharField(
         '3 Проверка обеспечения связи с сервером (1.1.5, 1.1.4 ТУ, 3.3 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_alarm = models.CharField(
         '4 Проверка обнаружения и регистрации аварии (1.1.2, 1.1.4 ТУ, 3.4 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     # Пункт 4: файл с логами от прибора + примечание
     alarm_log_file = models.FileField(
@@ -3386,15 +3386,15 @@ class PAKDocument(models.Model):
     )
     check_battery_status = models.CharField(
         '5 Проверка контроля и передачи статуса батареи (1.1.7 ТУ, 3.5 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_radio_settings = models.CharField(
         '6 Проверка обеспечения изменения настроек по радиоканалу ближней связи (1.1.6 ТУ, 3.6 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_long_run = models.CharField(
         '7 Проверка длительной работы ПАК СПМ (3.7 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
 
     # --- Заключение ---
@@ -3496,19 +3496,6 @@ class PAKDocument(models.Model):
         else:
             self.conclusion = 'не готов'
         super().save(*args, **kwargs)
-
-    def get_inspector_display(self):
-        """Возвращает полное ФИО испытателя на русском (Фамилия Имя Отчество)."""
-        if not self.inspector:
-            return "—"
-        user = self.inspector
-        last = user.last_name or ''
-        first = user.first_name or ''
-        patronymic = ''
-        if hasattr(user, 'profile') and user.profile.patronymic:
-            patronymic = user.profile.patronymic
-        parts = [p for p in [last, first, patronymic] if p]
-        return ' '.join(parts) if parts else user.username
 
 
 class PAKGeneratedDocument(models.Model):
