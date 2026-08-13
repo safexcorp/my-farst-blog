@@ -101,18 +101,35 @@ class BlogConfig(AppConfig):
         User = get_user_model()
         _orig_formfield_for_foreignkey = BaseModelAdmin.formfield_for_foreignkey
 
+        class _InactiveUserCleanMixin:
+            def clean(self, value):
+                user = super().clean(value)
+                if user is not None and not user.is_active:
+                    raise ValidationError("Этот пользователь неактивен, его нельзя выбрать.")
+                return user
+
+        _checked_field_classes = {}
+
         def formfield_for_foreignkey(self, db_field, request, **kwargs):
             field = _orig_formfield_for_foreignkey(self, db_field, request, **kwargs)
             if field is not None and db_field.related_model is User:
-                orig_clean = field.clean
-
-                def clean(value, _orig_clean=orig_clean):
-                    user = _orig_clean(value)
-                    if user is not None and not user.is_active:
-                        raise ValidationError("Этот пользователь неактивен, его нельзя выбрать.")
-                    return user
-
-                field.clean = clean
+                base_cls = type(field)
+                # Patching the class (not the instance) matters: Field.__deepcopy__
+                # is a shallow copy.copy(), so an instance-level override (a bound
+                # method or a plain function assigned to field.clean) would stay
+                # wired to this original field forever - every ModelForm
+                # instantiation deepcopies base_fields, and a later per-instance
+                # `required = False` override (e.g. WorkAssignmentAdminForm) would
+                # silently have no effect on validation.
+                checked_cls = _checked_field_classes.get(base_cls)
+                if checked_cls is None:
+                    checked_cls = type(
+                        f"InactiveUserChecked{base_cls.__name__}",
+                        (_InactiveUserCleanMixin, base_cls),
+                        {},
+                    )
+                    _checked_field_classes[base_cls] = checked_cls
+                field.__class__ = checked_cls
             return field
 
         BaseModelAdmin.formfield_for_foreignkey = formfield_for_foreignkey

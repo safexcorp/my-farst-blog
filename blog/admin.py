@@ -57,6 +57,7 @@ from .models import (PSIDocument, GeneratedDocument, DocumentHistory, PAKDocumen
 from .admin_forms import (
     RescheduleAdminForm,
     WorkAssignmentAdminForm,
+    WorkAssignmentCancelForm,
     WorkAssignmentCloseForm,
     WorkAssignmentRescheduleRequestForm,
     WorkAssignmentReturnForm,
@@ -4458,7 +4459,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         'target_deadline', 'hard_deadline',
     )
     list_display_links = ('wa_code_column', 'name')
-    ordering = ('post__wa_code', 'wa_number', 'pk')
+    ordering = ('-date_of_creation', '-pk')
     search_fields = (
         'name',
         'author__username',
@@ -4857,6 +4858,11 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.toggle_urgent_view),
                 name="blog_workassignment_toggle_urgent",
             ),
+            path(
+                "<int:object_id>/cancel/",
+                self.admin_site.admin_view(self.cancel_view),
+                name="blog_workassignment_cancel",
+            ),
         ]
         return custom + urls
 
@@ -5154,6 +5160,54 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "task_attachments": self._wa_task_attachments(obj),
         }
         return render(request, "admin/blog/workassignment/return.html", context)
+
+    def cancel_view(self, request, object_id: int):
+        from django.shortcuts import render, redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.author_id:
+            messages.error(request, "Отменить задачу может только её автор.")
+            return back
+        if obj.control_status not in (WorkAssignment.STATUS_ASSIGNED, WorkAssignment.STATUS_IN_PROGRESS):
+            messages.warning(
+                request,
+                "Отменить можно только задачу со статусом «Ожидает принятия» или «В работе».",
+            )
+            return back
+
+        if request.method == "POST":
+            form = WorkAssignmentCancelForm(request.POST)
+            if form.is_valid():
+                comment = form.cleaned_data["comment"].strip()
+                obj.control_status = "not_done"
+                obj.control_date = timezone.now()
+                obj.result = self._RESULT_TEXT.get("not_done")
+                obj.last_editor = request.user
+                self._append_comment(obj, comment, label="Задача отменена автором")
+                obj.save(update_fields=[
+                    "control_status", "control_date", "result",
+                    "last_editor", "date_of_change", "comment",
+                ])
+                self._notify_wa(
+                    obj.executor,
+                    "Задача отменена автором",
+                    f"«{self._wa_label(obj)}» отменена. Комментарий: {comment}",
+                    obj,
+                )
+                messages.success(request, "Задача отменена.")
+                return back
+        else:
+            form = WorkAssignmentCancelForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "original": obj,
+            "title": "Отменить задачу",
+            "form": form,
+            "object_id": object_id,
+        }
+        return render(request, "admin/blog/workassignment/cancel.html", context)
 
     def reschedule_view(self, request, object_id: int):
         from django.shortcuts import render, redirect, get_object_or_404

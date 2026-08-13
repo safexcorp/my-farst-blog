@@ -196,7 +196,7 @@ class WorkAssignmentCloseForm(forms.Form):
     RESULT_CHOICES = [
         ("done", "Выполнено"),
         ("partial", "Выполнено частично"),
-        ("not_done", "Не выполнено"),
+        ("not_done", "Не выполнено (Отменено)"),
     ]
     result = forms.ChoiceField(
         choices=RESULT_CHOICES,
@@ -214,6 +214,13 @@ class WorkAssignmentReturnForm(forms.Form):
     comment = forms.CharField(
         required=False,
         label="Что нужно доработать",
+        widget=forms.Textarea(attrs={"rows": 3, "cols": 60, "class": "vLargeTextField"}),
+    )
+
+
+class WorkAssignmentCancelForm(forms.Form):
+    comment = forms.CharField(
+        label="Комментарий",
         widget=forms.Textarea(attrs={"rows": 3, "cols": 60, "class": "vLargeTextField"}),
     )
 
