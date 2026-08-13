@@ -220,6 +220,52 @@ def _group_work_by_status(items):
     ]
 
 
+def _group_issued_work_by_lanes(items):
+    """Те же колонки по статусу, но каждая разбита на дорожки по исполнителю."""
+    buckets = _group_work_by_status(items)
+    for bucket in buckets:
+        lanes_map = {}
+        order = []
+        for wa in bucket["items"]:
+            key = wa.executor_id or 0
+            if key not in lanes_map:
+                lanes_map[key] = {"executor": wa.executor, "items": []}
+                order.append(key)
+            lanes_map[key]["items"].append(wa)
+        lanes = [lanes_map[key] for key in order]
+        lanes.sort(key=lambda lane: (lane["executor"].username.lower() if lane["executor"] else "￿"))
+        bucket["lanes"] = lanes
+    return buckets
+
+
+def _group_subtasks_by_status(items):
+    buckets = {key: [] for key in _WORK_STATUS_ORDER}
+    for item in items:
+        st = item.control_status
+        if st in ("on_time", "rescheduled", "partial", "not_done"):
+            key = "done"
+        elif st == "review":
+            key = "review"
+        elif st == "reschedule_pending":
+            key = "reschedule_pending"
+        elif st == "in_progress":
+            key = "in_progress"
+        else:
+            key = "assigned"
+        buckets[key].append(item)
+    for key in buckets:
+        buckets[key].sort(key=lambda s: (s.work_assignment_id, s.subtask_number or 0, s.pk))
+    return [
+        {
+            "key": key,
+            "label": _WORK_STATUS_LABELS[key],
+            "items": buckets[key],
+            "count": len(buckets[key]),
+        }
+        for key in _WORK_STATUS_ORDER
+    ]
+
+
 def _collect_responsible_items(user, limit_per_model=200):
     """Все объекты во всех моделях, где пользователь — «Текущий ответственный»."""
     from django.apps import apps
@@ -870,6 +916,11 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
                 name="approvals_notification_open",
             ),
             path(
+                "cabinet/subtask/<int:pk>/status/",
+                self.admin_site.admin_view(self.subtask_status_view),
+                name="approvals_subtask_status",
+            ),
+            path(
                 "<int:pk>/approve/",
                 self.admin_site.admin_view(self.approve_view),
                 name="approvals_task_approve",
@@ -990,7 +1041,7 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             .order_by("-control_date", "-date_of_change")[:30]
         )
         issued_work = issued_active + issued_done
-        issued_work_groups = _group_work_by_status(issued_work)
+        issued_work_groups = _group_issued_work_by_lanes(issued_work)
         issued_work_active = len(issued_active)
 
         review_ids = [
@@ -1012,17 +1063,24 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
                 wa.review_attachments = attachments_by_wa.get(wa.pk, [])
                 wa.review_task_attachments = task_attachments_by_wa.get(wa.pk, [])
 
-        my_subtasks = list(
+        subtasks_base = (
             WorkAssignmentSubtask.objects
             .filter(executor=user)
-            .filter(Q(control_status__isnull=True) | Q(control_status="in_progress"))
-            .filter(
-                Q(work_assignment__control_status__isnull=True)
-                | Q(work_assignment__control_status="in_progress")
-            )
             .select_related("work_assignment", "work_assignment__post")
+        )
+        subtasks_active = list(
+            subtasks_base
+            .exclude(control_status__in=WorkAssignment.TERMINAL_STATUSES)
             .order_by("work_assignment_id", "subtask_number", "pk")
         )
+        subtasks_done = list(
+            subtasks_base
+            .filter(control_status__in=WorkAssignment.TERMINAL_STATUSES)
+            .order_by("-control_date", "-date_of_change")[:30]
+        )
+        my_subtasks = subtasks_active + subtasks_done
+        my_subtasks_active_count = len(subtasks_active)
+        my_subtasks_groups = _group_subtasks_by_status(my_subtasks)
 
         assigned_items = _collect_responsible_items(user)
 
@@ -1047,7 +1105,7 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
 
         context = {
             **self.admin_site.each_context(request),
-            "title": "Личный кабинет",
+            "title": 'Личный кабинет сотрудника ООО "Система"',
             "sign_tasks": sign_tasks,
             "ack_tasks": ack_tasks,
             "fix_tasks": fix_tasks,
@@ -1055,6 +1113,8 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             "my_work_groups": my_work_groups,
             "my_work_active_count": my_work_active_count,
             "my_subtasks": my_subtasks,
+            "my_subtasks_groups": my_subtasks_groups,
+            "my_subtasks_active_count": my_subtasks_active_count,
             "assigned_items": assigned_items,
             "issued_work": issued_work,
             "issued_work_groups": issued_work_groups,
@@ -1068,6 +1128,51 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             "my_profile_form": my_profile_form,
         }
         return render(request, "admin/approvals/cabinet.html", context)
+
+    def subtask_status_view(self, request, pk):
+        """Перенос карточки подзадачи между статусами: рабочие статусы двигает
+        исполнитель, закрыть в "Выполнено" может только автор."""
+        from blog.models import WorkAssignment, WorkAssignmentSubtask
+
+        if request.method != "POST":
+            return HttpResponse(status=405)
+
+        subtask = get_object_or_404(WorkAssignmentSubtask, pk=pk)
+        new_status = request.POST.get("status")
+        active = (
+            WorkAssignment.STATUS_ASSIGNED,
+            WorkAssignment.STATUS_IN_PROGRESS,
+            WorkAssignment.STATUS_RESCHEDULE_PENDING,
+            WorkAssignment.STATUS_REVIEW,
+        )
+        if subtask.control_status not in active:
+            return JsonResponse({"ok": False, "error": "Недопустимый статус"}, status=400)
+
+        if new_status == "done":
+            if request.user.id != subtask.author_id:
+                return JsonResponse(
+                    {"ok": False, "error": "Закрыть подзадачу может только её автор."},
+                    status=403,
+                )
+            result_status = "rescheduled" if subtask.reschedule_count else "on_time"
+            subtask.control_status = result_status
+            subtask.result = (
+                "Выполнено с переносом сроков" if subtask.reschedule_count else "Выполнено в срок"
+            )
+            subtask.save(update_fields=["control_status", "control_date", "result"])
+            return JsonResponse({"ok": True})
+
+        if request.user.id != subtask.executor_id:
+            return JsonResponse(
+                {"ok": False, "error": "Перенести подзадачу может только её исполнитель."},
+                status=403,
+            )
+        if new_status not in active:
+            return JsonResponse({"ok": False, "error": "Недопустимый статус"}, status=400)
+
+        subtask.control_status = new_status
+        subtask.save(update_fields=["control_status", "control_date"])
+        return JsonResponse({"ok": True})
 
     def my_profile_save_view(self, request):
         from shared_repository.models import EmployeeProfile

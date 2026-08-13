@@ -53,6 +53,13 @@
       min-width: 9rem;
       line-height: 1.4;
     }
+    /* "Требуется установить дедлайн?" не влезает в стандартную
+       160px-колонку лейблов .aligned label - даёт ей ужаться по контенту. */
+    .field-requires_hard_deadline label {
+      width: auto;
+      min-width: 0;
+      white-space: nowrap;
+    }
   </style>
   <script>
     (function () {

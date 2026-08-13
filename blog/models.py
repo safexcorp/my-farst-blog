@@ -1797,7 +1797,20 @@ class WorkAssignment(models.Model):
     def save(self, *args, **kwargs):
         if self.post and not self.name:
             self.name = self.post.name
+
+        old_status = None
+        if self.pk:
+            old_status = type(self).objects.filter(pk=self.pk).values_list(
+                "control_status", flat=True
+            ).first()
+
         super().save(*args, **kwargs)
+
+        if self.control_status in self.TERMINAL_STATUSES and self.control_status != old_status:
+            self.subtasks.exclude(control_status__in=self.TERMINAL_STATUSES).update(
+                control_status=self.control_status,
+                control_date=timezone.localdate(),
+            )
 
     @property
     def wa_full_code(self) -> str:
@@ -1943,6 +1956,18 @@ class WorkAssignmentSubtask(models.Model):
                         f"абсолютного дедлайна рабочего задания {wa_label} ({wa.hard_deadline:%d.%m.%Y})."
                     )
                 })
+
+    def save(self, *args, **kwargs):
+        old_status = None
+        if self.pk:
+            old_status = type(self).objects.filter(pk=self.pk).values_list(
+                "control_status", flat=True
+            ).first()
+        else:
+            self.control_status = WorkAssignment.STATUS_ASSIGNED
+        if self.control_status != old_status:
+            self.control_date = timezone.localdate()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         code = self.subtask_full_code

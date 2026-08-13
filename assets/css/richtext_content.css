@@ -1,0 +1,152 @@
+/* Custom font whitelist labels/previews for the Quill "font" picker.
+   Must match FONT_WHITELIST in assets/js/richtext_widget.js. */
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=arial]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=arial]::before { content: 'Arial'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=times-new-roman]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=times-new-roman]::before { content: 'Times New Roman'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=courier-new]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=courier-new]::before { content: 'Courier New'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=georgia]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=georgia]::before { content: 'Georgia'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=verdana]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=verdana]::before { content: 'Verdana'; }
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value=tahoma]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value=tahoma]::before { content: 'Tahoma'; }
+
+.ql-editor .ql-font-arial { font-family: Arial, Helvetica, sans-serif; }
+.ql-editor .ql-font-times-new-roman { font-family: 'Times New Roman', Times, serif; }
+.ql-editor .ql-font-courier-new { font-family: 'Courier New', Courier, monospace; }
+.ql-editor .ql-font-georgia { font-family: Georgia, serif; }
+.ql-editor .ql-font-verdana { font-family: Verdana, sans-serif; }
+.ql-editor .ql-font-tahoma { font-family: Tahoma, sans-serif; }
+
+/* The longest label ("Times New Roman") no longer wraps/gets clipped inside
+   the picker's fixed-height row. */
+.richtext-field .ql-snow .ql-picker.ql-font { width: 176px; }
+.richtext-field .ql-snow .ql-picker.ql-font .ql-picker-label::before,
+.richtext-field .ql-snow .ql-picker.ql-font .ql-picker-item::before {
+  white-space: nowrap;
+}
+
+/* Editor instance (admin form). .ql-editor itself needs the min-height too:
+   its base rule is height:100% of .ql-container, which resolves to nothing
+   against an auto-height parent, so without this the editable area was only
+   as tall as the typed content - clicking the empty space below the first
+   line landed on the container, not the editor, and didn't focus it. */
+.richtext-field .ql-container {
+  height: auto;
+  min-height: 180px;
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+.richtext-field .ql-editor {
+  min-height: 180px;
+}
+.richtext-field .ql-toolbar.ql-snow {
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
+/* Read-only rendering (cabinet, action forms) reuses .ql-editor for
+   identical font/list/indent rules, without the editor's fixed height. */
+.ql-editor.rich-readonly {
+  height: auto;
+  overflow: visible;
+  padding: 0;
+}
+
+/* List markers (numbers/bullets) outside the live editor - Quill only paints
+   them via JS-injected <li> > .ql-ui elements that don't exist in saved
+   HTML, so quill.snow.css's own counters fire but nothing ever displays
+   them here. Fully self-contained (doesn't rely on quill.snow.css's own
+   li::before rules - those set conflicting display/margin/width on the same
+   pseudo-element, which combined with position:absolute broke marker
+   position, especially on nested levels - so every property below is
+   explicit rather than assuming quill.snow.css already unset it).
+   Ordered numbering cycles per indent level like the live editor does:
+   1,2,3 -> a,b,c -> i,ii,iii. Works with both li[data-list=...] (current
+   Quill 2.x save format) and a bare <ol>/<ul><li> with no attribute. */
+.rich-readonly ol,
+.rich-readonly ul { margin: 4px 0; padding-left: 0; }
+.rich-readonly ol { counter-reset: rt0 rt1 rt2 rt3; }
+.rich-readonly li {
+  list-style: none; position: relative; padding-left: 1.4em; margin-left: 0;
+}
+.rich-readonly li::before {
+  position: absolute; left: 0; top: 0;
+  display: inline-block; width: 1.2em; margin: 0;
+  text-align: right; white-space: nowrap;
+}
+.rich-readonly li.ql-indent-1 { padding-left: 2.8em; }
+.rich-readonly li.ql-indent-1::before { left: 1.4em; }
+.rich-readonly li.ql-indent-2 { padding-left: 4.2em; }
+.rich-readonly li.ql-indent-2::before { left: 2.8em; }
+.rich-readonly li.ql-indent-3 { padding-left: 5.6em; }
+.rich-readonly li.ql-indent-3::before { left: 4.2em; }
+
+.rich-readonly li[data-list=ordered],
+.rich-readonly ol > li:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked]) {
+  counter-increment: rt0; counter-reset: rt1 rt2 rt3;
+}
+.rich-readonly li[data-list=ordered]::before,
+.rich-readonly ol > li:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked])::before {
+  content: counter(rt0, decimal) '. ';
+}
+.rich-readonly li.ql-indent-1[data-list=ordered],
+.rich-readonly ol > li.ql-indent-1:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked]) {
+  counter-increment: rt1; counter-reset: rt2 rt3;
+}
+.rich-readonly li.ql-indent-1[data-list=ordered]::before,
+.rich-readonly ol > li.ql-indent-1:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked])::before {
+  content: counter(rt1, lower-alpha) '. ';
+}
+.rich-readonly li.ql-indent-2[data-list=ordered],
+.rich-readonly ol > li.ql-indent-2:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked]) {
+  counter-increment: rt2; counter-reset: rt3;
+}
+.rich-readonly li.ql-indent-2[data-list=ordered]::before,
+.rich-readonly ol > li.ql-indent-2:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked])::before {
+  content: counter(rt2, lower-roman) '. ';
+}
+.rich-readonly li.ql-indent-3[data-list=ordered],
+.rich-readonly ol > li.ql-indent-3:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked]) {
+  counter-increment: rt3;
+}
+.rich-readonly li.ql-indent-3[data-list=ordered]::before,
+.rich-readonly ol > li.ql-indent-3:not([data-list=bullet]):not([data-list=checked]):not([data-list=unchecked])::before {
+  content: counter(rt3, decimal) '. ';
+}
+
+.rich-readonly li[data-list=bullet]::before,
+.rich-readonly ul > li:not([data-list])::before { content: '\2022'; }
+.rich-readonly li[data-list=checked]::before { content: '\2611'; }
+.rich-readonly li[data-list=unchecked]::before { content: '\2610'; }
+
+/* Dark theme: reuse Django admin's own dark-mode variables (base.css /
+   dark_mode.css) instead of a custom palette, so the field matches the
+   admin's actual default black rather than an invented color.
+   Toolbar row (icons + closed picker label, on --body-bg) vs. the open
+   dropdown panel (own background below) need separate text colors -
+   conflating them is what made the open font/size list white-on-white. */
+@media (prefers-color-scheme: dark) {
+  .richtext-field .ql-toolbar.ql-snow,
+  .richtext-field .ql-container.ql-snow { border-color: var(--border-color); background: var(--body-bg); }
+  .richtext-field .ql-snow .ql-stroke { stroke: var(--body-fg); }
+  .richtext-field .ql-snow .ql-fill { fill: var(--body-fg); }
+  .richtext-field .ql-snow .ql-picker-label { color: var(--body-fg); }
+  .richtext-field .ql-snow .ql-picker-options {
+    background: var(--darkened-bg); border: 1px solid var(--border-color);
+  }
+  .richtext-field .ql-snow .ql-picker-item { color: var(--body-fg); }
+  .richtext-field .ql-editor { background: var(--body-bg); color: var(--body-fg); }
+}
+html[data-theme="dark"] .richtext-field .ql-toolbar.ql-snow,
+html[data-theme="dark"] .richtext-field .ql-container.ql-snow { border-color: var(--border-color); background: var(--body-bg); }
+html[data-theme="dark"] .richtext-field .ql-snow .ql-stroke { stroke: var(--body-fg); }
+html[data-theme="dark"] .richtext-field .ql-snow .ql-fill { fill: var(--body-fg); }
+html[data-theme="dark"] .richtext-field .ql-snow .ql-picker-label { color: var(--body-fg); }
+html[data-theme="dark"] .richtext-field .ql-snow .ql-picker-options {
+  background: var(--darkened-bg); border: 1px solid var(--border-color);
+}
+html[data-theme="dark"] .richtext-field .ql-snow .ql-picker-item { color: var(--body-fg); }
+html[data-theme="dark"] .richtext-field .ql-editor { background: var(--body-bg); color: var(--body-fg); }
