@@ -7979,6 +7979,21 @@ class ShipmentSelect(forms.Select):
 
 
 class PAKDocumentForm(forms.ModelForm):
+    # Группа разработок, с которой работает эта сущность (лист замечаний 21.07.2026).
+    PRODUCT_GROUP_NAME = "ПАК СПМ"
+
+    # Три допустимых варианта для полей проверок (п. 8): «нет данных» по умолчанию.
+    CHECK_CHOICES = [
+        ('нет данных', 'Нет данных'),
+        ('соответствует', 'Соответствует'),
+        ('не соответствует', 'Не соответствует'),
+    ]
+    # Обычные поля проверок (кроме п. 4 «check_alarm», у него своя логика с файлом).
+    CHECK_FIELDS = (
+        'check_marking', 'check_kd_appearance', 'check_server_link',
+        'check_battery_status', 'check_radio_settings', 'check_long_run',
+    )
+
     class Meta:
         model = PAKDocument
         fields = '__all__'
@@ -8070,6 +8085,16 @@ class PAKDocumentForm(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
 
+        # Даты испытаний независимы, но начало не может быть позже окончания
+        # (допускается один и тот же день — испытания в пределах суток).
+        date_start = cleaned_data.get('test_date_start')
+        date_end = cleaned_data.get('test_date_end')
+        if date_start and date_end and date_start > date_end:
+            self.add_error(
+                'test_date_start',
+                'Дата начала испытаний не может быть позже даты окончания .'
+            )
+
         alarm_log_file = cleaned_data.get('alarm_log_file')
         check_alarm = cleaned_data.get('check_alarm')
         alarm_note = cleaned_data.get('alarm_note')
@@ -8083,6 +8108,29 @@ class PAKDocumentForm(forms.ModelForm):
                 'alarm_note',
                 'При статусе «Не соответствует» необходимо заполнить «Примечание (п. 4)».'
             )
+
+        # Прямая связь «Разработка → Изделие к отгрузке» (п. 5):
+        # изделие обязано принадлежать выбранной разработке.
+        post = cleaned_data.get('post')
+        shipment = cleaned_data.get('shipment')
+        if post and shipment and shipment.post_id != post.id:
+            self.add_error(
+                'shipment',
+                'Выбранное изделие к отгрузке не относится к выбранной разработке (модификации).'
+            )
+
+        # Один протокол ПСИ ПАК на один заводской номер (shipment) —
+        # чтобы не плодить дубли по одному изделию.
+        if shipment:
+            duplicates = PAKDocument.objects.filter(shipment=shipment)
+            if self.instance and self.instance.pk:
+                duplicates = duplicates.exclude(pk=self.instance.pk)
+            if duplicates.exists():
+                self.add_error(
+                    'shipment',
+                    'Для этого заводского номера уже существует протокол ПСИ ПАК СПМ. '
+                    'На один заводской номер допускается только один протокол.'
+                )
 
         return cleaned_data
 
@@ -8103,14 +8151,18 @@ class PAKDocumentAdmin(admin.ModelAdmin):
     )
     list_filter = ('test_date_start', 'inspector', 'conclusion')
     search_fields = (
-        'shipment__serial_number',
-        'post__name',
+        'shipment__serial_number',  # заводской номер
+        'post__name',               # модификация
+        'developer_org__name',      # организация-разработчик
         'fw_version',
         'inspector__last_name',   # inspector — FK на User, ищем по полям пользователя
         'inspector__first_name',
         'inspector__username',
+        'comment',
+        'workshop__number_name',
     )
-    autocomplete_fields = ('shipment', 'post', 'developer_org')
+    # post/shipment — зависимые списки (каскад), поэтому убраны из autocomplete.
+    autocomplete_fields = ('developer_org',)
 
     readonly_fields = (
         'created_at',
@@ -8118,17 +8170,72 @@ class PAKDocumentAdmin(admin.ModelAdmin):
         'author',
         'last_editor',
         'conclusion',  # определяется автоматически по результатам проверок
+        'version',  # считается автоматически (+1 при каждом изменении)
         'pdf_count_display',
         'date_of_creation',
     )
 
     inlines = [PAKGeneratedDocumentInline, PAKDocumentHistoryInline]
 
+    class Media:
+        # Жирная подпись пункта 4 (проверка обнаружения/регистрации аварии).
+        css = {
+            'all': ('blog/pak_admin_bold.css',)
+        }
+        # Каскад «Разработка → Изделие к отгрузке».
+        js = ('blog/js/chained_shipment.js',)
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                'shipments-for-post/',
+                self.admin_site.admin_view(self.shipments_for_post_view),
+                name='blog_pakdocument_shipments_for_post',
+            ),
+        ]
+        return custom + urls
+
+    def shipments_for_post_view(self, request):
+        """JSON-список изделий к отгрузке для выбранной разработки (каскад).
+
+        Флаг no_psi отмечает заводские номера без протокола ПСИ — на клиенте
+        они подсвечиваются синим (см. blog/js/chained_shipment.js)."""
+        from django.http import JsonResponse
+        post_id = request.GET.get('post_id')
+        results = []
+        if post_id:
+            qs = Shipment.objects.filter(post_id=post_id).order_by('serial_number')
+            no_psi_ids = shipment_ids_without_psi(qs.values_list('pk', flat=True))
+            results = [
+                {'id': s.pk, 'text': str(s), 'no_psi': s.pk in no_psi_ids}
+                for s in qs
+            ]
+        return JsonResponse({'results': results})
+
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        # Передаём JS URL для подгрузки изделий выбранной разработки.
+        if 'post' in form.base_fields:
+            form.base_fields['post'].widget.attrs['data-shipments-url'] = reverse(
+                'admin:blog_pakdocument_shipments_for_post'
+            )
+        return form
+
+    def get_changeform_initial_data(self, request):
+        """По умолчанию «Представитель ОТК» и «Текущий ответственный» — текущий
+        пользователь (создатель протокола); значения можно изменить в форме."""
+        initial = super().get_changeform_initial_data(request)
+        initial = dict(initial or {})
+        initial.setdefault('inspector', request.user.pk)
+        initial.setdefault('current_responsible', request.user.pk)
+        return initial
+
     fieldsets = (
         ('1. Основная информация', {
             'fields': (
-                'shipment',
                 'post',
+                'shipment',
                 'developer_org',
                 'fw_version',
                 'test_date_start',
@@ -8219,41 +8326,63 @@ class PAKDocumentAdmin(admin.ModelAdmin):
 
     # ---- Автор / редактор + автогенерация PDF ----
     def save_model(self, request, obj, form, change):
+        is_new = obj.pk is None
+        # Изменения на самой сущности (без учёта инлайнов).
+        has_changes = is_new or bool(form.changed_data)
+
         if not obj.author_id:
             obj.author = request.user
         obj.last_editor = request.user
+
+        # «Версия» вычисляется программно и проставляется после каждого реального
+        # изменения сущности (+1 по порядку). Поле только для чтения — вручную
+        # его менять нельзя. При создании версия = «1».
+        if is_new:
+            obj.version = "1"
+        elif has_changes:
+            try:
+                next_version = int(obj.version or "0") + 1
+            except (TypeError, ValueError):
+                next_version = 1
+            # version — CharField(max_length=3): не выходим за пределы столбца БД.
+            obj.version = str(min(next_version, 999))
+
         super().save_model(request, obj, form, change)
 
+        action_text = "Создан новый протокол" if is_new else "Протокол отредактирован"
+        if not is_new and has_changes:
+            action_text += f" (изменены поля: {', '.join(form.changed_data)})"
         PAKDocumentHistory.objects.create(
             pak_source=obj,
             user=request.user,
-            action=("Создан новый протокол" if not change else "Протокол отредактирован")
+            action=action_text,
         )
 
-        # Автоматически формируем PDF сразу после сохранения протокола.
+        # Автогенерация PDF только при наличии изменений (как в ПСИ ИБП СПМ).
         # Ошибку генерации не «роняем» на пользователя — сохранение уже прошло,
         # просто показываем предупреждение.
-        try:
-            generated = generate_pak_pdf_logic(obj, request.user)
-            self.message_user(
-                request,
-                f"✅ PDF протокола сформирован автоматически (версия {generated.version})."
-            )
-        except Exception as e:
-            self.message_user(
-                request,
-                f"⚠️ Протокол сохранён, но PDF не сформировался: {e}",
-                level=messages.WARNING,
-            )
+        if has_changes:
+            try:
+                generated = generate_pak_pdf_logic(obj, request.user)
+                self.message_user(
+                    request,
+                    f"✅ PDF протокола сформирован автоматически (версия {generated.version})."
+                )
+            except Exception as e:
+                self.message_user(
+                    request,
+                    f"⚠️ Протокол сохранён, но PDF не сформировался: {e}",
+                    level=messages.WARNING,
+                )
 
     # ---- Экшен генерации PDF ----
-    @admin.action(description="Сгенерировать PDF протокол ПАК СПМ")
-    def create_pak_pdf_action(self, request, queryset):
-        count = 0
-        for obj in queryset:
-            generate_pak_pdf_logic(obj, request.user)
-            count += 1
-        self.message_user(request, f"✅ PDF сформированы для {count} протокол(ов) ПАК СПМ.")
+#    @admin.action(description="Сгенерировать PDF протокол ПАК СПМ")
+ #   def create_pak_pdf_action(self, request, queryset):
+  #      count = 0
+   #     for obj in queryset:
+    #        generate_pak_pdf_logic(obj, request.user)
+     #       count += 1
+      #  self.message_user(request, f"✅ PDF сформированы для {count} протокол(ов) ПАК СПМ.")
 
 
 #@admin.register(PAKGeneratedDocument)
