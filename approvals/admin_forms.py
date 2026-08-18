@@ -1,6 +1,23 @@
 from django import forms
+from django.contrib.admin.widgets import AdminDateWidget
 
 from .models import ApprovalRoute
+
+
+class MyProfileForm(forms.Form):
+    """Самостоятельное редактирование сотрудником своих личных данных.
+
+    Только личные поля (ФИО, дата рождения, телефон, фото) — организационные
+    (отдел, должность, руководитель) заполняет только сисадмин через «Пользователи»,
+    т.к. отдел влияет на маршрутизацию согласований.
+    """
+    first_name = forms.CharField(label="Имя", max_length=150, required=False)
+    last_name = forms.CharField(label="Фамилия", max_length=150, required=False)
+    patronymic = forms.CharField(label="Отчество", max_length=100, required=False)
+    birth_date = forms.DateField(label="Дата рождения", required=False, widget=AdminDateWidget)
+    phone = forms.CharField(label="Телефон", max_length=20, required=False)
+    email = forms.EmailField(label="Email", required=False)
+    avatar = forms.ImageField(label="Фото", required=False)
 
 
 class StartApprovalForm(forms.Form):

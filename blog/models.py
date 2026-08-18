@@ -1636,6 +1636,7 @@ class WorkAssignment(models.Model):
     TEMP_STATUS_CHOICES = [
         ('assigned', 'Ожидает принятия'),
         ('in_progress', 'В работе'),
+        ('reschedule_pending', 'Согласование переноса срока'),
         ('review', 'На проверке'),
         ('on_time', 'Выполнено в срок'),
         ('rescheduled', 'Выполнено с переносом сроков'),
@@ -1646,11 +1647,12 @@ class WorkAssignment(models.Model):
     STATUS_ASSIGNED = 'assigned'
     STATUS_IN_PROGRESS = 'in_progress'
     STATUS_REVIEW = 'review'
+    STATUS_RESCHEDULE_PENDING = 'reschedule_pending'
 
-    ACTIVE_STATUSES = ('assigned', 'in_progress', 'review')
+    ACTIVE_STATUSES = ('assigned', 'in_progress', 'review', 'reschedule_pending')
     TERMINAL_STATUSES = ('on_time', 'rescheduled', 'partial', 'not_done')
 
-    name = models.CharField(max_length=100, unique=True, blank=True, null=True, verbose_name="Наименование")
+    name = models.CharField(max_length=100, blank=True, null=True, verbose_name="Наименование")
     wa_number = models.PositiveIntegerField(
         null=True,
         blank=True,
@@ -1658,6 +1660,7 @@ class WorkAssignment(models.Model):
         verbose_name="Порядковый номер в рамках разработки",
     )
     category = models.CharField(max_length=100, default="РЗ", verbose_name="Категория")
+    is_urgent = models.BooleanField(default=False, verbose_name="Срочно?")
     executor = models.ForeignKey(User, on_delete=models.CASCADE, null= True, related_name= "executed_workassignments", verbose_name="Исполнитель")
     post = models.ForeignKey('Post', on_delete=models.CASCADE, null=True, blank=True, related_name='work_assignments', verbose_name="Связанная разработка/проект")
     author = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Автор")
@@ -1668,11 +1671,6 @@ class WorkAssignment(models.Model):
         verbose_name="Последний редактор"
     )
     date_of_change = models.DateTimeField(auto_now=True, verbose_name="Дата и время последнего изменения")
-    current_responsible = models.ForeignKey(
-        User, on_delete=models.CASCADE,
-        related_name="responsible_workassignments",
-        verbose_name="Текущий ответственный"
-    )
     version = models.CharField(max_length=3, blank=True, null=True, verbose_name="Версия")
     task = models.TextField(
         verbose_name="Задача",
@@ -1687,13 +1685,18 @@ class WorkAssignment(models.Model):
 
     result = models.CharField(max_length=100, choices=RESULT_CHOICES, blank=True, null=True, verbose_name="Результат")
     result_description = models.TextField(max_length=5000, blank=True, null=True, verbose_name="Описание результата")
+    comment = models.TextField(max_length=5000, blank=True, null=True, verbose_name="Комментарий автора")
+    returned_for_rework = models.BooleanField(default=False, verbose_name="Возвращена на доработку")
     route = models.ForeignKey("Route", on_delete=models.CASCADE, related_name='routes', blank=True, null=True, verbose_name="Маршрут")
 
     target_deadline = models.DateField("Целевой срок выполнения", default=timezone.localdate, null=False, blank=False)
-    hard_deadline = models.DateField("Абсолютный дедлайн", null=True, blank=True)
+    hard_deadline = models.DateField("Дедлайн", null=True, blank=True)
     time_window_start = models.DateField("Временное окно: с", null=True, blank=True)
     time_window_end = models.DateField("Временное окно: по", null=True, blank=True)
     conditional_deadline = models.CharField("Условия/ограничения", max_length=1000, blank=True)
+
+    reschedule_request_reason = models.TextField("Причина запроса переноса срока", blank=True, default="")
+    reschedule_request_date = models.DateField("Желаемая дата выполнения", null=True, blank=True)
 
     version_diff = models.TextField(
         "Сравнение версий",
@@ -1707,7 +1710,7 @@ class WorkAssignment(models.Model):
         blank=True,
         choices=TEMP_STATUS_CHOICES,
     )
-    control_date = models.DateField("Дата фиксации статуса", null=True, blank=True)
+    control_date = models.DateTimeField("Дата фиксации статуса", null=True, blank=True)
 
     def clean(self):
         super().clean()
@@ -1794,7 +1797,20 @@ class WorkAssignment(models.Model):
     def save(self, *args, **kwargs):
         if self.post and not self.name:
             self.name = self.post.name
+
+        old_status = None
+        if self.pk:
+            old_status = type(self).objects.filter(pk=self.pk).values_list(
+                "control_status", flat=True
+            ).first()
+
         super().save(*args, **kwargs)
+
+        if self.control_status in self.TERMINAL_STATUSES and self.control_status != old_status:
+            self.subtasks.exclude(control_status__in=self.TERMINAL_STATUSES).update(
+                control_status=self.control_status,
+                control_date=timezone.localdate(),
+            )
 
     @property
     def wa_full_code(self) -> str:
@@ -1941,6 +1957,18 @@ class WorkAssignmentSubtask(models.Model):
                     )
                 })
 
+    def save(self, *args, **kwargs):
+        old_status = None
+        if self.pk:
+            old_status = type(self).objects.filter(pk=self.pk).values_list(
+                "control_status", flat=True
+            ).first()
+        else:
+            self.control_status = WorkAssignment.STATUS_ASSIGNED
+        if self.control_status != old_status:
+            self.control_date = timezone.localdate()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         code = self.subtask_full_code
         head = (self.task or "").strip().replace("\n", " ")[:60]
@@ -1958,14 +1986,14 @@ class WorkAssignmentDeadlineChange(models.Model):
     )
 
     # что было
-    old_target_deadline = models.DateField(null=True, blank=True, verbose_name="старый целевой дедлайн")
-    old_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="старый абсолютный дедлайн")
+    old_target_deadline = models.DateField(null=True, blank=True, verbose_name="старый целевой срок")
+    old_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="старый дедлайн")
     old_time_window_start = models.DateField(null=True, blank=True, verbose_name="старое временное окно с")
     old_time_window_end   = models.DateField(null=True, blank=True, verbose_name="старое временное окно по")
 
     # что стало
-    new_target_deadline = models.DateField(null=True, blank=True, verbose_name="новый целевой дедлайн")
-    new_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="новый абсолютный дедлайн")
+    new_target_deadline = models.DateField(null=True, blank=True, verbose_name="новый целевой срок")
+    new_hard_deadline   = models.DateField(null=True, blank=True, verbose_name="новый дедлайн")
     new_time_window_start = models.DateField(null=True, blank=True, verbose_name="новое временное окно с")
     new_time_window_end   = models.DateField(null=True, blank=True, verbose_name="новое временное окно по")
 
@@ -2216,6 +2244,10 @@ class Attachment(models.Model):
     content_object = GenericForeignKey("content_type", "object_id")
 
     file = models.FileField(upload_to="attachments/")
+    kind = models.CharField(max_length=20, blank=True, default="")
+
+    def __str__(self):
+        return self.file.name.rsplit("/", 1)[-1] if self.file else f"Вложение {self.pk}"
 
 
 class RKDDeveloper(models.Model):
@@ -3347,7 +3379,7 @@ class PAKDocument(models.Model):
     )
 
     # --- Основная информация ---
-    fw_version = models.CharField('Версия ПО', max_length=50)
+    fw_version = models.CharField('Версия ПО', max_length=50, blank=True, default='')
     test_date_start = models.DateField('Дата начала проведения испытаний')
     # null=True оставлен намеренно: в базе есть протоколы с пустой датой окончания.
     # Перевод колонки в NOT NULL требует one-off default, который проставил бы
@@ -3358,19 +3390,19 @@ class PAKDocument(models.Model):
     # --- Проверки (Таблица 1) ---
     check_marking = models.CharField(
         '1 Проверка содержания маркировки (1.5.2 ТУ, 3.1 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_kd_appearance = models.CharField(
         '2 Проверка соответствия ПАК СПМ КД и внешнего вида (1.1.1, 1.1.9 ТУ, 3.2 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_server_link = models.CharField(
         '3 Проверка обеспечения связи с сервером (1.1.5, 1.1.4 ТУ, 3.3 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_alarm = models.CharField(
         '4 Проверка обнаружения и регистрации аварии (1.1.2, 1.1.4 ТУ, 3.4 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     # Пункт 4: файл с логами от прибора + примечание
     alarm_log_file = models.FileField(
@@ -3383,15 +3415,15 @@ class PAKDocument(models.Model):
     )
     check_battery_status = models.CharField(
         '5 Проверка контроля и передачи статуса батареи (1.1.7 ТУ, 3.5 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_radio_settings = models.CharField(
         '6 Проверка обеспечения изменения настроек по радиоканалу ближней связи (1.1.6 ТУ, 3.6 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
     check_long_run = models.CharField(
         '7 Проверка длительной работы ПАК СПМ (3.7 ПМ)',
-        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+        max_length=20, choices=STATUS_CHOICES
     )
 
     # --- Заключение ---
@@ -3493,19 +3525,6 @@ class PAKDocument(models.Model):
         else:
             self.conclusion = 'не готов'
         super().save(*args, **kwargs)
-
-    def get_inspector_display(self):
-        """Возвращает полное ФИО испытателя на русском (Фамилия Имя Отчество)."""
-        if not self.inspector:
-            return "—"
-        user = self.inspector
-        last = user.last_name or ''
-        first = user.first_name or ''
-        patronymic = ''
-        if hasattr(user, 'profile') and user.profile.patronymic:
-            patronymic = user.profile.patronymic
-        parts = [p for p in [last, first, patronymic] if p]
-        return ' '.join(parts) if parts else user.username
 
 
 class PAKGeneratedDocument(models.Model):

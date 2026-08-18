@@ -1,0 +1,47 @@
+{% load richtext %}
+<div class="cab-st-group">
+  <div class="cab-st-parent">
+    <div class="cab-st-parent-head">
+      <span class="cab-st-code">
+        📋 {{ group.grouper.wa_full_code|default:group.grouper.name|default:"Рабочее задание" }}
+      </span>
+      <span class="cab-st-pill">Подзадач: {{ group.list|length }}</span>
+      <a class="btn btn-ghost btn-sm" style="margin-left:auto;"
+         href="{% url 'admin:blog_workassignment_change' group.grouper.pk %}">Открыть карточку РЗ</a>
+    </div>
+    {% if group.grouper.task %}
+    <div class="cab-st-parent-task" title="{{ group.grouper.task|striptags }}"><span class="meta-label">Задача -</span> {{ group.grouper.task|rich_text }}</div>
+    {% endif %}
+  </div>
+  <div class="cab-st-children">
+    {% for st in group.list %}
+    <div class="cab-st-child{% if board and g.key != "done" %} cab-draggable{% endif %}"{% if board and g.key != "done" %} draggable="true" data-subtask-id="{{ st.pk }}"{% endif %}>
+      <div class="cab-info">
+        <div class="task-text clamp2" title="{{ st.task }}">
+          {% if st.subtask_full_code %}<span class="num">{{ st.subtask_full_code }}</span>{% endif %}
+          <span class="meta-label">Подзадача -</span> {{ st.task }}
+        </div>
+        <div class="meta">
+          {% if st.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
+          {% elif st.control_status == "reschedule_pending" %}<span class="pill pill-purple">Согласование переноса срока</span>
+          {% elif st.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
+          {% elif st.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
+          {% elif st.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
+          {% elif st.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+          {% elif st.control_status == "in_progress" %}<span class="pill pill-blue">В работе</span>
+          {% else %}<span class="pill pill-amber">Ожидает принятия</span>{% endif %}
+        </div>
+        <div class="meta">
+          Срок:
+          <span {% if st.target_deadline < today %}class="cab-overdue"{% endif %}>
+            {{ st.target_deadline|date:"d.m.Y" }}{% if st.target_deadline < today %} (просрочено){% endif %}
+          </span>
+        </div>
+      </div>
+      <div class="cab-actions">
+        <a class="btn btn-gray btn-sm" href="{% url 'admin:blog_workassignmentsubtask_change' st.pk %}">Открыть карточку подзадачи</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>

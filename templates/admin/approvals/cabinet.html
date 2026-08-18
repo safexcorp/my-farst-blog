@@ -1,10 +1,95 @@
 {% extends "admin/base_site.html" %}
+{% load static richtext %}
+
+{% block extrahead %}{{ block.super }}{{ my_profile_form.media }}<link rel="stylesheet" href="{% static 'vendor/quill/quill.snow.css' %}"><link rel="stylesheet" href="{% static 'css/richtext_content.css' %}">{% endblock %}
+
+{% block content_title %}
+{% if title %}
+<div class="cab-title-row">
+  <h1>{{ title }}</h1>
+  {% if my_profile %}
+  <div class="cab-header-profile-wrap" id="cab-header-profile-wrap">
+    <button type="button" class="cab-header-profile" id="cab-header-profile-btn" aria-expanded="false">
+      {% if my_profile.avatar %}
+      <img src="{{ my_profile.avatar.url }}" alt="" class="cab-header-avatar">
+      {% else %}
+      <span class="cab-header-avatar cab-header-avatar--fallback">{{ request.user.username|slice:":1"|upper }}</span>
+      {% endif %}
+      <span class="cab-header-name">{{ my_profile.full_name }}</span>
+    </button>
+    <div class="cab-header-profile-menu" id="cab-header-profile-menu">
+      <button type="button" data-tab="profile">👤 Мой профиль</button>
+    </div>
+  </div>
+  {% endif %}
+</div>
+<style>
+  .cab-title-row { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+  .cab-title-row h1 { margin:0; }
+  .cab-header-profile-wrap { position:relative; }
+  .cab-header-profile {
+    display:inline-flex; align-items:center; gap:10px; padding:5px 16px 5px 5px;
+    border-radius:999px; border:1px solid rgba(121,174,200,.45); background:transparent;
+    color:var(--body-fg,#333); cursor:pointer; font-family:inherit; font-size:13px; font-weight:600;
+    appearance:none; -webkit-appearance:none;
+    transition:background .15s, border-color .15s, box-shadow .15s, transform .15s;
+  }
+  .cab-header-profile:hover {
+    background:rgba(121,174,200,.14); border-color:#79aec8;
+    box-shadow:0 2px 8px rgba(65,118,144,.25); transform:translateY(-1px);
+  }
+  .cab-header-avatar {
+    width:34px; height:34px; border-radius:50%; object-fit:cover; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .cab-header-avatar--fallback { background:#417690; color:#fff; font-weight:700; font-size:14px; }
+  @media (max-width:600px) { .cab-header-name { display:none; } }
+  .cab-header-profile-menu {
+    display:none; position:absolute; top:calc(100% + 6px); right:0; z-index:20;
+    background:var(--body-bg,#fff); border:1px solid rgba(121,174,200,.45); border-radius:8px;
+    box-shadow:0 6px 18px rgba(0,0,0,.18); padding:4px; min-width:160px;
+  }
+  .cab-header-profile-menu.open { display:block; }
+  .cab-header-profile-menu button {
+    width:100%; text-align:left; padding:8px 10px; border-radius:6px; border:none;
+    background:transparent; color:var(--body-fg,#333); cursor:pointer;
+    font-family:inherit; font-size:13px; font-weight:600;
+  }
+  .cab-header-profile-menu button:hover { background:rgba(121,174,200,.14); }
+</style>
+<script>
+  (function () {
+    var wrap = document.getElementById("cab-header-profile-wrap");
+    if (!wrap) return;
+    var btn = document.getElementById("cab-header-profile-btn");
+    var menu = document.getElementById("cab-header-profile-menu");
+    function close() {
+      menu.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+    }
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var open = menu.classList.toggle("open");
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    document.addEventListener("click", function (e) {
+      if (!wrap.contains(e.target)) close();
+    });
+    menu.querySelector("[data-tab]").addEventListener("click", close);
+  })();
+</script>
+{% endif %}
+{% endblock %}
 
 {% block content %}
 <style>
-  .cab-wrap { max-width: 1150px; }
+  .cab-wrap { max-width: 1150px; transition:max-width .2s ease; }
+  .cab-wrap.cab-wrap--wide { max-width: none; }
 
+  /* Доска Канбан расширяет .cab-wrap на всю страницу, но сама навигация
+     (вкладки разделов) держит исходную ширину и не "плывёт" вместе с ней. */
   .cab-nav {
+    max-width:1150px;
     margin-bottom:22px; padding:14px 16px 16px; border-radius:12px;
     border:1px solid rgba(121,174,200,.22);
     background:rgba(121,174,200,.04);
@@ -22,15 +107,11 @@
   }
   .cab-nav-label-icon { font-size:15px; line-height:1; }
   .cab-tabs { display:grid; gap:8px; min-width:0; }
-  .cab-tabs--4 { grid-template-columns:repeat(4, minmax(0, 1fr)); }
   .cab-tabs--3 { grid-template-columns:repeat(3, minmax(0, 1fr)); }
   .cab-tabs--2 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
-  @media (max-width:900px) {
-    .cab-tabs--4 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
-  }
   @media (max-width:720px) {
     .cab-nav-row { grid-template-columns:1fr; gap:8px; }
-    .cab-tabs--4, .cab-tabs--3, .cab-tabs--2 { grid-template-columns:1fr; }
+    .cab-tabs--3, .cab-tabs--2 { grid-template-columns:1fr; }
   }
   .cab-tab {
     width:100%; padding:10px 14px; cursor:pointer; border-radius:8px;
@@ -70,12 +151,40 @@
     border:1px solid var(--hairline-color,#444); border-radius:10px; padding:14px 18px;
     margin-bottom:12px; background:var(--darkened-bg,rgba(255,255,255,.02));
     display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap;
+    transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+    animation:cab-card-in .2s ease both;
+  }
+  .cab-card:hover {
+    transform:translateY(-2px);
+    box-shadow:0 6px 16px rgba(0,0,0,.14);
+    border-color:#79aec8;
+  }
+  @keyframes cab-card-in {
+    from { opacity:0; }
+    to { opacity:1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cab-card { animation:none; }
+    .cab-card:hover { transform:none; }
   }
   .cab-info { min-width:280px; flex:1; }
   .cab-card .title { font-size:15px; font-weight:700; }
   .cab-card .subtitle { font-size:13px; color:var(--body-quiet-color,#aaa); margin-top:2px; }
   .cab-card .meta { font-size:12px; color:var(--body-quiet-color,#999); margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .meta-label { font-weight:600; color:var(--body-fg); }
   .cab-card .note { font-size:12px; margin-top:6px; padding:6px 10px; border-radius:6px; background:rgba(229,57,53,.10); }
+  .cab-card .note--orange { background:rgba(244,151,142,.16); }
+  .cab-archive-note {
+    font-size:12px; color:var(--body-quiet-color,#999); margin-bottom:10px;
+    padding:6px 10px; border-radius:6px; background:rgba(121,174,200,.08); border-left:3px solid #79aec8;
+  }
+
+  .cab-card--urgent {
+    border-color:#E53935; border-left-width:4px;
+    background:rgba(229,57,53,.06);
+    box-shadow:0 0 0 1px rgba(229,57,53,.20);
+  }
+  .cab-card--urgent:hover { border-color:#E53935; }
 
   .pill { border-radius:12px; padding:2px 10px; font-size:11px; font-weight:600; color:#fff; display:inline-block; }
   .pill-blue { background:#2196F3; } .pill-green { background:#4CAF50; }
@@ -83,8 +192,17 @@
   .pill-purple { background:#9C27B0; }
   .pill-type { background:#607D8B; }
   .pill-amber { background:#FFA000; } .pill-cyan { background:#00ACC1; }
+  .pill-red { background:#E53935; }
+  .pill-peach { background:#F4978E; }
+  .pill-urgent { background:#E53935; margin-right:6px; animation:cab-urgent-pulse 1.8s ease-in-out infinite; }
+  @keyframes cab-urgent-pulse { 0%,100% { opacity:1; } 50% { opacity:.65; } }
 
   .cab-actions { display:flex; gap:8px; flex-wrap:wrap; }
+  .cab-actions--col { flex-direction:column; align-items:stretch; }
+  .cab-actions--col .cab-wa-btn,
+  .cab-actions--col .cab-wform,
+  .cab-actions--col .cab-wform button,
+  .cab-actions--col .btn { width:100%; text-align:center; box-sizing:border-box; justify-content:center; }
   .btn { padding:7px 15px; border-radius:6px; color:#fff; font-weight:600; font-size:13px; text-decoration:none; border:none; cursor:pointer; }
   .btn-green { background:#4CAF50; } .btn-red { background:#E53935; }
   .btn-blue { background:#2196F3; } .btn-gray { background:#777; }
@@ -94,8 +212,30 @@
   .cab-wrap a.btn-ghost:link, .cab-wrap a.btn-ghost:visited { color:#417690; }
   .cab-wrap a.btn-ghost { border-color:#417690; }
 
-  /* Фильтр по статусам и секции внутри «Мои задачи» / «Выданные задачи» */
-  .cab-wfilter { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px; }
+  /* Фильтр по статусам и секции внутри «Мои задачи» / «Выданные задачи».
+     details рендерится как flex-строка, поэтому summary и раскрытый список
+     статусов ложатся в один ряд (вправо), а не друг под другом. */
+  .cab-wfilter-toggle {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:16px;
+  }
+  .cab-wfilter-summary {
+    display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none;
+    list-style:none;
+    border:1px solid rgba(121,174,200,.45); background:transparent;
+    color:var(--body-fg); border-radius:999px; padding:5px 14px;
+    font-size:12px; font-weight:600;
+    transition:background .15s, border-color .15s, color .15s;
+  }
+  .cab-wfilter-summary::-webkit-details-marker { display:none; }
+  .cab-wfilter-summary::after {
+    content:"▸"; display:inline-block; font-size:10px; transition:transform .15s;
+  }
+  .cab-wfilter-toggle[open] .cab-wfilter-summary {
+    background:#417690; color:#fff; border-color:#417690;
+  }
+  .cab-wfilter-toggle[open] .cab-wfilter-summary::after { transform:rotate(90deg); }
+  .cab-wfilter-toggle .cab-wfilter { margin:0; }
+  .cab-wfilter { display:flex; gap:6px; flex-wrap:wrap; }
   .cab-wfilter button {
     border:1px solid rgba(121,174,200,.45); background:transparent;
     color:var(--body-fg); border-radius:999px; padding:5px 14px;
@@ -126,6 +266,65 @@
     transform:rotate(-90deg);
   }
   details.cab-wstatus-section[open] > summary.cab-wstatus-head { margin-bottom:12px; }
+
+  /* Переключатель «Список / Доска Канбан» — доска доп. вид поверх обычного списка, не меняет его. */
+  .cab-view-toggle { display:flex; gap:8px; margin-bottom:16px; }
+  .cab-view-toggle button {
+    border:1px solid rgba(121,174,200,.45); background:transparent;
+    color:var(--body-fg); border-radius:999px; padding:6px 16px;
+    font-size:12px; font-weight:600; cursor:pointer;
+  }
+  .cab-view-toggle button.active { background:#417690; color:#fff; border-color:#417690; }
+  .cab-view-toggle-add {
+    border:1px solid #4CAF50; background:#4CAF50;
+    color:#fff; border-radius:999px; padding:6px 16px;
+    font-size:12px; font-weight:600; text-decoration:none;
+  }
+  .cab-view-toggle-add:hover { background:#43a047; border-color:#43a047; }
+  .cab-wrap a.cab-view-toggle-add:link,
+  .cab-wrap a.cab-view-toggle-add:visited { color:#fff; }
+  .cab-board-group-toggle {
+    display:inline-flex; align-items:center; gap:6px; margin-bottom:14px;
+    border:1px solid rgba(121,174,200,.45); background:transparent;
+    color:var(--body-fg); border-radius:999px; padding:6px 14px;
+    font-size:12px; font-weight:600; cursor:pointer;
+  }
+  .cab-board-group-toggle.active { background:#417690; color:#fff; border-color:#417690; }
+
+  .cab-board { display:grid; grid-template-columns:repeat(5, minmax(240px, 1fr)); gap:14px; align-items:start; }
+  .cab-board-col {
+    min-width:0; min-height:160px; max-height:calc(100vh - 320px);
+    display:flex; flex-direction:column;
+    background:rgba(128,128,128,.06); border:1px solid rgba(128,128,128,.20);
+    border-top:3px solid rgba(128,128,128,.3); border-radius:10px;
+  }
+  .cab-board-col[data-wgroup="assigned"] { border-top-color:#FFA000; }
+  .cab-board-col[data-wgroup="in_progress"] { border-top-color:#2196F3; }
+  .cab-board-col[data-wgroup="reschedule_pending"] { border-top-color:#9C27B0; }
+  .cab-board-col[data-wgroup="review"] { border-top-color:#00ACC1; }
+  .cab-board-col[data-wgroup="done"] { border-top-color:#4CAF50; }
+  @media (max-width:1300px) {
+    .cab-board { display:flex; overflow-x:auto; padding-bottom:10px; }
+    .cab-board-col { flex:0 0 300px; width:300px; }
+  }
+  .cab-board-col-head { display:flex; align-items:center; gap:8px; padding:11px 12px; border-bottom:1px solid rgba(128,128,128,.2); flex-shrink:0; }
+  .cab-board-col-body { padding:10px; flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; }
+  .cab-board-empty { font-size:12px; color:var(--body-quiet-color,#999); text-align:center; padding:20px 6px; }
+  .cab-board-col .cab-card { flex-direction:column; align-items:stretch; gap:10px; padding:12px 14px; margin-bottom:12px; }
+  .cab-board-col .cab-info,
+  .cab-board-col .cab-info * { overflow-wrap:anywhere; }
+  .cab-board-col .cab-info { min-width:0; }
+  .cab-board-col .cab-card:last-child { margin-bottom:0; }
+  .cab-board-col .cab-st-child { flex-direction:column; align-items:stretch; }
+  .cab-board-col .cab-st-child .cab-info { min-width:0; }
+  .cab-draggable { cursor:grab; }
+  .cab-draggable.dragging { opacity:.4; }
+  .cab-board-col-body.cab-drop-hover { background:rgba(65,118,144,.08); outline:2px dashed #417690; outline-offset:-2px; }
+  .cab-lane { margin-bottom:10px; }
+  .cab-lane-head { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--body-quiet-color,#999); padding:2px 2px 6px; }
+  .cab-board[data-grouped="off"] .cab-lane-head { display:none; }
+  .cab-board[data-grouped="off"] .cab-lane { margin-bottom:0; }
+
   .cab-wform { margin:0; display:inline; }
   .cab-wa-btn {
     display:inline-flex; align-items:center; gap:6px;
@@ -150,6 +349,20 @@
     border-color:rgba(76,175,80,.45);
   }
   .cab-wa-btn--green:hover { background:rgba(76,175,80,.22); }
+  .cab-wa-btn--red {
+    color:#c62828; background:rgba(229,57,53,.12);
+    border-color:rgba(229,57,53,.45);
+  }
+  .cab-wa-btn--red:hover { background:rgba(229,57,53,.22); }
+  .cab-wa-btn--gray {
+    color:#4a4a4a; background:rgba(85,85,85,.12);
+    border-color:rgba(85,85,85,.45);
+  }
+  .cab-wa-btn--gray:hover { background:rgba(85,85,85,.22); }
+  @media (prefers-color-scheme: dark) {
+    .cab-wa-btn--gray { color:#c7c7c7; }
+  }
+  html[data-theme="dark"] .cab-wa-btn--gray { color:#c7c7c7; }
   .cab-wa-btn--outline {
     color:#417690; background:transparent;
     border-color:rgba(65,118,144,.55);
@@ -272,8 +485,77 @@
     font-size:13px; line-height:1.45; color:var(--body-quiet-color,#b0b0b0);
     white-space:pre-line; word-break:break-word;
   }
+  .cab-avatar {
+    border-radius:50%; object-fit:cover; background:#79aec8; color:#fff;
+    display:flex; align-items:center; justify-content:center; font-weight:700;
+    flex-shrink:0;
+  }
+  .cab-avatar--lg { width:130px; height:130px; font-size:46px; }
+  .cab-avatar--clickable { cursor:zoom-in; }
+  .cab-lightbox {
+    display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,.75);
+    align-items:center; justify-content:center; padding:24px; cursor:zoom-out;
+  }
+  .cab-lightbox.open { display:flex; }
+  .cab-lightbox img { max-width:90vw; max-height:90vh; border-radius:8px; }
+  .cab-profile-header { display:flex; align-items:center; gap:18px; margin-bottom:18px; flex-wrap:wrap; }
+  .cab-profile-readonly {
+    margin-top:18px; padding-top:14px; border-top:1px solid rgba(121,174,200,.15);
+    font-size:12px; color:var(--body-quiet-color,#999);
+  }
+  .cab-profile-readonly .meta { margin-top:4px; }
+  .cab-field { margin-bottom:14px; max-width:420px; }
+  .cab-field label { display:block; font-size:12px; font-weight:600; color:var(--body-fg); margin-bottom:5px; }
+  .cab-field input[type=text], .cab-field input[type=email] {
+    display:block; width:100%; box-sizing:border-box; border-radius:8px; padding:9px 11px;
+    font:inherit; font-size:13px; background:#eef4f7; color:#1b232b; border:1px solid #b9cbd4;
+  }
+  .cab-field input.vDateField {
+    width:auto; border-radius:8px; padding:9px 11px; font:inherit; font-size:13px;
+    background:#eef4f7; color:#1b232b; border:1px solid #b9cbd4;
+  }
+  @media (prefers-color-scheme: dark) {
+    .cab-field input[type=text], .cab-field input[type=email], .cab-field input.vDateField { background:#232c33; color:#eef4f7; border-color:#3d4d59; }
+  }
+  html[data-theme="dark"] .cab-field input[type=text], html[data-theme="dark"] .cab-field input[type=email], html[data-theme="dark"] .cab-field input.vDateField {
+    background:#232c33; color:#eef4f7; border-color:#3d4d59;
+  }
+  html[data-theme="light"] .cab-field input[type=text], html[data-theme="light"] .cab-field input[type=email], html[data-theme="light"] .cab-field input.vDateField {
+    background:#eef4f7; color:#1b232b; border-color:#b9cbd4;
+  }
 </style>
 
+{% if profile_user %}
+<div id="content-main" class="cab-wrap">
+  <div class="cab-card" style="align-items:flex-start;">
+    <div class="cab-profile-header" style="margin-bottom:0;">
+      {% if viewed_profile.avatar %}
+      <img src="{{ viewed_profile.avatar.url }}" alt="" class="cab-avatar cab-avatar--lg cab-avatar--clickable" data-avatar-full="{{ viewed_profile.avatar.url }}">
+      {% else %}
+      <div class="cab-avatar cab-avatar--lg">{{ profile_user.username|slice:":1"|upper }}</div>
+      {% endif %}
+      <div class="cab-info">
+        <div class="title">{{ viewed_profile.full_name }}</div>
+        {% if viewed_profile.position %}<div class="subtitle">{{ viewed_profile.position }}</div>{% endif %}
+        <div class="meta">
+          {% if viewed_profile.org_department %}<span class="pill pill-blue">{{ viewed_profile.org_department }}</span>{% endif %}
+          {% if viewed_profile.is_head %}<span class="pill pill-orange">Руководитель отдела</span>{% endif %}
+        </div>
+        <div class="meta">
+          {% if profile_user.email %}Email: {{ profile_user.email }}{% endif %}
+          {% if viewed_profile.phone %} · Телефон: {{ viewed_profile.phone }}{% endif %}
+        </div>
+        {% if viewed_profile.supervisor %}
+        <div class="meta">Руководитель: {{ viewed_profile.supervisor.profile.full_name|default:viewed_profile.supervisor.username }}</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% if is_own_profile %}
+  <a class="btn btn-gray" style="margin-top:14px;display:inline-block;" href="{% url 'admin:approvals_cabinet' %}?tab=profile">Редактировать в личном кабинете</a>
+  {% endif %}
+</div>
+{% else %}
 <div id="content-main" class="cab-wrap">
 
   <nav class="cab-nav" aria-label="Разделы личного кабинета">
@@ -308,11 +590,11 @@
         <button type="button" class="cab-tab" data-tab="subtasks">
           <span class="cab-tab-icon" aria-hidden="true">🧩</span>
           <span class="cab-tab-label">Мои подзадачи</span>
-          {% if my_subtasks %}<span class="cab-badge muted">{{ my_subtasks|length }}</span>{% endif %}
+          {% if my_subtasks_active_count %}<span class="cab-badge muted">{{ my_subtasks_active_count }}</span>{% endif %}
         </button>
         <button type="button" class="cab-tab" data-tab="issued">
           <span class="cab-tab-icon" aria-hidden="true">📤</span>
-          <span class="cab-tab-label">Выданные задачи</span>
+          <span class="cab-tab-label">Выданные задачи/Создать РЗ</span>
           {% if issued_work_active %}<span class="cab-badge muted">{{ issued_work_active }}</span>{% endif %}
         </button>
       </div>
@@ -358,7 +640,7 @@
         <a class="btn btn-doc" href="{{ t.doc_ctx.file_url }}" target="_blank">Открыть документ</a>
         {% endif %}
         {% if t.doc_ctx.admin_url %}
-        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка</a>
+        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка документа</a>
         {% endif %}
         <a class="btn btn-green" href="{% url 'admin:approvals_task_sign' t.pk %}">✍ Подписать (ЭЦП)</a>
         <a class="btn btn-red" href="{% url 'admin:approvals_task_reject' t.pk %}">Отклонить</a>
@@ -387,7 +669,7 @@
         <a class="btn btn-doc" href="{{ t.doc_ctx.file_url }}" target="_blank">Открыть документ</a>
         {% endif %}
         {% if t.doc_ctx.admin_url %}
-        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка</a>
+        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка документа</a>
         {% endif %}
         <a class="btn btn-green" href="{% url 'admin:approvals_task_sign' t.pk %}">✍ Подписать (ЭЦП)</a>
       </div>
@@ -415,7 +697,7 @@
         <a class="btn btn-doc" href="{{ t.doc_ctx.file_url }}" target="_blank">Открыть документ</a>
         {% endif %}
         {% if t.doc_ctx.admin_url %}
-        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка</a>
+        <a class="btn btn-ghost" href="{{ t.doc_ctx.admin_url }}" target="_blank">Карточка документа</a>
         {% endif %}
         <a class="btn btn-blue" href="{% url 'admin:approvals_task_resubmit' t.pk %}">Отправить на повторную проверку</a>
       </div>
@@ -455,174 +737,206 @@
   </div>
 
   <div class="cab-panel" data-panel="work">
-    {% if my_work %}
-    <div class="cab-wfilter" data-wfilter-for="work">
-      <button type="button" class="active" data-wfilter="all">Все</button>
-      {% for g in my_work_groups %}{% if g.count %}
-      <button type="button" data-wfilter="{{ g.key }}">{{ g.label }} ({{ g.count }})</button>
-      {% endif %}{% endfor %}
+    <div class="cab-view-toggle" data-view-target="work">
+      <button type="button" class="active" data-view="list">📋 Список</button>
+      <button type="button" data-view="board">🗂 Доска Канбан</button>
     </div>
+
+    <div data-view-panel="work" data-view-content="list">
+    {% if my_work %}
+    <details class="cab-wfilter-toggle">
+      <summary class="cab-wfilter-summary">Фильтр по статусу</summary>
+      <div class="cab-wfilter" data-wfilter-for="work">
+        <button type="button" class="active" data-wfilter="all">Все</button>
+        {% for g in my_work_groups %}{% if g.count %}
+        <button type="button" data-wfilter="{{ g.key }}">{{ g.label }} ({{ g.count }})</button>
+        {% endif %}{% endfor %}
+      </div>
+    </details>
     {% for g in my_work_groups %}{% if g.count %}
     <details class="cab-wstatus-section" data-wgroup="{{ g.key }}">
       <summary class="cab-wstatus-head">
-        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'reschedule_pending' %}pill-purple{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
         <span class="cab-group-count">{{ g.count }}</span>
       </summary>
+      {% if g.key == "done" %}
+      <div class="cab-archive-note">Показаны только последние 30 завершённых задач</div>
+      {% endif %}
       {% for wa in g.items %}
-      <div class="cab-card">
-        <div class="cab-info">
-          <div class="title">
-            {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
-          </div>
-          {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
-          <div class="meta">
-            {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
-            {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
-            {% elif wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
-            {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
-            {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
-            {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
-            {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
-            {% if wa.post %}{{ wa.post }}{% endif %}
-          </div>
-          <div class="meta">
-            Срок:
-            {% if g.key == "done" %}
-              <strong>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
-            {% else %}
-              <strong {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
-              {% if wa.target_deadline < today %} (просрочено){% endif %}
-            {% endif %}
-          </div>
-        </div>
-        <div class="cab-actions">
-          {% if wa.control_status == "assigned" %}
-          <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_acknowledge' wa.pk %}">
-            {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--amber">Принять в работу</button>
-          </form>
-          {% elif wa.control_status == "review" %}
-          <span class="cab-wa-btn cab-wa-btn--cyan">⏳ На проверке у автора</span>
-          {% elif wa.control_status == "in_progress" or not wa.control_status %}
-          <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_submit_review' wa.pk %}">
-            {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--cyan">Сдать на проверку</button>
-          </form>
-          {% endif %}
-          <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
-        </div>
-      </div>
+      {% include "admin/approvals/_cab_card.html" with mode="work" %}
       {% endfor %}
     </details>
     {% endif %}{% endfor %}
     {% else %}
     <div class="cab-empty">Задач, где вы исполнитель, пока нет.</div>
     {% endif %}
-  </div>
+    </div>
 
-  <div class="cab-panel" data-panel="subtasks">
-    {% regroup my_subtasks by work_assignment as subtask_groups %}
-    {% for group in subtask_groups %}
-    <div class="cab-st-group">
-      <div class="cab-st-parent">
-        <div class="cab-st-parent-head">
-          <span class="cab-st-code">
-            📋 {{ group.grouper.wa_full_code|default:group.grouper.name|default:"Рабочее задание" }}
-          </span>
-          <span class="cab-st-pill">Мои подзадачи: {{ group.list|length }}</span>
-          <a class="btn btn-ghost btn-sm" style="margin-left:auto;"
-             href="{% url 'admin:blog_workassignment_change' group.grouper.pk %}">Открыть РЗ</a>
-        </div>
-        {% if group.grouper.task %}
-        <div class="cab-st-parent-task clamp2" title="{{ group.grouper.task }}">{{ group.grouper.task }}</div>
-        {% endif %}
-      </div>
-      <div class="cab-st-children">
-        {% for st in group.list %}
-        <div class="cab-st-child">
-          <div class="cab-info">
-            <div class="task-text clamp2" title="{{ st.task }}">
-              {% if st.subtask_full_code %}<span class="num">{{ st.subtask_full_code }}</span>{% endif %}
-              {{ st.task }}
-            </div>
-            <div class="meta">
-              Срок:
-              <span {% if st.target_deadline < today %}class="cab-overdue"{% endif %}>
-                {{ st.target_deadline|date:"d.m.Y" }}{% if st.target_deadline < today %} (просрочено){% endif %}
-              </span>
-            </div>
+    <div data-view-panel="work" data-view-content="board" style="display:none">
+      {% if my_work %}
+      <div class="cab-board">
+        {% for g in my_work_groups %}
+        <div class="cab-board-col" data-wgroup="{{ g.key }}">
+          <div class="cab-board-col-head">
+            <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'reschedule_pending' %}pill-purple{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+            <span class="cab-group-count">{{ g.count }}</span>
           </div>
-          <div class="cab-actions">
-            <a class="btn btn-gray btn-sm" href="{% url 'admin:blog_workassignmentsubtask_change' st.pk %}">Открыть</a>
+          <div class="cab-board-col-body">
+            {% if g.key == "done" and g.count %}
+            <div class="cab-archive-note">Показаны только последние 30 завершённых задач</div>
+            {% endif %}
+            {% for wa in g.items %}
+            {% include "admin/approvals/_cab_card.html" with mode="work" board=True %}
+            {% empty %}
+            <div class="cab-board-empty">Нет задач</div>
+            {% endfor %}
           </div>
         </div>
         {% endfor %}
       </div>
+      {% else %}
+      <div class="cab-empty">Задач, где вы исполнитель, пока нет.</div>
+      {% endif %}
     </div>
-    {% empty %}
-    <div class="cab-empty">У вас нет активных подзадач.</div>
-    {% endfor %}
+  </div>
+
+  <div class="cab-panel" data-panel="subtasks">
+    <div class="cab-view-toggle" data-view-target="subtasks">
+      <button type="button" class="active" data-view="list">📋 Список</button>
+      <button type="button" data-view="board">🗂 Доска Канбан</button>
+    </div>
+
+    <div data-view-panel="subtasks" data-view-content="list">
+    {% if my_subtasks %}
+    <details class="cab-wfilter-toggle">
+      <summary class="cab-wfilter-summary">Фильтр по статусу</summary>
+      <div class="cab-wfilter" data-wfilter-for="subtasks">
+        <button type="button" class="active" data-wfilter="all">Все</button>
+        {% for g in my_subtasks_groups %}{% if g.count %}
+        <button type="button" data-wfilter="{{ g.key }}">{{ g.label }} ({{ g.count }})</button>
+        {% endif %}{% endfor %}
+      </div>
+    </details>
+    {% for g in my_subtasks_groups %}{% if g.count %}
+    <details class="cab-wstatus-section" data-wgroup="{{ g.key }}">
+      <summary class="cab-wstatus-head">
+        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'reschedule_pending' %}pill-purple{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+        <span class="cab-group-count">{{ g.count }}</span>
+      </summary>
+      {% if g.key == "done" %}
+      <div class="cab-archive-note">Показаны только последние 30 завершённых подзадач</div>
+      {% endif %}
+      {% regroup g.items by work_assignment as subtask_groups %}
+      {% for group in subtask_groups %}
+      {% include "admin/approvals/_cab_card_subtask_group.html" %}
+      {% endfor %}
+    </details>
+    {% endif %}{% endfor %}
+    {% else %}
+    <div class="cab-empty">У вас нет подзадач.</div>
+    {% endif %}
+    </div>
+
+    <div data-view-panel="subtasks" data-view-content="board" style="display:none">
+      {% if my_subtasks %}
+      <div class="cab-board">
+        {% for g in my_subtasks_groups %}
+        <div class="cab-board-col" data-wgroup="{{ g.key }}">
+          <div class="cab-board-col-head">
+            <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'reschedule_pending' %}pill-purple{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+            <span class="cab-group-count">{{ g.count }}</span>
+          </div>
+          <div class="cab-board-col-body">
+            {% if g.key == "done" and g.count %}
+            <div class="cab-archive-note">Показаны только последние 30 завершённых подзадач</div>
+            {% endif %}
+            {% regroup g.items by work_assignment as subtask_groups_b %}
+            {% for group in subtask_groups_b %}
+            {% include "admin/approvals/_cab_card_subtask_group.html" with board=True %}
+            {% empty %}
+            <div class="cab-board-empty">Нет подзадач</div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="cab-empty">У вас нет подзадач.</div>
+      {% endif %}
+    </div>
   </div>
 
   <div class="cab-panel" data-panel="issued">
-    {% if issued_work %}
-    <div class="cab-wfilter" data-wfilter-for="issued">
-      <button type="button" class="active" data-wfilter="all">Все</button>
-      {% for g in issued_work_groups %}{% if g.count %}
-      <button type="button" data-wfilter="{{ g.key }}">{{ g.label }} ({{ g.count }})</button>
-      {% endif %}{% endfor %}
+    <div class="cab-view-toggle" data-view-target="issued" style="justify-content:space-between;">
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="active" data-view="list">📋 Список</button>
+        <button type="button" data-view="board">🗂 Доска Канбан</button>
+      </div>
+      <a class="cab-view-toggle-add" href="{% url 'admin:blog_workassignment_add' %}">+ Новое РЗ</a>
     </div>
+
+    <div data-view-panel="issued" data-view-content="list">
+    {% if issued_work %}
+    <details class="cab-wfilter-toggle">
+      <summary class="cab-wfilter-summary">Фильтр по статусу</summary>
+      <div class="cab-wfilter" data-wfilter-for="issued">
+        <button type="button" class="active" data-wfilter="all">Все</button>
+        {% for g in issued_work_groups %}{% if g.count %}
+        <button type="button" data-wfilter="{{ g.key }}">{{ g.label }} ({{ g.count }})</button>
+        {% endif %}{% endfor %}
+      </div>
+    </details>
     {% for g in issued_work_groups %}{% if g.count %}
     <details class="cab-wstatus-section" data-wgroup="{{ g.key }}">
       <summary class="cab-wstatus-head">
-        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+        <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'reschedule_pending' %}pill-purple{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
         <span class="cab-group-count">{{ g.count }}</span>
       </summary>
+      {% if g.key == "done" %}
+      <div class="cab-archive-note">Показаны только последние 30 завершённых задач</div>
+      {% endif %}
       {% for wa in g.items %}
-      <div class="cab-card">
-        <div class="cab-info">
-          <div class="title">
-            {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
-          </div>
-          {% if wa.task %}<div class="issued-task">{{ wa.task }}</div>{% endif %}
-          <div class="meta">
-            {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
-            {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
-            {% elif wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
-            {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
-            {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
-            {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
-            {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
-            {% if wa.executor %}
-              Исполнитель: <strong>{{ wa.executor }}</strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
-            {% endif %}
-            {% if wa.post %} · {{ wa.post }}{% endif %}
-          </div>
-          <div class="meta">
-            Срок:
-            {% if g.key == "done" %}
-              <strong>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
-            {% else %}
-              <strong {% if wa.target_deadline < today %}class="cab-overdue"{% endif %}>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
-              {% if wa.target_deadline < today %} (просрочено){% endif %}
-            {% endif %}
-            · Создано: {{ wa.date_of_creation|date:"d.m.Y" }}
-            {% if wa.subtask_total %} · Подзадач: {{ wa.subtask_total }}{% endif %}
-            {% if wa.reschedule_count %} · Переносов: {{ wa.reschedule_count }}{% endif %}
-          </div>
-        </div>
-        <div class="cab-actions">
-          {% if wa.control_status == "review" %}
-          <a class="cab-wa-btn cab-wa-btn--green" href="{% url 'admin:blog_workassignment_close' wa.pk %}">Проверить и закрыть</a>
-          <a class="cab-wa-btn cab-wa-btn--outline" href="{% url 'admin:blog_workassignment_return' wa.pk %}">Вернуть на доработку</a>
-          {% endif %}
-          <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть</a>
-        </div>
-      </div>
+      {% include "admin/approvals/_cab_card.html" with mode="issued" %}
       {% endfor %}
     </details>
     {% endif %}{% endfor %}
     {% else %}
     <div class="cab-empty">У вас пока нет выданных заданий.</div>
     {% endif %}
+    </div>
+
+    <div data-view-panel="issued" data-view-content="board" style="display:none">
+      <button type="button" class="cab-board-group-toggle" id="issued-group-toggle">👤 Группировать по исполнителю</button>
+      {% if issued_work %}
+      <div class="cab-board" id="issued-board" data-grouped="off">
+        {% for g in issued_work_groups %}
+        <div class="cab-board-col" data-wgroup="{{ g.key }}">
+          <div class="cab-board-col-head">
+            <span class="pill {% if g.key == 'assigned' %}pill-amber{% elif g.key == 'in_progress' %}pill-blue{% elif g.key == 'reschedule_pending' %}pill-purple{% elif g.key == 'review' %}pill-cyan{% else %}pill-green{% endif %}">{{ g.label }}</span>
+            <span class="cab-group-count">{{ g.count }}</span>
+          </div>
+          <div class="cab-board-col-body">
+            {% if g.key == "done" and g.count %}
+            <div class="cab-archive-note">Показаны только последние 30 завершённых задач</div>
+            {% endif %}
+            {% for lane in g.lanes %}
+            <div class="cab-lane">
+              <div class="cab-lane-head">👤 {{ lane.executor|default:"Без исполнителя" }} ({{ lane.items|length }})</div>
+              {% for wa in lane.items %}
+              {% include "admin/approvals/_cab_card.html" with mode="issued" board=True %}
+              {% endfor %}
+            </div>
+            {% empty %}
+            <div class="cab-board-empty">Нет задач</div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="cab-empty">У вас пока нет выданных заданий.</div>
+      {% endif %}
+    </div>
   </div>
 
   <div class="cab-panel" data-panel="docs">
@@ -640,7 +954,7 @@
       </div>
       <div class="cab-actions">
         {% if p.doc_ctx.admin_url %}
-        <a class="btn btn-gray" href="{{ p.doc_ctx.admin_url }}">Карточка</a>
+        <a class="btn btn-gray" href="{{ p.doc_ctx.admin_url }}">Карточка документа</a>
         {% endif %}
       </div>
     </div>
@@ -679,9 +993,79 @@
     {% endfor %}
   </div>
 
+  <div class="cab-panel" data-panel="profile">
+    <div class="cab-card" style="flex-direction:column; align-items:stretch;">
+      <form method="post" action="{% url 'admin:approvals_my_profile_save' %}" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="cab-profile-header">
+          {% if my_profile.avatar %}
+          <img src="{{ my_profile.avatar.url }}" alt="" class="cab-avatar cab-avatar--lg cab-avatar--clickable" data-avatar-full="{{ my_profile.avatar.url }}">
+          {% else %}
+          <div class="cab-avatar cab-avatar--lg">{{ request.user.username|slice:":1"|upper }}</div>
+          {% endif %}
+          <div class="cab-field" style="margin-bottom:0;">
+            <label for="{{ my_profile_form.avatar.id_for_label }}">{{ my_profile_form.avatar.label }}</label>
+            {{ my_profile_form.avatar }}
+          </div>
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.last_name.id_for_label }}">{{ my_profile_form.last_name.label }}</label>
+          {{ my_profile_form.last_name }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.first_name.id_for_label }}">{{ my_profile_form.first_name.label }}</label>
+          {{ my_profile_form.first_name }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.patronymic.id_for_label }}">{{ my_profile_form.patronymic.label }}</label>
+          {{ my_profile_form.patronymic }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.birth_date.id_for_label }}">{{ my_profile_form.birth_date.label }}</label>
+          {{ my_profile_form.birth_date }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.phone.id_for_label }}">{{ my_profile_form.phone.label }}</label>
+          {{ my_profile_form.phone }}
+        </div>
+        <div class="cab-field">
+          <label for="{{ my_profile_form.email.id_for_label }}">{{ my_profile_form.email.label }}</label>
+          {{ my_profile_form.email }}
+        </div>
+        <button type="submit" class="cab-wa-btn cab-wa-btn--green">Сохранить</button>
+      </form>
+      <div class="cab-profile-readonly">
+        <div class="meta">Логин: <strong>{{ request.user.username }}</strong></div>
+        <div class="meta">Отдел: <strong>{{ my_profile.org_department|default:"—" }}</strong></div>
+        <div class="meta">Должность: <strong>{{ my_profile.position|default:"—" }}</strong></div>
+        {% if my_profile.is_head %}<div class="meta">Руководитель отдела</div>{% endif %}
+        {% if my_profile.supervisor %}
+        <div class="meta">Руководитель: <strong>{{ my_profile.supervisor.profile.full_name|default:my_profile.supervisor.username }}</strong></div>
+        {% endif %}
+        <div class="meta" style="font-style:italic; margin-top:8px;">
+          Отдел, должность и руководителя может изменить только администратор - раздел «Пользователи».
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endif %}
+
+<div class="cab-lightbox" id="cab-lightbox">
+  <img src="" alt="">
 </div>
 
 <script>
+  // Доска Канбан растягивается на всю страницу; список остаётся в узкой колонке как раньше.
+  function cabSyncWrapWidth() {
+    var wrap = document.querySelector(".cab-wrap");
+    if (!wrap) return;
+    var activePanel = document.querySelector(".cab-panel.active");
+    var activeBtn = activePanel && activePanel.querySelector(".cab-view-toggle .active[data-view]");
+    wrap.classList.toggle("cab-wrap--wide", !!(activeBtn && activeBtn.dataset.view === "board"));
+  }
+
   (function () {
     var tabs = document.querySelectorAll(".cab-tab");
     var panels = document.querySelectorAll(".cab-panel");
@@ -689,14 +1073,17 @@
       tabs.forEach(function (t) { t.classList.toggle("active", t.dataset.tab === name); });
       panels.forEach(function (p) { p.classList.toggle("active", p.dataset.panel === name); });
       try { localStorage.setItem("cabinetTab", name); } catch (e) {}
+      cabSyncWrapWidth();
     }
-    tabs.forEach(function (t) {
+    document.querySelectorAll("[data-tab]").forEach(function (t) {
       t.addEventListener("click", function () { activate(t.dataset.tab); });
     });
+    var qtab = new URLSearchParams(location.search).get("tab");
     var saved;
     try { saved = localStorage.getItem("cabinetTab"); } catch (e) {}
-    var exists = saved && document.querySelector('.cab-panel[data-panel="' + saved + '"]');
-    if (exists) activate(saved);
+    var target = qtab || saved;
+    var exists = target && document.querySelector('.cab-panel[data-panel="' + target + '"]');
+    if (exists) activate(target);
   })();
 
   // Фильтр задач по статусу внутри панелей «Мои задачи» / «Выданные задачи».
@@ -717,6 +1104,236 @@
           });
         });
       });
+    });
+  })();
+
+  // Переключатель «Список / Доска Канбан» — доска доп. вид, список не трогает.
+  (function () {
+    document.querySelectorAll(".cab-view-toggle[data-view-target]").forEach(function (toggle) {
+      var target = toggle.dataset.viewTarget;
+      var key = "cabinetView:" + target;
+      var buttons = toggle.querySelectorAll("[data-view]");
+      var panels = document.querySelectorAll('[data-view-panel="' + target + '"]');
+      function setView(view) {
+        buttons.forEach(function (b) { b.classList.toggle("active", b.dataset.view === view); });
+        panels.forEach(function (p) { p.style.display = (p.dataset.viewContent === view) ? "" : "none"; });
+        try { localStorage.setItem(key, view); } catch (e) {}
+        cabSyncWrapWidth();
+      }
+      var saved;
+      try { saved = localStorage.getItem(key); } catch (e) {}
+      setView(saved === "board" ? "board" : "list");
+      buttons.forEach(function (b) {
+        b.addEventListener("click", function () { setView(b.dataset.view); });
+      });
+    });
+  })();
+
+  // Доска «Выданные задачи» — переключатель группировки карточек по исполнителю.
+  (function () {
+    var toggle = document.getElementById("issued-group-toggle");
+    var board = document.getElementById("issued-board");
+    if (!toggle || !board) return;
+    var saved;
+    try { saved = localStorage.getItem("cabinetIssuedGrouped"); } catch (e) {}
+    function setGrouped(on) {
+      board.dataset.grouped = on ? "on" : "off";
+      toggle.classList.toggle("active", on);
+      try { localStorage.setItem("cabinetIssuedGrouped", on ? "1" : "0"); } catch (e) {}
+    }
+    setGrouped(saved === "1");
+    toggle.addEventListener("click", function () {
+      setGrouped(board.dataset.grouped !== "on");
+    });
+  })();
+
+  // Kanban-доски: перенос карточек drag & drop между статусами.
+
+  // Доска «Мои подзадачи» — drag & drop карточки между статусами.
+  (function () {
+    var panel = document.querySelector('[data-view-panel="subtasks"][data-view-content="board"]');
+    if (!panel) return;
+
+    function getCookie(name) {
+      var m = document.cookie.match("(^|;)\\s*" + name + "\\s*=\\s*([^;]+)");
+      return m ? m.pop() : "";
+    }
+    var statusUrlBase = "{% url 'admin:approvals_subtask_status' 999999 %}";
+    var dragged = null;
+
+    panel.addEventListener("dragstart", function (e) {
+      var card = e.target.closest(".cab-draggable");
+      if (!card) return;
+      dragged = card;
+      card.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", card.dataset.subtaskId);
+    });
+    panel.addEventListener("dragend", function () {
+      if (dragged) dragged.classList.remove("dragging");
+      dragged = null;
+      panel.querySelectorAll(".cab-board-col-body.cab-drop-hover").forEach(function (b) {
+        b.classList.remove("cab-drop-hover");
+      });
+    });
+
+    panel.querySelectorAll(".cab-board-col").forEach(function (col) {
+      var body = col.querySelector(".cab-board-col-body");
+      body.addEventListener("dragover", function (e) {
+        if (!dragged) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        body.classList.add("cab-drop-hover");
+      });
+      body.addEventListener("dragleave", function () {
+        body.classList.remove("cab-drop-hover");
+      });
+      body.addEventListener("drop", function (e) {
+        e.preventDefault();
+        body.classList.remove("cab-drop-hover");
+        if (!dragged) return;
+        var card = dragged;
+        var newStatus = col.dataset.wgroup;
+        var sourceCol = card.closest(".cab-board-col");
+        if (sourceCol && sourceCol.dataset.wgroup === newStatus) return;
+
+        fetch(statusUrlBase.replace("999999", card.dataset.subtaskId), {
+          method: "POST",
+          headers: {
+            "X-CSRFToken": getCookie("csrftoken"),
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: "status=" + encodeURIComponent(newStatus),
+        })
+          .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+          .then(function (res) {
+            if (res.ok && res.data.ok) {
+              location.reload();
+            } else {
+              alert((res.data && res.data.error) || "Не удалось изменить статус");
+            }
+          })
+          .catch(function () { alert("Не удалось изменить статус"); });
+      });
+    });
+  })();
+
+  // Доски «Мои задачи» / «Выданные задачи» — drag & drop, ведёт на те же
+  // страницы/действия, что и кнопки на карточке (форма открывается там же, где и по кнопке).
+  (function () {
+    function getCookie(name) {
+      var m = document.cookie.match("(^|;)\\s*" + name + "\\s*=\\s*([^;]+)");
+      return m ? m.pop() : "";
+    }
+    function postAction(url) {
+      var form = document.createElement("form");
+      form.method = "POST";
+      form.action = url;
+      var csrf = document.createElement("input");
+      csrf.type = "hidden";
+      csrf.name = "csrfmiddlewaretoken";
+      csrf.value = getCookie("csrftoken");
+      form.appendChild(csrf);
+      document.body.appendChild(form);
+      form.submit();
+    }
+    var URLS = {
+      acknowledge: "{% url 'admin:blog_workassignment_acknowledge' 999999 %}",
+      requestReschedule: "{% url 'admin:blog_workassignment_request_reschedule' 999999 %}",
+      submitReview: "{% url 'admin:blog_workassignment_submit_review' 999999 %}",
+      close: "{% url 'admin:blog_workassignment_close' 999999 %}",
+      returnRework: "{% url 'admin:blog_workassignment_return' 999999 %}"
+    };
+    function urlFor(action, pk) { return URLS[action].replace("999999", pk); }
+
+    // Однозначные переходы карточки статуса при переносе на другую колонку.
+    // Перенос reschedule_pending -> in_progress на доске «Выданные» намеренно не поддержан:
+    // там две разные кнопки («Согласовать» с формой и «Отказать» без) ведут в один статус,
+    // поэтому оставляем этот переход только через кнопки на карточке.
+    var WORK_TRANSITIONS = {
+      "assigned>in_progress": { action: "acknowledge", form: false },
+      "assigned>reschedule_pending": { action: "requestReschedule", form: true },
+      "in_progress>review": { action: "submitReview", form: true },
+      "in_progress>reschedule_pending": { action: "requestReschedule", form: true }
+    };
+    var ISSUED_TRANSITIONS = {
+      "review>done": { action: "close", form: true },
+      "review>in_progress": { action: "returnRework", form: true }
+    };
+
+    function initWaBoard(panelSelector, transitions) {
+      var panel = document.querySelector(panelSelector);
+      if (!panel) return;
+      var dragged = null;
+
+      panel.addEventListener("dragstart", function (e) {
+        var card = e.target.closest(".cab-draggable");
+        if (!card) return;
+        dragged = card;
+        card.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setDragImage(card, 20, 20);
+        e.dataTransfer.setData("text/plain", card.dataset.waId);
+      });
+      panel.addEventListener("dragend", function () {
+        if (dragged) dragged.classList.remove("dragging");
+        dragged = null;
+        panel.querySelectorAll(".cab-board-col-body.cab-drop-hover").forEach(function (b) {
+          b.classList.remove("cab-drop-hover");
+        });
+      });
+
+      panel.querySelectorAll(".cab-board-col").forEach(function (col) {
+        var body = col.querySelector(".cab-board-col-body");
+
+        function ruleFor() {
+          var sourceCol = dragged && dragged.closest(".cab-board-col");
+          if (!sourceCol) return null;
+          return transitions[sourceCol.dataset.wgroup + ">" + col.dataset.wgroup] || null;
+        }
+
+        body.addEventListener("dragover", function (e) {
+          if (!ruleFor()) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          body.classList.add("cab-drop-hover");
+        });
+        body.addEventListener("dragleave", function () {
+          body.classList.remove("cab-drop-hover");
+        });
+        body.addEventListener("drop", function (e) {
+          e.preventDefault();
+          body.classList.remove("cab-drop-hover");
+          var rule = ruleFor();
+          if (!rule) return;
+          var url = urlFor(rule.action, dragged.dataset.waId);
+          if (rule.form) {
+            location.href = url;
+          } else {
+            postAction(url);
+          }
+        });
+      });
+    }
+
+    initWaBoard('[data-view-panel="work"][data-view-content="board"]', WORK_TRANSITIONS);
+    initWaBoard('[data-view-panel="issued"][data-view-content="board"]', ISSUED_TRANSITIONS);
+  })();
+
+  // Лайтбокс — увеличенный просмотр аватарки по клику.
+  (function () {
+    var lightbox = document.getElementById("cab-lightbox");
+    if (!lightbox) return;
+    var lightboxImg = lightbox.querySelector("img");
+    document.querySelectorAll("[data-avatar-full]").forEach(function (el) {
+      el.addEventListener("click", function () {
+        lightboxImg.src = el.dataset.avatarFull;
+        lightbox.classList.add("open");
+      });
+    });
+    lightbox.addEventListener("click", function () {
+      lightbox.classList.remove("open");
+      lightboxImg.src = "";
     });
   })();
 </script>

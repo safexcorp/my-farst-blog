@@ -1,0 +1,189 @@
+{% extends "admin/base_site.html" %}
+{% load static richtext %}
+{% block extrahead %}{{ block.super }}{{ form.media }}<link rel="stylesheet" href="{% static 'vendor/quill/quill.snow.css' %}"><link rel="stylesheet" href="{% static 'css/richtext_content.css' %}">{% endblock %}
+{% block content %}
+<style>
+  .waf-wrap { max-width: 640px; }
+  .waf-card {
+    border:1px solid var(--hairline-color,#444); border-radius:12px;
+    padding:22px 26px; background:var(--darkened-bg,rgba(255,255,255,.02));
+    margin-top:6px; overflow:hidden;
+  }
+  .waf-task {
+    font-size:13px; color:var(--body-quiet-color,#999); margin:0 0 16px;
+    padding:10px 14px; border-radius:8px;
+    background:rgba(121,174,200,.08); border-left:3px solid #79aec8;
+  }
+  .waf-note {
+    font-size:13px; margin:0 0 16px; padding:10px 14px; border-radius:8px;
+    background:rgba(255,152,0,.10); border-left:3px solid #FF9800;
+  }
+
+  /* Поля формы — своя вёрстка вместо form.as_table (не ломается на resize) */
+  .waf-field { margin-bottom:18px; }
+  .waf-field:last-of-type { margin-bottom:0; }
+  .waf-label {
+    display:block; font-size:13px; font-weight:600; color:var(--body-fg);
+    margin-bottom:7px;
+  }
+  .waf-req { color:#e35f5f; margin-left:2px; }
+  .waf-field textarea, .waf-field input[type=text] {
+    display:block; width:100%; max-width:100%; box-sizing:border-box;
+    border-radius:8px; padding:10px 12px; font:inherit; font-size:13px;
+    background:#eef4f7; color:#1b232b; border:1px solid #b9cbd4;
+  }
+  .waf-field textarea { resize:vertical; min-height:130px; }
+  .waf-field input[type=file] { display:block; }
+  .waf-field textarea:focus, .waf-field input[type=text]:focus {
+    border-color:#417690; outline:none; box-shadow:0 0 0 2px rgba(65,118,144,.25);
+  }
+  @media (prefers-color-scheme: dark) {
+    .waf-field textarea, .waf-field input[type=text] { background:#232c33; color:#eef4f7; border-color:#3d4d59; }
+  }
+  html[data-theme="dark"] .waf-field textarea, html[data-theme="dark"] .waf-field input[type=text] {
+    background:#232c33; color:#eef4f7; border-color:#3d4d59;
+  }
+  html[data-theme="light"] .waf-field textarea, html[data-theme="light"] .waf-field input[type=text] {
+    background:#eef4f7; color:#1b232b; border-color:#b9cbd4;
+  }
+
+  .waf-field input.vDateField {
+    display:inline-block; width:auto; border-radius:8px; padding:10px 12px; font:inherit; font-size:13px;
+    background:#eef4f7; color:#1b232b; border:1px solid #b9cbd4;
+  }
+  .waf-field input.vDateField:focus {
+    border-color:#417690; outline:none; box-shadow:0 0 0 2px rgba(65,118,144,.25);
+  }
+  @media (prefers-color-scheme: dark) {
+    .waf-field input.vDateField { background:#232c33; color:#eef4f7; border-color:#3d4d59; }
+  }
+  html[data-theme="dark"] .waf-field input.vDateField { background:#232c33; color:#eef4f7; border-color:#3d4d59; }
+  html[data-theme="light"] .waf-field input.vDateField { background:#eef4f7; color:#1b232b; border-color:#b9cbd4; }
+  .waf-checkbox-label {
+    display:inline-flex; align-items:center; gap:8px; font-size:13px; font-weight:600;
+    color:var(--body-fg); cursor:pointer;
+  }
+  .waf-checkbox-label input[type=checkbox] { width:16px; height:16px; accent-color:#417690; cursor:pointer; }
+
+  .waf-field ul { list-style:none; margin:0; padding:0; display:flex; gap:10px; flex-wrap:wrap; }
+  .waf-field ul li label {
+    display:inline-flex; align-items:center; gap:6px; padding:8px 16px;
+    border-radius:999px; border:1px solid rgba(121,174,200,.5); font-size:13px; cursor:pointer;
+    background:rgba(121,174,200,.10);
+    transition:background .15s, border-color .15s;
+  }
+  .waf-field ul li label:hover { background:rgba(121,174,200,.2); }
+  .waf-field ul li input[type=radio] { accent-color:#417690; }
+  .waf-field .helptext { display:block; font-size:11.5px; color:var(--body-quiet-color,#888); margin-top:5px; }
+  .waf-field ul.errorlist { list-style:none; margin:0 0 6px; padding:0; color:#e35f5f; font-size:12px; }
+
+  .waf-actions {
+    margin-top:22px; display:flex; gap:10px; flex-wrap:wrap;
+    border-top:1px solid rgba(121,174,200,.15); padding-top:18px;
+  }
+
+  .waf-file-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .waf-file-row:last-of-type { margin-bottom:10px; }
+  .waf-file-remove {
+    border:none; background:none; color:#e35f5f; cursor:pointer; font-size:16px;
+    line-height:1; padding:2px 6px;
+  }
+  .waf-file-add { font-size:12.5px; padding:6px 12px; }
+
+  /* Кнопки — один в один как в личном кабинете (cab-wa-btn) */
+  .cab-wa-btn {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:7px 15px; border-radius:6px; font-size:13px; font-weight:600;
+    white-space:nowrap; font-family:inherit; text-decoration:none;
+    border:1px solid transparent; box-sizing:border-box;
+  }
+  button.cab-wa-btn { cursor:pointer; appearance:none; -webkit-appearance:none; }
+  a.cab-wa-btn:hover { text-decoration:none; }
+  .cab-wa-btn--amber { color:#f57c00; background:rgba(255,160,0,.12); border-color:rgba(255,160,0,.45); }
+  .cab-wa-btn--amber:hover { background:rgba(255,160,0,.22); }
+  .cab-wa-btn--cyan { color:#0097a7; background:rgba(0,172,193,.12); border-color:rgba(0,172,193,.45); }
+  .cab-wa-btn--cyan:hover { background:rgba(0,172,193,.22); }
+  .cab-wa-btn--green { color:#2e7d32; background:rgba(76,175,80,.12); border-color:rgba(76,175,80,.45); }
+  .cab-wa-btn--green:hover { background:rgba(76,175,80,.22); }
+  .cab-wa-btn--red { color:#c62828; background:rgba(229,57,53,.12); border-color:rgba(229,57,53,.45); }
+  .cab-wa-btn--red:hover { background:rgba(229,57,53,.22); }
+  .cab-wa-btn--outline { color:#417690; background:transparent; border-color:rgba(65,118,144,.55); }
+  .cab-wa-btn--outline:hover { background:rgba(65,118,144,.10); }
+  .waf-wrap a.cab-wa-btn--outline:link,
+  .waf-wrap a.cab-wa-btn--outline:visited { color:#417690; }
+</style>
+<div class="waf-wrap">
+  <h1>{% block wa_title %}{% endblock %}</h1>
+  <div class="waf-card">
+    {% if original.task %}<div class="waf-task">{{ original.task|rich_text }}</div>{% endif %}
+    {% block wa_result %}{% endblock %}
+    {% block wa_note %}{% endblock %}
+    <form method="post" {% block wa_form_attrs %}{% endblock %} novalidate>
+      {% csrf_token %}
+      {% block wa_extra_hidden %}{% endblock %}
+      {% for field in form %}
+      {% if field.is_hidden %}
+      {{ field }}
+      {% elif field.field.widget.input_type == "checkbox" %}
+      <div class="waf-field waf-field--checkbox">
+        <label class="waf-checkbox-label">
+          {{ field }} {{ field.label }}{% if field.field.required %}<span class="waf-req">*</span>{% endif %}
+        </label>
+        {{ field.errors }}
+        {% if field.help_text %}<span class="waf-help helptext">{{ field.help_text }}</span>{% endif %}
+      </div>
+      {% else %}
+      <div class="waf-field">
+        <label class="waf-label" for="{{ field.id_for_label }}">
+          {{ field.label }}{% if field.field.required %}<span class="waf-req">*</span>{% endif %}
+        </label>
+        {{ field.errors }}
+        {% if field.name == "file" %}
+        <div class="waf-file-group" data-waf-file-group>
+          <div class="waf-file-list" data-waf-file-list>
+            <div class="waf-file-row">
+              <input type="file" name="{{ field.html_name }}">
+            </div>
+          </div>
+          <button type="button" class="cab-wa-btn cab-wa-btn--outline waf-file-add" data-waf-file-add>+ Добавить ещё файл</button>
+        </div>
+        {% else %}
+        {{ field }}
+        {% endif %}
+        {% if field.help_text %}<span class="waf-help helptext">{{ field.help_text }}</span>{% endif %}
+      </div>
+      {% endif %}
+      {% endfor %}
+      <div class="waf-actions">
+        <button type="submit" class="cab-wa-btn {% block wa_btn_class %}cab-wa-btn--cyan{% endblock %}">{% block wa_submit_label %}Сохранить{% endblock %}</button>
+        <a href="{% block wa_cancel_url %}{% url 'admin:approvals_cabinet' %}{% endblock %}" class="cab-wa-btn cab-wa-btn--outline">Отмена</a>
+      </div>
+    </form>
+  </div>
+</div>
+<script>
+  document.querySelectorAll('[data-waf-file-group]').forEach(function (group) {
+    var list = group.querySelector('[data-waf-file-list]');
+    var addBtn = group.querySelector('[data-waf-file-add]');
+    var fileName = list.querySelector('input[type=file]').name;
+
+    function addRow() {
+      var row = document.createElement('div');
+      row.className = 'waf-file-row';
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.name = fileName;
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'waf-file-remove';
+      remove.textContent = '×';
+      remove.addEventListener('click', function () { row.remove(); });
+      row.appendChild(input);
+      row.appendChild(remove);
+      list.appendChild(row);
+    }
+
+    addBtn.addEventListener('click', addRow);
+  });
+</script>
+{% endblock %}

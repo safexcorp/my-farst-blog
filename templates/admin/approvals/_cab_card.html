@@ -1,0 +1,118 @@
+{% load richtext %}
+<div class="cab-card{% if wa.is_urgent %} cab-card--urgent{% endif %}{% if board and mode == "work" and g.key == "assigned" or board and mode == "work" and g.key == "in_progress" or board and mode == "issued" and g.key == "review" %} cab-draggable{% endif %}"{% if board and mode == "work" and g.key == "assigned" or board and mode == "work" and g.key == "in_progress" or board and mode == "issued" and g.key == "review" %} draggable="true" data-wa-id="{{ wa.pk }}"{% endif %}>
+  <div class="cab-info">
+    <div class="title">
+      {% if wa.wa_full_code %}{{ wa.wa_full_code }}{% else %}{{ wa.name|default:"Рабочее задание" }}{% endif %}
+    </div>
+    {% if wa.task %}<div class="issued-task"><span class="meta-label">Задача</span>{{ wa.task|rich_text }}</div>{% endif %}
+    <div class="meta">
+      {% if wa.control_status == "assigned" %}<span class="pill pill-amber">Ожидает принятия</span>
+      {% elif wa.control_status == "review" %}<span class="pill pill-cyan">На проверке</span>
+      {% elif wa.control_status == "reschedule_pending" %}<span class="pill pill-purple">Согласование переноса срока</span>
+      {% elif wa.control_status == "on_time" %}<span class="pill pill-green">Выполнено в срок</span>
+      {% elif wa.control_status == "rescheduled" %}<span class="pill pill-orange">С переносом</span>
+      {% elif wa.control_status == "partial" %}<span class="pill pill-orange">Частично</span>
+      {% elif wa.control_status == "not_done" %}<span class="pill pill-gray">Не выполнено</span>
+      {% else %}<span class="pill pill-blue">В работе</span>{% endif %}
+      {% if wa.returned_for_rework and wa.control_status == "in_progress" %}<span class="pill pill-peach">Возвращена на доработку</span>{% endif %}
+      {% if wa.is_urgent %}<span class="pill pill-urgent">🔥 Срочно</span>{% endif %}
+      {% if mode == "issued" and wa.executor %}
+        Исполнитель: <strong><a href="{% url 'admin:approvals_user_profile' wa.executor_id %}">{{ wa.executor }}</a></strong>{% if wa.executor_id == wa.author_id %} (себе){% endif %}
+      {% endif %}
+    </div>
+    {% if mode == "work" and wa.acceptance_criteria and wa.acceptance_criteria != "---" %}
+    <div class="meta"><span class="meta-label">Критерий выполнения:</span> {{ wa.acceptance_criteria }}</div>
+    {% endif %}
+    {% if wa.post %}
+    <div class="meta"><span class="meta-label">Связанная разработка/проект:</span> {{ wa.post }}</div>
+    {% endif %}
+    <div class="meta">
+      <span class="meta-label">Целевой срок выполнения:</span>
+      {% if g.key == "done" %}
+        <strong>{{ wa.target_deadline|date:"d.m.Y" }}</strong>
+      {% else %}
+        <strong{% if wa.target_deadline < today %} class="cab-overdue"{% endif %}>{{ wa.target_deadline|date:"d.m.Y" }}</strong>{% if wa.reschedule_count or wa.target_deadline < today %} ({% if wa.reschedule_count %}срок был перенесён{% endif %}{% if wa.reschedule_count and wa.target_deadline < today %}, {% endif %}{% if wa.target_deadline < today %}просрочено{% endif %}){% endif %}
+      {% endif %}
+    </div>
+    {% if mode == "issued" %}
+    <div class="meta">
+      Создано: {{ wa.date_of_creation|date:"d.m.Y" }}
+      {% if wa.subtask_total %} · Подзадач: {{ wa.subtask_total }}{% endif %}
+      {% if wa.reschedule_count %} · Переносов: {{ wa.reschedule_count }}{% endif %}
+    </div>
+    {% endif %}
+    {% if wa.hard_deadline %}
+    <div class="meta">Дедлайн: <strong>{{ wa.hard_deadline|date:"d.m.Y" }}</strong></div>
+    {% endif %}
+    {% if mode == "issued" and wa.control_date %}
+    <div class="meta">Дата фиксации статуса: {{ wa.control_date|date:"d.m.Y H:i" }}</div>
+    {% endif %}
+    {% if mode == "work" and wa.wa_attachments %}
+    <div class="meta">
+      <span class="meta-label">Файлы, приложенные к заданию:</span>
+      {% for a in wa.wa_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+    {% if mode == "work" and wa.returned_for_rework and wa.comment %}
+    <div class="note note--orange">Комментарий автора: {{ wa.comment|linebreaksbr }}</div>
+    {% endif %}
+    {% if mode == "work" and wa.author %}
+    <div class="meta"><span class="meta-label">Автор:</span> <strong><a href="{% url 'admin:approvals_user_profile' wa.author_id %}">{{ wa.author }}</a></strong></div>
+    {% endif %}
+    {% if mode == "issued" and wa.control_status == "review" and wa.result_description %}
+    <div class="meta">Описание результата: {{ wa.result_description|linebreaksbr }}</div>
+    {% endif %}
+    {% if mode == "issued" and wa.control_status == "review" and wa.review_attachments %}
+    <div class="meta">
+      Файлы, приложенные к результату:
+      {% for a in wa.review_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+    {% if mode == "issued" and wa.control_status == "review" and wa.review_task_attachments %}
+    <div class="meta">
+      Файлы, приложенные к заданию:
+      {% for a in wa.review_task_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+    {% if mode == "issued" and wa.control_status == "reschedule_pending" %}
+    <div class="meta">Причина переноса: {{ wa.reschedule_request_reason|linebreaksbr }}</div>
+    <div class="meta">Желаемый срок: {{ wa.reschedule_request_date|date:"d.m.Y" }}</div>
+    {% endif %}
+  </div>
+  <div class="cab-actions cab-actions--col">
+    {% if mode == "issued" %}
+      {% if wa.control_status == "review" %}
+      <a class="cab-wa-btn cab-wa-btn--green" href="{% url 'admin:blog_workassignment_close' wa.pk %}">Проверить и закрыть</a>
+      <a class="cab-wa-btn cab-wa-btn--outline" href="{% url 'admin:blog_workassignment_return' wa.pk %}">Вернуть на доработку</a>
+      {% elif wa.control_status == "reschedule_pending" %}
+      <a class="cab-wa-btn cab-wa-btn--green" href="{% url 'admin:blog_workassignment_reschedule' wa.pk %}?next=cabinet">Согласовать перенос срока</a>
+      <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_deny_reschedule' wa.pk %}">
+        {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--outline">Отказать</button>
+      </form>
+      {% endif %}
+      {% if wa.control_status == "assigned" or wa.control_status == "in_progress" or not wa.control_status %}
+      <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_toggle_urgent' wa.pk %}">
+        {% csrf_token %}<button type="submit" class="cab-wa-btn {% if wa.is_urgent %}cab-wa-btn--outline{% else %}cab-wa-btn--cyan{% endif %}">{% if wa.is_urgent %}Снять повышенный приоритет{% else %}🔥 Повысить приоритет{% endif %}</button>
+      </form>
+      {% endif %}
+    {% else %}
+      {% if wa.control_status == "assigned" %}
+      <form method="post" class="cab-wform" action="{% url 'admin:blog_workassignment_acknowledge' wa.pk %}">
+        {% csrf_token %}<button type="submit" class="cab-wa-btn cab-wa-btn--amber">Принять в работу</button>
+      </form>
+      <a class="cab-wa-btn cab-wa-btn--outline" href="{% url 'admin:blog_workassignment_request_reschedule' wa.pk %}">Запрос переноса срока задачи</a>
+      {% elif wa.control_status == "review" %}
+      <span class="cab-wa-btn cab-wa-btn--cyan">⏳ На проверке у автора</span>
+      {% elif wa.control_status == "reschedule_pending" %}
+      <span class="cab-wa-btn cab-wa-btn--outline">⏳ Ожидает решения автора</span>
+      {% elif wa.control_status == "in_progress" or not wa.control_status %}
+      <a class="cab-wa-btn cab-wa-btn--cyan" href="{% url 'admin:blog_workassignment_submit_review' wa.pk %}">Сдать на проверку</a>
+      <a class="cab-wa-btn cab-wa-btn--outline" href="{% url 'admin:blog_workassignment_request_reschedule' wa.pk %}">Запрос переноса срока задачи</a>
+      {% endif %}
+    {% endif %}
+    <a class="btn btn-gray" href="{% url 'admin:blog_workassignment_change' wa.pk %}">Открыть карточку задания</a>
+    {% if mode == "issued" and wa.control_status == "assigned" or mode == "issued" and wa.control_status == "in_progress" or mode == "issued" and not wa.control_status %}
+    <a class="cab-wa-btn cab-wa-btn--gray" href="{% url 'admin:blog_workassignment_cancel' wa.pk %}">Отменить задачу</a>
+    {% endif %}
+  </div>
+</div>

@@ -1,20 +1,22 @@
-{% extends "admin/base_site.html" %}
-{% block content %}
-  <h1>Вернуть задачу на доработку: {{ original }}</h1>
-  <div class="module aligned">
-    {% if original.task %}<p style="margin:0 0 10px;color:var(--body-quiet-color,#666);">{{ original.task }}</p>{% endif %}
-    <p style="margin:0 0 12px;color:var(--body-quiet-color,#666);">
-      Задача вернётся исполнителю в статус «В работе».
-    </p>
-    <form method="post" novalidate>
-      {% csrf_token %}
-      <table>
-        {{ form.as_table }}
-      </table>
-      <div class="submit-row">
-        <input type="submit" class="default" value="Вернуть на доработку">
-        <a href="{% url 'admin:approvals_cabinet' %}" class="button cancel-link">Отмена</a>
-      </div>
-    </form>
-  </div>
+{% extends "admin/blog/workassignment/_action_form_base.html" %}
+{% block wa_title %}Вернуть задачу на доработку: {{ original }}{% endblock %}
+{% block wa_result %}
+<div class="waf-task">
+  Описание результата: {% if original.result_description %}{{ original.result_description|linebreaksbr }}{% endif %}
+  <br>Файлы, приложенные к результату:
+  {% if result_attachments %}
+    {% for a in result_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+  {% else %}
+    нет
+  {% endif %}
+  <br>Файлы приложенные к заданию:
+  {% if task_attachments %}
+    {% for a in task_attachments %}<a href="{{ a.file.url }}" target="_blank">{{ a.file.name|cut:"attachments/" }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+  {% else %}
+    нет
+  {% endif %}
+</div>
 {% endblock %}
+{% block wa_note %}<div class="waf-note">Задача вернётся исполнителю в статус «В работе».</div>{% endblock %}
+{% block wa_btn_class %}cab-wa-btn--amber{% endblock %}
+{% block wa_submit_label %}Вернуть на доработку{% endblock %}

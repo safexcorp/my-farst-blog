@@ -69,15 +69,6 @@
         .subtitle { font-size: 12pt; margin: 2px 0; }
         .model-name { font-weight: bold; margin: 6px 0; }
         .info-row { margin: 2px 0; }
-        /* Блок «Зав. № … дата изготовления»: по центру, с отступами сверху,
-           снизу и между самими надписями. */
-        .serial-row {
-            text-align: center;
-            margin: 18px 0 20px 0;
-        }
-        .serial-row .info-label { margin: 0 6px; }
-        .serial-row .val { margin-right: 24px; }
-        .serial-row .val:last-child { margin-right: 0; }
         .info-label { font-weight: normal; }
         .intro-meta { font-weight: bold; margin: 6px 0; }
         .val { font-weight: normal; }
@@ -92,40 +83,15 @@
             padding: 5px 6px;
             vertical-align: middle;
             text-align: center;
-            /* Ячейку не разрывать: иначе текст проверки уезжает на другую
-               страницу отдельно от своих значений. */
-            page-break-inside: avoid;
-            break-inside: avoid;
         }
-        /* Строка проверки целиком переносится на следующую страницу
-           (например, п. 6 больше не разрывается между страницами). */
-        table.results tr {
-            page-break-inside: avoid;
-            break-inside: avoid;
-        }
-        /* Шапка таблицы повторяется на каждой странице. */
-        table.results thead { display: table-header-group; }
-        table.results tbody { break-inside: auto; }
         table.results th { font-weight: bold; }
         table.results td.name { text-align: left; }
         .result-cell { text-align: center; }
         .conclusion-block { margin-top: 18px; }
         .conclusion-text { margin: 8px 0; text-align: justify; }
-        .sig-wrap {
-            margin-top: 26px;
-            page-break-inside: avoid;
-            break-inside: avoid;
-        }
-        .sig-table { width: 100%; border-collapse: collapse; }
-        /* vertical-align: top — «Представитель ОТК» встаёт на одну линию
-           с полями ЭЦП / Дата / ФИО. */
-        .sig-table td { text-align: center; padding: 4px 8px; vertical-align: top; }
-        .sig-role {
-            text-align: left;
-            white-space: nowrap;
-            padding-left: 0;
-            padding-right: 12px;
-        }
+        .sig-wrap { margin-top: 26px; }
+        .sig-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        .sig-table td { text-align: center; padding: 4px 8px; }
         .sig-underline {
             display: block;
             border-bottom: 1px solid #000;
@@ -142,7 +108,7 @@
         <div class="header-cell header-left">
             <div class="company-name">
                 ОБЩЕСТВО С ОГРАНИЧЕННОЙ<br>
-                ОТВЕТСТВЕННОСТЬЮ {{ pak.developer_org.name|cut:"ООО " }}
+                ОТВЕТСТВЕННОСТЬЮ {{ pak.developer_org.name }}</strong>
             </div>
         </div>
         <div class="header-cell header-right">
@@ -159,17 +125,18 @@
         <div class="model-name">{{ model_name }}</div>
     </div>
 <!-- Заводской номер из Shipment -->
-    <div class="info-row serial-row">
+    <div class="info-row">
         <span class="info-label">Зав. №</span>
         <span class="val">{{ serial_number }}</span>
-        <span class="info-label">от</span>
-        <span class="val">{{ pak.test_date_end|date:"d.m.Y" }}</span>
+        <span class="info-label">дата изготовления</span>
+        <span class="val">{{ pak.test_date_start|date:"d.m.Y" }}</span>
     </div>
-<div>
 <!-- ВВОДНЫЙ ТЕКСТ -->
-    <div class="intro-text">
-        Изделие изготовлено в соответствии с техническими условиями <span style="white-space:nowrap">СИ.40522001.000ТУ</span>. Программа и методика испытаний в соответствии с <span style="white-space:nowrap">СИ.40522001.000ПМ1</span>.
-    </div>
+    <p>
+        Изделие изготовлено в соответствии с техническими условиями
+        СИ.40522001.000ТУ. Программа и методика испытаний в соответствии с
+        СИ.40522001.000ПМ1.
+    </p>
 
     <div class="intro-meta">Дата начала проведения испытаний:
         <span class="val">{{ pak.test_date_start|date:"d.m.Y" }}</span>
@@ -248,24 +215,24 @@
             {% if pak.conclusion == 'готов к отгрузке' %}
                 Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
                 Зав. № <strong>{{ serial_number }}</strong>
-                соответствует требованиям <span style="white-space:nowrap">СИ.40522001.000ТУ</span> и годно для
+                соответствует требованиям СИ.40522001.000ТУ и годно для
                 использования по назначению (эксплуатации).
             {% else %}
                 Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
                 Зав. № <strong>{{ serial_number }}</strong>
-                не соответствует требованиям <span style="white-space:nowrap">СИ.40522001.000ТУ</span> и подлежит
+                не соответствует требованиям СИ.40522001.000ТУ и подлежит
                 возврату на устранение дефектов и доработку.
             {% endif %}
         </div>
     </div>
 <!-- ПОДПИСИ -->
     <div class="sig-wrap">
+        <div>Представитель ОТК</div>
         <table class="sig-table">
             <tr>
-                <td class="sig-role" style="width: 26%;">Представитель ОТК</td>
-                <td style="width: 24%;"><span class="sig-underline" style="letter-spacing: 2px;">ЭЦП</span><span class="sig-caption">Подпись</span></td>
-                <td style="width: 24%;"><span class="sig-underline">{{ pak.test_date_end|date:"d.m.Y" }}</span><span class="sig-caption">Дата</span></td>
-                <td style="width: 26%;"><span class="sig-underline">{{ pak.get_inspector_display }}</span><span class="sig-caption">ФИО</span></td>
+                <td style="width: 33%;"><span class="sig-underline" style="letter-spacing: 2px;">ЭЦП</span><span class="sig-caption">Подпись</span></td>
+                <td style="width: 33%;"><span class="sig-underline">{{ pak.test_date_end|date:"d.m.Y" }}</span><span class="sig-caption">Дата</span></td>
+                <td style="width: 34%;"><span class="sig-underline">{{ pak.inspector }}</span><span class="sig-caption">ФИО</span></td>
             </tr>
         </table>
     </div>

@@ -1,0 +1,5 @@
+{% extends "admin/blog/workassignment/_action_form_base.html" %}
+{% block wa_title %}Отменить задачу: {{ original }}{% endblock %}
+{% block wa_note %}<div class="waf-note">Задача получит статус «Не выполнено (Отменено)». Исполнитель получит уведомление.</div>{% endblock %}
+{% block wa_btn_class %}cab-wa-btn--red{% endblock %}
+{% block wa_submit_label %}Отменить задачу{% endblock %}

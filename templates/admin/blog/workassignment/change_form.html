@@ -2,6 +2,7 @@
 {% load i18n admin_urls %}
 
 {% block submit_buttons_bottom %}
+{% if has_change_permission %}
 <div class="submit-row">
   <input type="submit" value="Сохранить и отправить исполнителю" class="default" name="_save">
   {% if not original or not original.executor_id %}
@@ -12,15 +13,22 @@
     <a href="{% url opts|admin_urlname:'changelist' %}" class="closelink">{% translate 'Close' %}</a>
   {% endif %}
 </div>
+{% else %}
+<div class="submit-row">
+  <a href="{% url opts|admin_urlname:'changelist' %}" class="closelink">{% translate 'Close' %}</a>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block object-tools-items %}
   {{ block.super }}
+  {% if has_change_permission %}
   <li>
     <a id="reschedule-link" href="{% url 'admin:blog_workassignment_reschedule' original.pk %}">
       Перенести срок
     </a>
   </li>
+  {% endif %}
 {% endblock %}
 
 {% block extrahead %}
@@ -44,6 +52,13 @@
       max-width: 22rem;
       min-width: 9rem;
       line-height: 1.4;
+    }
+    /* "Требуется установить дедлайн?" не влезает в стандартную
+       160px-колонку лейблов .aligned label - даёт ей ужаться по контенту. */
+    .field-requires_hard_deadline label {
+      width: auto;
+      min-width: 0;
+      white-space: nowrap;
     }
   </style>
   <script>
@@ -122,6 +137,58 @@
         });
       });
     })();
+
+    document.addEventListener("DOMContentLoaded", function () {
+      // Вложения к заданию — тот же приём «+ добавить ещё файл», что и на
+      // страницах «Сдать на проверку»/«Вернуть на доработку»: несколько
+      // однофайловых input'ов с одинаковым name, вместо системного
+      // мультивыбора в одном input[multiple]. Кнопка — блочная, отдельной
+      // строкой под полями, не сбоку.
+      var input = document.getElementById("id_attachments");
+      if (input) {
+        var fieldName = input.name;
+        input.removeAttribute("multiple");
+        var list = document.createElement("div");
+        input.parentNode.insertBefore(list, input);
+
+        function addRow(existingInput) {
+          var row = document.createElement("div");
+          row.style.marginBottom = "6px";
+          var fileInput = existingInput || document.createElement("input");
+          if (!existingInput) {
+            fileInput.type = "file";
+            fileInput.name = fieldName;
+          }
+          row.appendChild(fileInput);
+          if (!existingInput) {
+            var removeBtn = document.createElement("a");
+            removeBtn.href = "#";
+            removeBtn.className = "deletelink";
+            removeBtn.style.marginLeft = "10px";
+            removeBtn.addEventListener("click", function (e) {
+              e.preventDefault();
+              row.remove();
+            });
+            row.appendChild(removeBtn);
+          }
+          list.appendChild(row);
+        }
+
+        addRow(input);
+
+        var addBtn = document.createElement("a");
+        addBtn.href = "#";
+        addBtn.className = "addlink";
+        addBtn.style.display = "block";
+        addBtn.style.marginTop = "4px";
+        addBtn.textContent = "Добавить ещё файл";
+        addBtn.addEventListener("click", function (e) {
+          e.preventDefault();
+          addRow();
+        });
+        list.after(addBtn);
+      }
+    });
 
     document.addEventListener("DOMContentLoaded", function () {
       var form =

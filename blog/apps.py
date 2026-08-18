@@ -63,6 +63,25 @@ def _backfill_wa_codes(sender, **kwargs):
             )
 
 
+def _close_subtasks_for_closed_parents(sender, **kwargs):
+    from django.db.models import Q
+    from django.utils import timezone
+    from .models import WorkAssignment, WorkAssignmentSubtask
+
+    non_terminal = Q(control_status__isnull=True) | Q(
+        control_status__in=WorkAssignment.ACTIVE_STATUSES
+    )
+    stale = WorkAssignmentSubtask.objects.filter(non_terminal).filter(
+        work_assignment__control_status__in=WorkAssignment.TERMINAL_STATUSES
+    ).select_related("work_assignment")
+
+    today = timezone.localdate()
+    for subtask in stale:
+        subtask.control_status = subtask.work_assignment.control_status
+        subtask.control_date = today
+        subtask.save(update_fields=["control_status", "control_date"])
+
+
 class BlogConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "blog"
@@ -70,8 +89,50 @@ class BlogConfig(AppConfig):
 
     def ready(self):
         from django.contrib import admin
+        from django.contrib.admin.options import BaseModelAdmin
+        from django.contrib.auth import get_user_model
+        from django.core.exceptions import ValidationError
 
         post_migrate.connect(_backfill_wa_codes, sender=self)
+        post_migrate.connect(_close_subtasks_for_closed_parents, sender=self)
+
+        #выбрать неактивного пользователя нельзя -
+        # при сохранении формы падает ошибка валидации.
+        User = get_user_model()
+        _orig_formfield_for_foreignkey = BaseModelAdmin.formfield_for_foreignkey
+
+        class _InactiveUserCleanMixin:
+            def clean(self, value):
+                user = super().clean(value)
+                if user is not None and not user.is_active:
+                    raise ValidationError("Этот пользователь неактивен, его нельзя выбрать.")
+                return user
+
+        _checked_field_classes = {}
+
+        def formfield_for_foreignkey(self, db_field, request, **kwargs):
+            field = _orig_formfield_for_foreignkey(self, db_field, request, **kwargs)
+            if field is not None and db_field.related_model is User:
+                base_cls = type(field)
+                # Patching the class (not the instance) matters: Field.__deepcopy__
+                # is a shallow copy.copy(), so an instance-level override (a bound
+                # method or a plain function assigned to field.clean) would stay
+                # wired to this original field forever - every ModelForm
+                # instantiation deepcopies base_fields, and a later per-instance
+                # `required = False` override (e.g. WorkAssignmentAdminForm) would
+                # silently have no effect on validation.
+                checked_cls = _checked_field_classes.get(base_cls)
+                if checked_cls is None:
+                    checked_cls = type(
+                        f"InactiveUserChecked{base_cls.__name__}",
+                        (_InactiveUserCleanMixin, base_cls),
+                        {},
+                    )
+                    _checked_field_classes[base_cls] = checked_cls
+                field.__class__ = checked_cls
+            return field
+
+        BaseModelAdmin.formfield_for_foreignkey = formfield_for_foreignkey
 
         site = admin.site
         _orig_get_app_list = site.get_app_list

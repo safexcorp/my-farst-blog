@@ -6,7 +6,7 @@ from django.shortcuts import redirect, render
 from django.urls import path, reverse
 from django.utils import timezone
 from datetime import timedelta
-from django.utils.html import escape, format_html
+from django.utils.html import escape, format_html, format_html_join, strip_tags
 from django.template.defaultfilters import linebreaksbr
 from django.utils.safestring import mark_safe
 import re
@@ -58,8 +58,11 @@ from .models import (PSIDocument, GeneratedDocument, DocumentHistory, PAKDocumen
 from .admin_forms import (
     RescheduleAdminForm,
     WorkAssignmentAdminForm,
+    WorkAssignmentCancelForm,
     WorkAssignmentCloseForm,
+    WorkAssignmentRescheduleRequestForm,
     WorkAssignmentReturnForm,
+    WorkAssignmentSubmitReviewForm,
 )
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
 from .helpers import (
@@ -189,6 +192,21 @@ def _file_link_marker(file_field) -> str:
     return f"[{name}]({url})"
 
 
+_HTML_BLOCK_BOUNDARY_RE = re.compile(r"<(br\s*/?|/(p|li|div|h[1-6]|ol|ul))\s*>", re.IGNORECASE)
+
+
+def _plain_text_for_diff(value):
+    """History entries compare raw field values as text - rich-text fields
+    (WorkAssignment.task) store sanitized HTML there, which without this
+    would dump raw markup into the diff. Strip tags for a readable diff,
+    keeping block boundaries (</p>, </li>, <br>...) as spaces so words don't
+    run together."""
+    text = str(value) if value is not None else ""
+    if "<" not in text:
+        return value
+    return strip_tags(_HTML_BLOCK_BOUNDARY_RE.sub(" ", text)).strip()
+
+
 def _build_version_diff_block(*, old_obj, new_obj, model_cls, skip_fields,
                               user, version_to: str) -> str:
     """Строит блок изменений между `old_obj` и `new_obj` по полям модели.
@@ -233,8 +251,10 @@ def _build_version_diff_block(*, old_obj, new_obj, model_cls, skip_fields,
         old_val = getattr(old_obj, field.name, None)
         new_val = getattr(new_obj, field.name, None)
         if str(old_val) != str(new_val):
-            old_disp = old_val if old_val not in (None, "") else "—"
-            new_disp = new_val if new_val not in (None, "") else "—"
+            old_disp = _plain_text_for_diff(old_val)
+            new_disp = _plain_text_for_diff(new_val)
+            old_disp = old_disp if old_disp not in (None, "") else "—"
+            new_disp = new_disp if new_disp not in (None, "") else "—"
             if field.choices:
                 choices_map = dict(field.choices)
                 old_disp = choices_map.get(old_val, old_disp)
@@ -337,10 +357,6 @@ class AttachmentInline(GenericTabularInline):
     formset = RequiredFileGenericFormSet
     extra = 1
     fields = ("file",)
-
-
-class WorkAssignmentAttachmentInline(AttachmentInline):
-    verbose_name_plural = "Вложения"
 
 
 def _tp_docs_section_header(title: str):
@@ -701,7 +717,6 @@ class WorkAssignmentInline(admin.TabularInline):
         "author",
         "date_of_creation",
         "last_editor",
-        "current_responsible",
         "version",
         "task",
         "target_deadline",
@@ -4045,13 +4060,12 @@ class DeadlineChangeInline(admin.TabularInline):
     model = WorkAssignmentDeadlineChange
     extra = 0
     can_delete = False
-    readonly_fields = (
-        "old_target_deadline", "old_hard_deadline",
-        "old_time_window_start", "old_time_window_end",
-        "new_target_deadline", "new_hard_deadline",
-        "new_time_window_start", "new_time_window_end",
+    fields = (
+        "old_target_deadline", "new_target_deadline",
+        "old_hard_deadline", "new_hard_deadline",
         "reason", "changed_by", "changed_at",
     )
+    readonly_fields = fields
     show_change_link = False
 
     def get_changeform_initial_data(self, request):
@@ -4098,6 +4112,16 @@ class WorkAssignmentSubtaskInline(admin.TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
+
+    def has_change_permission(self, request, obj=None):
+        if obj is not None and obj.control_status in WorkAssignment.TERMINAL_STATUSES:
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and obj.control_status in WorkAssignment.TERMINAL_STATUSES:
+            return False
+        return super().has_delete_permission(request, obj)
 
     @admin.display(description="РЗ")
     def parent_rz_display(self, obj):
@@ -4170,13 +4194,19 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
         extra["title"] = "Добавить подзадачу рабочего задания"
         return super().add_view(request, form_url, extra_context=extra)
 
+    def response_post_save_add(self, request, obj):
+        return redirect(f"{reverse('admin:approvals_cabinet')}?tab=subtasks")
+
+    def response_post_save_change(self, request, obj):
+        return redirect(f"{reverse('admin:approvals_cabinet')}?tab=subtasks")
+
     list_display = (
         "id", "work_assignment", "task_short",
         "target_deadline", "executor",
         "control_status_colored", "comment_short",
     )
     search_fields = ("task", "work_assignment__name")
-    readonly_fields = ("date_of_creation", "date_of_change")
+    readonly_fields = ("date_of_creation", "date_of_change", "control_date")
 
     fieldsets = (
         (
@@ -4197,9 +4227,6 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "target_deadline",
-                    "hard_deadline",
-                    ("time_window_start", "time_window_end"),
-                    "conditional_deadline",
                 )
             },
         ),
@@ -4249,6 +4276,12 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
             return WorkAssignment.objects.get(pk=wa_id)
         except (WorkAssignment.DoesNotExist, ValueError, TypeError):
             return None
+
+    def has_change_permission(self, request, obj=None):
+        parent = self._get_parent_wa(request, obj)
+        if parent is not None and parent.control_status in WorkAssignment.TERMINAL_STATUSES:
+            return False
+        return super().has_change_permission(request, obj)
 
     def get_fieldsets(self, request, obj=None):
         fieldsets = super().get_fieldsets(request, obj)
@@ -4301,6 +4334,7 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
             initial.setdefault("author", request.user.pk)
             initial.setdefault("last_editor", request.user.pk)
             initial.setdefault("current_responsible", request.user.pk)
+        initial.setdefault("control_status", WorkAssignment.STATUS_ASSIGNED)
         return initial
 
     def get_form(self, request, obj=None, change=False, **kwargs):
@@ -4353,6 +4387,26 @@ class WorkAssignmentSubtaskAdmin(admin.ModelAdmin):
                 kind=Notification.KIND_WORK,
             )
 
+class _ExecutorSelect(forms.Select):
+    """Select widget for WorkAssignment.executor that greys out inactive users
+    (still selectable - the existing save-time validation is what blocks them;
+    this is display-only, see WorkAssignmentAdmin.get_form)."""
+
+    inactive_pks = frozenset()
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        raw_value = getattr(value, "value", value)
+        if raw_value in self.inactive_pks:
+            # Native <select> popups are inconsistent about honoring CSS on
+            # <option> (var() in particular often gets silently dropped there),
+            # so the text suffix is the part that's guaranteed to show up;
+            # the color is a best-effort bonus where the browser supports it.
+            option["attrs"]["style"] = "color: #888;"
+            option["label"] = f"{option['label']} (неактивен)"
+        return option
+
+
 @admin.register(WorkAssignment)
 class WorkAssignmentAdmin(admin.ModelAdmin):
     form = WorkAssignmentAdminForm
@@ -4360,23 +4414,67 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         DateField: {"widget": AdminDateWidget},
     }
 
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _WorkAssignmentForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                executor_field = self.fields.get("executor")
+                if executor_field is None:
+                    return
+
+                author_user = (
+                    self.instance.author
+                    if (self.instance and self.instance.pk and self.instance.author_id)
+                    else request.user
+                )
+                dept_id = getattr(
+                    getattr(author_user, "profile", None), "org_department_id", None
+                )
+
+                # Order of When clauses is precedence: inactive always sinks to
+                # the bottom, even if it happens to be the author or same dept.
+                priority_whens = [
+                    When(is_active=False, then=Value(3)),
+                    When(pk=author_user.pk, then=Value(0)),
+                ]
+                if dept_id is not None:
+                    priority_whens.append(
+                        When(profile__org_department_id=dept_id, then=Value(1))
+                    )
+
+                executor_field.queryset = executor_field.queryset.annotate(
+                    _priority=Case(
+                        *priority_whens, default=Value(2), output_field=IntegerField()
+                    )
+                ).order_by("_priority", "username")
+
+                inactive_pks = set(
+                    executor_field.queryset.filter(is_active=False)
+                    .values_list("pk", flat=True)
+                )
+                old_select = executor_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                executor_field.widget.widget = new_select
+
+        return _WorkAssignmentForm
+
     list_display = (
         'wa_code_column',
-        'name', 'author', 'executor', 'post',
+        'name', 'author_link', 'executor_link', 'post',
         'overdue_target_flag',
         'overdue_hard_flag',
         'control_status_colored',
         'control_date',
         'target_deadline', 'hard_deadline',
-        'version',
-        'deadline_version', 'reschedule_count',
     )
     list_display_links = ('wa_code_column', 'name')
-    ordering = ('post__wa_code', 'wa_number', 'pk')
+    ordering = ('-date_of_creation', '-pk')
     search_fields = (
         'name',
         'author__username',
-        'current_responsible__username',
         'post__wa_code',
     )
     list_filter = ('control_status', WorkAssignmentDraftFilter, OverdueFilter)
@@ -4385,21 +4483,45 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def wa_code_column(self, obj):
         return obj.wa_full_code or '—'
 
+    @admin.display(description='Автор', ordering='author')
+    def author_link(self, obj):
+        if not obj.author_id:
+            return '—'
+        return format_html(
+            '<a href="{}">{}</a>',
+            reverse('admin:approvals_user_profile', args=[obj.author_id]),
+            obj.author,
+        )
+
+    @admin.display(description='Исполнитель', ordering='executor')
+    def executor_link(self, obj):
+        if not obj.executor_id:
+            return '—'
+        return format_html(
+            '<a href="{}">{}</a>',
+            reverse('admin:approvals_user_profile', args=[obj.executor_id]),
+            obj.executor,
+        )
+
     readonly_fields = (
         'author', 'last_editor',
         'date_of_creation', 'date_of_change',
         'version', 'version_diff_display',
         'deadline_version', 'reschedule_count',
         'control_status_display', 'control_date_display',
+        'task_attachments_display', 'result_attachments_display',
+        'result_description_display', 'comment_display',
     )
 
-    inlines = [DeadlineChangeInline, WorkAssignmentSubtaskInline, WorkAssignmentAttachmentInline]
+    inlines = [DeadlineChangeInline, WorkAssignmentSubtaskInline]
 
     fieldsets = (
         ('Основная информация', {
             'fields': (
                 'name', 'executor', 'category', 'post',
+                'is_urgent',
                 'task', 'acceptance_criteria',
+                'task_attachments_display', 'attachments',
             )
         }),
         ('Сроки (изменять через «Перенести срок»)', {
@@ -4411,11 +4533,15 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             )
         }),
         ('Статус выполнения / Результат', {
-            'fields': ('control_status_display', 'control_date_display', 'result_description')
+            'fields': (
+                'control_status_display', 'control_date_display',
+                'result_description_display', 'comment_display',
+                'result_attachments_display',
+            )
         }),
         ('Системные данные', {
             'fields': (
-                'author', 'last_editor', 'current_responsible',
+                'author', 'last_editor',
                 'version', 'version_diff_display',
                 'date_of_creation', 'date_of_change',
                 'deadline_version', 'reschedule_count',
@@ -4425,7 +4551,11 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
 
     def get_exclude(self, request, obj=None):
         excl = list(super().get_exclude(request, obj) or [])
-        for name in ('control_status', 'control_date', 'route'):
+        for name in (
+            'control_status', 'control_date', 'route',
+            'reschedule_request_reason', 'reschedule_request_date',
+            'result_description', 'comment',
+        ):
             if name not in excl:
                 excl.append(name)
         return excl
@@ -4435,10 +4565,18 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if obj is not None:
             for name in (
                 "target_deadline_display",
+                "hard_deadline_display",
             ):
                 if name not in fields:
                     fields.append(name)
+            if request.user.id != obj.author_id and "is_urgent" not in fields:
+                fields.append("is_urgent")
         return fields
+
+    def has_change_permission(self, request, obj=None):
+        if obj is not None and obj.control_status in WorkAssignment.TERMINAL_STATUSES:
+            return False
+        return super().has_change_permission(request, obj)
 
     def get_fieldsets(self, request, obj=None):
         fieldsets = super().get_fieldsets(request, obj)
@@ -4446,15 +4584,21 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             return fieldsets
         rename = {
             "target_deadline": "target_deadline_display",
+            "hard_deadline": "hard_deadline_display",
         }
+        drop = {"requires_hard_deadline"}
         new_fieldsets = []
         for title, opts in fieldsets:
             opts = dict(opts)
             new_fields = []
             for f in opts.get("fields", ()):
                 if isinstance(f, (tuple, list)):
-                    new_fields.append(tuple(rename.get(x, x) for x in f))
+                    sub = tuple(rename.get(x, x) for x in f if x not in drop)
+                    if sub:
+                        new_fields.append(sub)
                 else:
+                    if f in drop:
+                        continue
                     new_fields.append(rename.get(f, f))
             opts["fields"] = tuple(new_fields)
             new_fieldsets.append((title, opts))
@@ -4480,6 +4624,10 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def target_deadline_display(self, obj):
         return self._readonly_date_input(obj.target_deadline)
 
+    @admin.display(description="Дедлайн")
+    def hard_deadline_display(self, obj):
+        return self._readonly_date_input(obj.hard_deadline)
+
     @admin.display(description="Статус выполнения / Результат")
     def control_status_display(self, obj):
         if not obj or not obj.pk or not obj.control_status:
@@ -4490,7 +4638,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
     def control_date_display(self, obj):
         if not obj or not obj.control_date:
             return "—"
-        return obj.control_date.strftime("%d.%m.%Y")
+        return timezone.localtime(obj.control_date).strftime("%d.%m.%Y %H:%M:%S")
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
@@ -4545,14 +4693,12 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.executor = None
                 obj.control_status = None
                 obj.control_date = None
-                obj.current_responsible = user
             else:
                 if not old_status and obj.executor_id:
                     obj.control_status = WorkAssignment.STATUS_ASSIGNED
-                    obj.control_date = timezone.localdate()
+                    obj.control_date = timezone.now()
                 elif obj.control_status and obj.control_status != old_status:
-                    obj.control_date = timezone.localdate()
-                obj.current_responsible = obj.executor
+                    obj.control_date = timezone.now()
         else:
             obj.author = user
             obj.last_editor = user
@@ -4560,12 +4706,10 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.executor = None
                 obj.control_status = None
                 obj.control_date = None
-                obj.current_responsible = user
             else:
                 if not obj.control_status:
                     obj.control_status = WorkAssignment.STATUS_ASSIGNED
-                    obj.control_date = timezone.localdate()
-                obj.current_responsible = obj.executor or user
+                    obj.control_date = timezone.now()
 
         if obj.post_id:
             from .helpers import assign_wa_code_to_post, next_wa_number_for_post
@@ -4574,6 +4718,9 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 obj.wa_number = next_wa_number_for_post(obj.post, exclude_pk=obj.pk)
 
         super().save_model(request, obj, form, change)
+
+        for uploaded in form.cleaned_data.get("attachments") or []:
+            Attachment.objects.create(content_object=obj, file=uploaded, kind="")
 
         if (
             not is_draft
@@ -4654,7 +4801,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             )
         return "—"
 
-    @admin.display(description="Просрочен абсолютный дедлайн")
+    @admin.display(description="Просрочен дедлайн")
     def overdue_hard_flag(self, obj):
         if not obj.hard_deadline:
             return "—"
@@ -4664,7 +4811,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if overdue:
             return mark_safe(
                 _admin_warning_triangle_html(
-                    title="Абсолютный дедлайн просрочен",
+                    title="Дедлайн просрочен",
                     color="#E53935",
                 )
             )
@@ -4708,12 +4855,78 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.return_view),
                 name="blog_workassignment_return",
             ),
+            path(
+                "<int:object_id>/request-reschedule/",
+                self.admin_site.admin_view(self.request_reschedule_view),
+                name="blog_workassignment_request_reschedule",
+            ),
+            path(
+                "<int:object_id>/deny-reschedule/",
+                self.admin_site.admin_view(self.deny_reschedule_view),
+                name="blog_workassignment_deny_reschedule",
+            ),
+            path(
+                "<int:object_id>/toggle-urgent/",
+                self.admin_site.admin_view(self.toggle_urgent_view),
+                name="blog_workassignment_toggle_urgent",
+            ),
+            path(
+                "<int:object_id>/cancel/",
+                self.admin_site.admin_view(self.cancel_view),
+                name="blog_workassignment_cancel",
+            ),
         ]
         return custom + urls
 
     @staticmethod
     def _wa_label(obj):
         return obj.wa_full_code or obj.name or (obj.task or "").strip()[:80] or str(obj)
+
+    @staticmethod
+    def _wa_result_attachments(obj):
+        from django.contrib.contenttypes.models import ContentType
+        ct = ContentType.objects.get_for_model(WorkAssignment)
+        return Attachment.objects.filter(content_type=ct, object_id=obj.pk, kind="result")
+
+    @staticmethod
+    def _wa_task_attachments(obj):
+        from django.contrib.contenttypes.models import ContentType
+        ct = ContentType.objects.get_for_model(WorkAssignment)
+        return Attachment.objects.filter(content_type=ct, object_id=obj.pk).exclude(kind="result")
+
+    @staticmethod
+    def _attachments_links(files):
+        if not files:
+            return "—"
+        return format_html_join(
+            ", ",
+            '<a href="{}" target="_blank">{}</a>',
+            ((a.file.url, a.file.name.rsplit("/", 1)[-1]) for a in files),
+        )
+
+    @admin.display(description="Уже загруженные файлы")
+    def task_attachments_display(self, obj):
+        if obj is None or not obj.pk:
+            return "—"
+        return self._attachments_links(self._wa_task_attachments(obj))
+
+    @admin.display(description="Загруженные файлы к результату")
+    def result_attachments_display(self, obj):
+        if obj is None or not obj.pk:
+            return "—"
+        return self._attachments_links(self._wa_result_attachments(obj))
+
+    @admin.display(description="Описание результата")
+    def result_description_display(self, obj):
+        if obj is None or not obj.result_description:
+            return "—"
+        return linebreaksbr(obj.result_description)
+
+    @admin.display(description="Комментарий автора")
+    def comment_display(self, obj):
+        if obj is None or not obj.comment:
+            return "—"
+        return linebreaksbr(obj.comment)
 
     def _notify_wa(self, recipient, title, text, obj):
         if not recipient:
@@ -4741,11 +4954,10 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if request.method != "POST":
             return back
         obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
-        obj.control_date = timezone.localdate()
-        obj.current_responsible = obj.executor
+        obj.control_date = timezone.now()
         obj.last_editor = request.user
         obj.save(update_fields=[
-            "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
+            "control_status", "control_date", "last_editor", "date_of_change",
         ])
         self._notify_wa(
             obj.author,
@@ -4756,8 +4968,34 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         messages.success(request, "Задача принята в работу.")
         return back
 
-    def submit_review_view(self, request, object_id: int):
+    def toggle_urgent_view(self, request, object_id: int):
         from django.shortcuts import redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.author_id:
+            messages.error(request, "Повысить приоритет задачи может только её автор.")
+            return back
+        if obj.control_status not in (WorkAssignment.STATUS_ASSIGNED, WorkAssignment.STATUS_IN_PROGRESS):
+            messages.warning(request, "Повысить приоритет можно, пока задача ожидает принятия или в работе.")
+            return back
+        if request.method != "POST":
+            return back
+        obj.is_urgent = not obj.is_urgent
+        obj.save(update_fields=["is_urgent"])
+        if obj.is_urgent:
+            self._notify_wa(
+                obj.executor,
+                "Приоритет задачи повышен",
+                f"«{self._wa_label(obj)}» отмечена автором как срочная.",
+                obj,
+            )
+            messages.success(request, "Приоритет задачи повышен.")
+        else:
+            messages.success(request, "Повышенный приоритет снят.")
+        return back
+
+    def submit_review_view(self, request, object_id: int):
+        from django.shortcuts import render, redirect, get_object_or_404
         obj = get_object_or_404(WorkAssignment, pk=object_id)
         back = redirect("admin:approvals_cabinet")
         if request.user.id != obj.executor_id:
@@ -4766,29 +5004,63 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
         if obj.control_status != WorkAssignment.STATUS_IN_PROGRESS:
             messages.warning(request, "Сдать на проверку можно только задачу в работе.")
             return back
-        if request.method != "POST":
-            return back
-        obj.control_status = WorkAssignment.STATUS_REVIEW
-        obj.control_date = timezone.localdate()
-        obj.current_responsible = obj.author
-        obj.last_editor = request.user
-        obj.save(update_fields=[
-            "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
-        ])
-        self._notify_wa(
-            obj.author,
-            "Задача сдана на проверку",
-            f"«{self._wa_label(obj)}» ожидает вашей проверки.",
-            obj,
-        )
-        messages.success(request, "Задача отправлена автору на проверку.")
-        return back
+
+        if request.method == "POST":
+            form = WorkAssignmentSubmitReviewForm(request.POST, request.FILES)
+            if form.is_valid():
+                self._append_text(obj, "result_description", form.cleaned_data["result_description"])
+                obj.control_status = WorkAssignment.STATUS_REVIEW
+                obj.control_date = timezone.now()
+                obj.last_editor = request.user
+                obj.returned_for_rework = False
+                obj.save(update_fields=[
+                    "result_description", "control_status", "control_date",
+                    "last_editor", "date_of_change",
+                    "returned_for_rework",
+                ])
+                for uploaded in form.cleaned_data.get("file") or []:
+                    Attachment.objects.create(content_object=obj, file=uploaded, kind="result")
+                self._notify_wa(
+                    obj.author,
+                    "Задача сдана на проверку",
+                    f"«{self._wa_label(obj)}» ожидает вашей проверки.",
+                    obj,
+                )
+                messages.success(request, "Задача отправлена автору на проверку.")
+                return back
+        else:
+            form = WorkAssignmentSubmitReviewForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "original": obj,
+            "title": "Сдать задачу на проверку",
+            "form": form,
+            "object_id": object_id,
+        }
+        return render(request, "admin/blog/workassignment/submit_review.html", context)
 
     _CLOSE_STATUS_BY_CHOICE = {
         "partial": "partial",
         "not_done": "not_done",
     }
     _RESULT_TEXT = _WA_RESULT_TEXT
+
+    @staticmethod
+    def _append_text(obj, field_name, text, label=None):
+        text = (text or "").strip()
+        if not text:
+            return
+        ts = timezone.localtime().strftime("%d.%m.%Y %H:%M")
+        header = f"{label} — {ts}" if label else ts
+        entry = f"{header}\n{text}"
+        existing = (getattr(obj, field_name) or "").strip()
+        setattr(obj, field_name, (existing + "\n\n" + entry) if existing else entry)
+
+    @classmethod
+    def _append_comment(cls, obj, text, label=None):
+        cls._append_text(obj, "comment", text, label=label)
 
     def close_view(self, request, object_id: int):
         from django.shortcuts import render, redirect, get_object_or_404
@@ -4811,17 +5083,16 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 else:
                     status = self._CLOSE_STATUS_BY_CHOICE[choice]
                 obj.control_status = status
-                obj.control_date = timezone.localdate()
+                obj.control_date = timezone.now()
                 obj.result = self._RESULT_TEXT.get(status)
-                obj.current_responsible = obj.author
                 obj.last_editor = request.user
                 fields = [
                     "control_status", "control_date", "result",
-                    "current_responsible", "last_editor", "date_of_change",
+                    "last_editor", "date_of_change",
                 ]
                 if comment:
-                    obj.result_description = comment
-                    fields.append("result_description")
+                    self._append_comment(obj, comment, label=self._RESULT_TEXT.get(status))
+                    fields.append("comment")
                 obj.save(update_fields=fields)
                 self._notify_wa(
                     obj.executor,
@@ -4846,6 +5117,8 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "form": form,
             "object_id": object_id,
             "rescheduled_note": bool(obj.reschedule_count),
+            "result_attachments": self._wa_result_attachments(obj),
+            "task_attachments": self._wa_task_attachments(obj),
         }
         return render(request, "admin/blog/workassignment/close.html", context)
 
@@ -4865,12 +5138,17 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             if form.is_valid():
                 comment = form.cleaned_data.get("comment", "").strip()
                 obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
-                obj.control_date = timezone.localdate()
-                obj.current_responsible = obj.executor
+                obj.control_date = timezone.now()
                 obj.last_editor = request.user
-                obj.save(update_fields=[
-                    "control_status", "control_date", "current_responsible", "last_editor", "date_of_change",
-                ])
+                obj.returned_for_rework = True
+                fields = [
+                    "control_status", "control_date", "last_editor", "date_of_change",
+                    "returned_for_rework",
+                ]
+                if comment:
+                    self._append_comment(obj, comment, label="Отказано в приёмке (возврат на доработку)")
+                    fields.append("comment")
+                obj.save(update_fields=fields)
                 self._notify_wa(
                     obj.executor,
                     "Задача возвращена на доработку",
@@ -4890,12 +5168,72 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "title": "Вернуть задачу на доработку",
             "form": form,
             "object_id": object_id,
+            "result_attachments": self._wa_result_attachments(obj),
+            "task_attachments": self._wa_task_attachments(obj),
         }
         return render(request, "admin/blog/workassignment/return.html", context)
+
+    def cancel_view(self, request, object_id: int):
+        from django.shortcuts import render, redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.author_id:
+            messages.error(request, "Отменить задачу может только её автор.")
+            return back
+        if obj.control_status not in (WorkAssignment.STATUS_ASSIGNED, WorkAssignment.STATUS_IN_PROGRESS):
+            messages.warning(
+                request,
+                "Отменить можно только задачу со статусом «Ожидает принятия» или «В работе».",
+            )
+            return back
+
+        if request.method == "POST":
+            form = WorkAssignmentCancelForm(request.POST)
+            if form.is_valid():
+                comment = form.cleaned_data["comment"].strip()
+                obj.control_status = "not_done"
+                obj.control_date = timezone.now()
+                obj.result = self._RESULT_TEXT.get("not_done")
+                obj.last_editor = request.user
+                self._append_comment(obj, comment, label="Задача отменена автором")
+                obj.save(update_fields=[
+                    "control_status", "control_date", "result",
+                    "last_editor", "date_of_change", "comment",
+                ])
+                self._notify_wa(
+                    obj.executor,
+                    "Задача отменена автором",
+                    f"«{self._wa_label(obj)}» отменена. Комментарий: {comment}",
+                    obj,
+                )
+                messages.success(request, "Задача отменена.")
+                return back
+        else:
+            form = WorkAssignmentCancelForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "original": obj,
+            "title": "Отменить задачу",
+            "form": form,
+            "object_id": object_id,
+        }
+        return render(request, "admin/blog/workassignment/cancel.html", context)
 
     def reschedule_view(self, request, object_id: int):
         from django.shortcuts import render, redirect, get_object_or_404
         obj = get_object_or_404(WorkAssignment, pk=object_id)
+
+        next_param = request.POST.get("next") or request.GET.get("next")
+
+        if request.user.id != obj.author_id:
+            messages.error(request, "Перенести срок может только автор рабочего задания.")
+            if next_param == "cabinet":
+                return redirect("admin:approvals_cabinet")
+            return redirect("admin:blog_workassignment_changelist")
+
+        was_pending_approval = obj.control_status == WorkAssignment.STATUS_RESCHEDULE_PENDING
 
         if request.method == "POST":
             form = RescheduleAdminForm(request.POST)
@@ -4904,6 +5242,7 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                     assignment = WorkAssignmentService.reschedule_deadline(
                         obj,
                         new_target_deadline=form.cleaned_data.get("new_target_deadline"),
+                        new_hard_deadline=form.cleaned_data.get("new_hard_deadline"),
                         reason=form.cleaned_data.get("reason", ""),
                         user=request.user if request.user.is_authenticated else None,
                         expected_deadline_version=form.cleaned_data["expected_deadline_version"],
@@ -4913,20 +5252,36 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 except RuntimeError as e:
                     messages.error(request, str(e))  # конфликт версий
                 else:
-                    if getattr(assignment, "_hard_deadline_reset", False):
-                        messages.warning(
-                            request,
-                            "Целевой срок перенесён. Абсолютный дедлайн сброшен — "
-                            "при необходимости назначьте его заново в карточке задания.",
+                    if was_pending_approval:
+                        assignment.control_status = WorkAssignment.STATUS_IN_PROGRESS
+                        assignment.reschedule_request_reason = ""
+                        assignment.reschedule_request_date = None
+                        assignment.control_date = timezone.now()
+                        assignment.last_editor = request.user
+                        assignment.save(update_fields=[
+                            "control_status", "reschedule_request_reason", "reschedule_request_date",
+                            "control_date", "last_editor", "date_of_change",
+                        ])
+                        self._notify_wa(
+                            assignment.executor,
+                            "Перенос срока согласован",
+                            f"«{self._wa_label(assignment)}»: автор согласовал перенос срока.",
+                            assignment,
                         )
-                    else:
-                        messages.success(request, "Срок успешно перенесён.")
+                    messages.success(request, "Срок успешно перенесён.")
+                    if next_param == "cabinet":
+                        return redirect("admin:approvals_cabinet")
                     return redirect(f"../change/")
         else:
-            form = RescheduleAdminForm(initial={
-                "new_target_deadline": obj.target_deadline,
+            initial = {
+                "new_target_deadline": obj.reschedule_request_date or obj.target_deadline,
+                "requires_hard_deadline": bool(obj.hard_deadline),
+                "new_hard_deadline": obj.hard_deadline,
                 "expected_deadline_version": obj.deadline_version,
-            })
+            }
+            if was_pending_approval and obj.reschedule_request_reason:
+                initial["reason"] = obj.reschedule_request_reason
+            form = RescheduleAdminForm(initial=initial)
 
         context = {
             **self.admin_site.each_context(request),
@@ -4935,11 +5290,86 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
             "title": "Перенести срок",
             "form": form,
             "object_id": object_id,
-            "had_hard_deadline": bool(obj.hard_deadline),
             "has_view_permission": self.has_view_permission(request, obj),
             "has_change_permission": self.has_change_permission(request, obj),
+            "next_param": next_param,
         }
         return render(request, "admin/blog/workassignment/reschedule.html", context)
+
+    def request_reschedule_view(self, request, object_id: int):
+        from django.shortcuts import render, redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.executor_id:
+            messages.error(request, "Запросить перенос срока может только исполнитель.")
+            return back
+        if obj.control_status not in (WorkAssignment.STATUS_ASSIGNED, WorkAssignment.STATUS_IN_PROGRESS):
+            messages.warning(request, "Запросить перенос срока можно только для задачи в работе.")
+            return back
+
+        if request.method == "POST":
+            form = WorkAssignmentRescheduleRequestForm(request.POST)
+            if form.is_valid():
+                obj.control_status = WorkAssignment.STATUS_RESCHEDULE_PENDING
+                obj.reschedule_request_reason = form.cleaned_data["reason"]
+                obj.reschedule_request_date = form.cleaned_data["desired_date"]
+                obj.control_date = timezone.now()
+                obj.last_editor = request.user
+                obj.save(update_fields=[
+                    "control_status", "reschedule_request_reason", "reschedule_request_date",
+                    "control_date", "last_editor", "date_of_change",
+                ])
+                self._notify_wa(
+                    obj.author,
+                    "Запрос на перенос срока",
+                    f"«{self._wa_label(obj)}»: исполнитель просит перенести срок на "
+                    f"{obj.reschedule_request_date:%d.%m.%Y}.",
+                    obj,
+                )
+                messages.success(request, "Запрос на перенос срока отправлен автору.")
+                return back
+        else:
+            form = WorkAssignmentRescheduleRequestForm(initial={"desired_date": obj.target_deadline})
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "original": obj,
+            "title": "Запрос переноса срока задачи",
+            "form": form,
+            "object_id": object_id,
+        }
+        return render(request, "admin/blog/workassignment/request_reschedule.html", context)
+
+    def deny_reschedule_view(self, request, object_id: int):
+        from django.shortcuts import redirect, get_object_or_404
+        obj = get_object_or_404(WorkAssignment, pk=object_id)
+        back = redirect("admin:approvals_cabinet")
+        if request.user.id != obj.author_id:
+            messages.error(request, "Отказать в переносе срока может только автор рабочего задания.")
+            return back
+        if obj.control_status != WorkAssignment.STATUS_RESCHEDULE_PENDING:
+            messages.warning(request, "Эта задача не ожидает согласования переноса срока.")
+            return back
+        if request.method != "POST":
+            return back
+        obj.control_status = WorkAssignment.STATUS_IN_PROGRESS
+        obj.reschedule_request_reason = ""
+        obj.reschedule_request_date = None
+        obj.control_date = timezone.now()
+        obj.last_editor = request.user
+        obj.save(update_fields=[
+            "control_status", "reschedule_request_reason", "reschedule_request_date",
+            "control_date", "last_editor", "date_of_change",
+        ])
+        self._notify_wa(
+            obj.executor,
+            "Отказано в переносе срока",
+            f"«{self._wa_label(obj)}»: автор отказал в переносе срока.",
+            obj,
+        )
+        messages.success(request, "В переносе срока отказано, задача возвращена исполнителю.")
+        return back
 
 @admin.register(WorkAssignmentDeadlineChange)
 class WorkAssignmentDeadlineChangeAdmin(admin.ModelAdmin):
@@ -6655,14 +7085,34 @@ class DocumentHistoryInline(admin.TabularInline):
     verbose_name = "Запись истории"
     verbose_name_plural = "История изменений"
 
+class ShipmentSelect(forms.Select):
+    """Выпадающий список «Изделие к отгрузке»: синим цветом подсвечивает
+    заводские номера, на которые ещё нет Протокола ПСИ (задача по ПСИ ИБП СПМ)."""
+
+    no_psi_ids = frozenset()
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs
+        )
+        # value для реальных пунктов — ModelChoiceIteratorValue (pk в .value),
+        # для «---------» — пустая строка.
+        raw = getattr(value, "value", value)
+        if raw not in ("", None) and raw in self.no_psi_ids:
+            option["attrs"]["style"] = "color: #1a56db;"
+            option["attrs"]["data-no-psi"] = "1"
+        return option
+
+
 class PSIDocumentForm(forms.ModelForm):
     # Группа разработок, с которой работает эта сущность (см. лист замечаний 21.07.2026).
     PRODUCT_GROUP_NAME = "ИБП СПМ"
 
     # Сопротивление изоляции вводим как текст: полный контроль над разделителем
     # (только запятая) и над округлением, чтобы «1» не превращалось в «0.96».
+    # Поле необязательное: пусто → статус «нет данных» (лист замечаний по ПСИ ИБП СПМ).
     insulation_res_value = forms.CharField(
-        required=True,
+        required=False,
         label="Фактическое значение сопротивления изоляции, МОм",
         help_text=(
             "Введите измеренное значение в МОм. Статус устанавливается автоматически: при ≥ 1 МОм - Соответствует; при < 1 МОм - Не соответствует. "
@@ -6716,20 +7166,39 @@ class PSIDocumentForm(forms.ModelForm):
 
         # «Изделие к отгрузке» — только отгрузки выбранной разработки.
         if 'shipment' in self.fields:
+            field = self.fields['shipment']
+            # Свой виджет: синим подсвечивает изделия без Протокола ПСИ.
+            # Меняем виджет ДО присвоения queryset, чтобы choices попали в него.
+            field.widget = ShipmentSelect(attrs=field.widget.attrs)
+            field.widget.is_required = field.required
+            field.help_text = (
+                "Выбрать через функцию «Сохранить и продолжить редактирование»"
+            )
+
             selected_post = None
             if self.is_bound:
                 selected_post = self.data.get(self.add_prefix('post')) or None
             elif getattr(self.instance, 'post_id', None):
                 selected_post = self.instance.post_id
             if selected_post:
-                self.fields['shipment'].queryset = Shipment.objects.filter(
+                qs = Shipment.objects.filter(
                     post_id=selected_post
                 ).order_by('serial_number')
             else:
                 # До выбора разработки список ограничен изделиями группы «ИБП СПМ».
-                self.fields['shipment'].queryset = Shipment.objects.filter(
+                qs = Shipment.objects.filter(
                     post__product_group__name=self.PRODUCT_GROUP_NAME
                 ).order_by('serial_number')
+            # Присвоение queryset пробрасывает choices в новый виджет.
+            field.queryset = qs
+
+            # Заводские номера без Протокола ПСИ — для синей подсветки.
+            ship_ids = list(qs.values_list('pk', flat=True))
+            with_psi = set(
+                PSIDocument.objects.filter(shipment_id__in=ship_ids)
+                .values_list('shipment_id', flat=True)
+            )
+            field.widget.no_psi_ids = frozenset(set(ship_ids) - with_psi)
 
     def clean_insulation_res_value(self):
         from decimal import Decimal, InvalidOperation
@@ -6863,13 +7332,24 @@ class PSIDocumentAdmin(admin.ModelAdmin):
         return custom + urls
 
     def shipments_for_post_view(self, request):
-        """JSON-список изделий к отгрузке для выбранной разработки (каскад)."""
+        """JSON-список изделий к отгрузке для выбранной разработки (каскад).
+        Флаг no_psi=true → на изделие ещё нет Протокола ПСИ (синяя подсветка)."""
         from django.http import JsonResponse
         post_id = request.GET.get('post_id')
         results = []
         if post_id:
-            qs = Shipment.objects.filter(post_id=post_id).order_by('serial_number')
-            results = [{'id': s.pk, 'text': str(s)} for s in qs]
+            shipments = list(
+                Shipment.objects.filter(post_id=post_id).order_by('serial_number')
+            )
+            ship_ids = [s.pk for s in shipments]
+            with_psi = set(
+                PSIDocument.objects.filter(shipment_id__in=ship_ids)
+                .values_list('shipment_id', flat=True)
+            )
+            results = [
+                {'id': s.pk, 'text': str(s), 'no_psi': s.pk not in with_psi}
+                for s in shipments
+            ]
         return JsonResponse({'results': results})
 
     def get_form(self, request, obj=None, **kwargs):
@@ -6985,11 +7465,20 @@ class PSIDocumentAdmin(admin.ModelAdmin):
     display_files_list.short_description = 'Файлы PDF'
 
     def save_model(self, request, obj, form, change):
-        """Сохранение с логированием и автогенерацией PDF при изменениях."""
+        """Сохранение с логированием и автогенерацией PDF при изменениях.
+
+        PDF формируется ТОЛЬКО по кнопке «Сохранить» (и «Сохранить и добавить
+        другой»), но не по «Сохранить и продолжить редактирование» (_continue).
+        Изменения, внесённые при промежуточных сохранениях, копятся в сессии
+        (без изменения схемы БД) и попадают в PDF при финальном «Сохранить»."""
         is_new = obj.pk is None
 
         # Определяем были ли реальные изменения (для существующих объектов)
         has_changes = is_new or bool(form.changed_data)
+
+        # Кнопка «Сохранить и продолжить редактирование» присылает _continue.
+        # По ней PDF не генерируем — только сохраняем данные.
+        is_continue = '_continue' in request.POST
 
         # Автор / последний редактор проставляются автоматически (поля readonly).
         if request.user.is_authenticated:
@@ -7031,18 +7520,45 @@ class PSIDocumentAdmin(admin.ModelAdmin):
             action=action_text[:255]
         )
 
-        # Автогенерация PDF при создании или изменении
-        if has_changes:
+        # --- Генерация PDF по кнопке ---
+        # PDF формируем ТОЛЬКО по финальному «Сохранить» (или «Сохранить и
+        # добавить другой»), но не по «Сохранить и продолжить редактирование».
+        # Признак «есть изменения без PDF» копим в сессии по id протокола, чтобы
+        # правки из промежуточных сохранений попали в PDF при финальном «Сохранить»
+        # (form.changed_data к тому моменту уже пустой). Схему БД не трогаем.
+        session_key = 'psi_pdf_pending_ids'
+        pending_ids = request.session.get(session_key, [])
+        obj_key = str(obj.pk)
+
+        if has_changes and obj_key not in pending_ids:
+            pending_ids.append(obj_key)
+
+        if is_continue:
+            # Промежуточное сохранение — PDF не создаём, изменения запоминаем.
+            if has_changes:
+                self.message_user(
+                    request,
+                    "💾 Изменения сохранены. Новый PDF будет сформирован "
+                    "при нажатии «Сохранить».",
+                    level='info'
+                )
+        elif obj_key in pending_ids:
+            # Финальное «Сохранить»: есть накопленные изменения → формируем PDF.
             try:
                 from blog.utils import generate_pdf_logic
                 generate_pdf_logic(obj, request.user)
+                pending_ids = [i for i in pending_ids if i != obj_key]
                 self.message_user(request, "✅ PDF протокол автоматически сгенерирован.")
             except Exception as e:
+                # При ошибке отметку не снимаем — повторим при следующем «Сохранить».
                 self.message_user(
                     request,
                     f"⚠️ Протокол сохранён, но PDF не удалось сгенерировать: {e}",
                     level='warning'
                 )
+
+        request.session[session_key] = pending_ids
+        request.session.modified = True
 
     def get_queryset(self, request):
         """Оптимизация запросов"""
@@ -7227,6 +7743,8 @@ class UserWithProfileForm(UserChangeForm):
     """Поля профиля сотрудника (EmployeeProfile) """
     patronymic = forms.CharField(label='Отчество', max_length=100, required=False)
     phone = forms.CharField(label='Телефон', max_length=20, required=False)
+    birth_date = forms.DateField(label='Дата рождения', required=False, widget=AdminDateWidget)
+    avatar = forms.ImageField(label='Фото', required=False)
     org_department = forms.ModelChoiceField(
         label='Структурное подразделение (Отдел)',
         queryset=Department.objects.all(),
@@ -7251,6 +7769,8 @@ class UserWithProfileForm(UserChangeForm):
         if profile:
             self.fields['patronymic'].initial = profile.patronymic
             self.fields['phone'].initial = profile.phone
+            self.fields['birth_date'].initial = profile.birth_date
+            self.fields['avatar'].initial = profile.avatar
             self.fields['org_department'].initial = profile.org_department_id
             self.fields['is_head'].initial = profile.is_head
             self.fields['position'].initial = profile.position
@@ -7286,14 +7806,14 @@ class CustomUserAdmin(BaseUserAdmin):
     form = UserWithProfileForm
 
     _PROFILE_FIELDS = (
-        'patronymic', 'phone', 'org_department',
+        'patronymic', 'phone', 'birth_date', 'avatar', 'org_department',
         'is_head', 'position', 'supervisor', 'roles_responsibilities',
     )
 
     fieldsets = (
         (None, {'fields': ('username', 'password')}),
         ('Персональные данные', {
-            'fields': ('first_name', 'last_name', 'patronymic', 'phone', 'email'),
+            'fields': ('first_name', 'last_name', 'patronymic', 'birth_date', 'phone', 'email', 'avatar'),
         }),
         ('Профиль сотрудника', {
             'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities'),
@@ -7314,6 +7834,12 @@ class CustomUserAdmin(BaseUserAdmin):
             profile, _ = EmployeeProfile.objects.get_or_create(user=obj)
             profile.patronymic = form.cleaned_data.get('patronymic', '')
             profile.phone = form.cleaned_data.get('phone', '')
+            profile.birth_date = form.cleaned_data.get('birth_date')
+            avatar = form.cleaned_data.get('avatar')
+            if avatar is False:
+                profile.avatar = None
+            elif avatar:
+                profile.avatar = avatar
             profile.org_department = form.cleaned_data.get('org_department')
             profile.is_head = form.cleaned_data.get('is_head', False)
             profile.position = form.cleaned_data.get('position', '')
@@ -7338,13 +7864,8 @@ class CustomUserAdmin(BaseUserAdmin):
     @admin.display(description='ФИО (Фамилия Имя Отчество)', ordering='last_name')
     def get_full_name_with_patronymic(self, obj):
         """Полное ФИО: Фамилия Имя Отчество из профиля."""
-        last = obj.last_name or ''
-        first = obj.first_name or ''
-        patronymic = ''
-        if hasattr(obj, 'profile') and obj.profile.patronymic:
-            patronymic = obj.profile.patronymic
-        parts = [p for p in [last, first, patronymic] if p]
-        return ' '.join(parts) if parts else obj.username
+        profile = getattr(obj, 'profile', None)
+        return profile.full_name() if profile else obj.username
 
     # оставляем для обратной совместимости, но прячем из list_display
     def get_full_name(self, obj):
@@ -7458,21 +7979,6 @@ class ShipmentSelect(forms.Select):
 
 
 class PAKDocumentForm(forms.ModelForm):
-    # Группа разработок, с которой работает эта сущность (лист замечаний 21.07.2026).
-    PRODUCT_GROUP_NAME = "ПАК СПМ"
-
-    # Три допустимых варианта для полей проверок (п. 8): «нет данных» по умолчанию.
-    CHECK_CHOICES = [
-        ('нет данных', 'Нет данных'),
-        ('соответствует', 'Соответствует'),
-        ('не соответствует', 'Не соответствует'),
-    ]
-    # Обычные поля проверок (кроме п. 4 «check_alarm», у него своя логика с файлом).
-    CHECK_FIELDS = (
-        'check_marking', 'check_kd_appearance', 'check_server_link',
-        'check_battery_status', 'check_radio_settings', 'check_long_run',
-    )
-
     class Meta:
         model = PAKDocument
         fields = '__all__'
@@ -7564,16 +8070,6 @@ class PAKDocumentForm(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
 
-        # Даты испытаний независимы, но начало не может быть позже окончания
-        # (допускается один и тот же день — испытания в пределах суток).
-        date_start = cleaned_data.get('test_date_start')
-        date_end = cleaned_data.get('test_date_end')
-        if date_start and date_end and date_start > date_end:
-            self.add_error(
-                'test_date_start',
-                'Дата начала испытаний не может быть позже даты окончания .'
-            )
-
         alarm_log_file = cleaned_data.get('alarm_log_file')
         check_alarm = cleaned_data.get('check_alarm')
         alarm_note = cleaned_data.get('alarm_note')
@@ -7587,29 +8083,6 @@ class PAKDocumentForm(forms.ModelForm):
                 'alarm_note',
                 'При статусе «Не соответствует» необходимо заполнить «Примечание (п. 4)».'
             )
-
-        # Прямая связь «Разработка → Изделие к отгрузке» (п. 5):
-        # изделие обязано принадлежать выбранной разработке.
-        post = cleaned_data.get('post')
-        shipment = cleaned_data.get('shipment')
-        if post and shipment and shipment.post_id != post.id:
-            self.add_error(
-                'shipment',
-                'Выбранное изделие к отгрузке не относится к выбранной разработке (модификации).'
-            )
-
-        # Один протокол ПСИ ПАК на один заводской номер (shipment) —
-        # чтобы не плодить дубли по одному изделию.
-        if shipment:
-            duplicates = PAKDocument.objects.filter(shipment=shipment)
-            if self.instance and self.instance.pk:
-                duplicates = duplicates.exclude(pk=self.instance.pk)
-            if duplicates.exists():
-                self.add_error(
-                    'shipment',
-                    'Для этого заводского номера уже существует протокол ПСИ ПАК СПМ. '
-                    'На один заводской номер допускается только один протокол.'
-                )
 
         return cleaned_data
 
@@ -7630,18 +8103,14 @@ class PAKDocumentAdmin(admin.ModelAdmin):
     )
     list_filter = ('test_date_start', 'inspector', 'conclusion')
     search_fields = (
-        'shipment__serial_number',  # заводской номер
-        'post__name',               # модификация
-        'developer_org__name',      # организация-разработчик
+        'shipment__serial_number',
+        'post__name',
         'fw_version',
         'inspector__last_name',   # inspector — FK на User, ищем по полям пользователя
         'inspector__first_name',
         'inspector__username',
-        'comment',
-        'workshop__number_name',
     )
-    # post/shipment — зависимые списки (каскад), поэтому убраны из autocomplete.
-    autocomplete_fields = ('developer_org',)
+    autocomplete_fields = ('shipment', 'post', 'developer_org')
 
     readonly_fields = (
         'created_at',
@@ -7649,72 +8118,17 @@ class PAKDocumentAdmin(admin.ModelAdmin):
         'author',
         'last_editor',
         'conclusion',  # определяется автоматически по результатам проверок
-        'version',  # считается автоматически (+1 при каждом изменении)
         'pdf_count_display',
         'date_of_creation',
     )
 
     inlines = [PAKGeneratedDocumentInline, PAKDocumentHistoryInline]
 
-    class Media:
-        # Жирная подпись пункта 4 (проверка обнаружения/регистрации аварии).
-        css = {
-            'all': ('blog/pak_admin_bold.css',)
-        }
-        # Каскад «Разработка → Изделие к отгрузке».
-        js = ('blog/js/chained_shipment.js',)
-
-    def get_urls(self):
-        urls = super().get_urls()
-        custom = [
-            path(
-                'shipments-for-post/',
-                self.admin_site.admin_view(self.shipments_for_post_view),
-                name='blog_pakdocument_shipments_for_post',
-            ),
-        ]
-        return custom + urls
-
-    def shipments_for_post_view(self, request):
-        """JSON-список изделий к отгрузке для выбранной разработки (каскад).
-
-        Флаг no_psi отмечает заводские номера без протокола ПСИ — на клиенте
-        они подсвечиваются синим (см. blog/js/chained_shipment.js)."""
-        from django.http import JsonResponse
-        post_id = request.GET.get('post_id')
-        results = []
-        if post_id:
-            qs = Shipment.objects.filter(post_id=post_id).order_by('serial_number')
-            no_psi_ids = shipment_ids_without_psi(qs.values_list('pk', flat=True))
-            results = [
-                {'id': s.pk, 'text': str(s), 'no_psi': s.pk in no_psi_ids}
-                for s in qs
-            ]
-        return JsonResponse({'results': results})
-
-    def get_form(self, request, obj=None, **kwargs):
-        form = super().get_form(request, obj, **kwargs)
-        # Передаём JS URL для подгрузки изделий выбранной разработки.
-        if 'post' in form.base_fields:
-            form.base_fields['post'].widget.attrs['data-shipments-url'] = reverse(
-                'admin:blog_pakdocument_shipments_for_post'
-            )
-        return form
-
-    def get_changeform_initial_data(self, request):
-        """По умолчанию «Представитель ОТК» и «Текущий ответственный» — текущий
-        пользователь (создатель протокола); значения можно изменить в форме."""
-        initial = super().get_changeform_initial_data(request)
-        initial = dict(initial or {})
-        initial.setdefault('inspector', request.user.pk)
-        initial.setdefault('current_responsible', request.user.pk)
-        return initial
-
     fieldsets = (
         ('1. Основная информация', {
             'fields': (
-                'post',
                 'shipment',
+                'post',
                 'developer_org',
                 'fw_version',
                 'test_date_start',
@@ -7805,63 +8219,41 @@ class PAKDocumentAdmin(admin.ModelAdmin):
 
     # ---- Автор / редактор + автогенерация PDF ----
     def save_model(self, request, obj, form, change):
-        is_new = obj.pk is None
-        # Изменения на самой сущности (без учёта инлайнов).
-        has_changes = is_new or bool(form.changed_data)
-
         if not obj.author_id:
             obj.author = request.user
         obj.last_editor = request.user
-
-        # «Версия» вычисляется программно и проставляется после каждого реального
-        # изменения сущности (+1 по порядку). Поле только для чтения — вручную
-        # его менять нельзя. При создании версия = «1».
-        if is_new:
-            obj.version = "1"
-        elif has_changes:
-            try:
-                next_version = int(obj.version or "0") + 1
-            except (TypeError, ValueError):
-                next_version = 1
-            # version — CharField(max_length=3): не выходим за пределы столбца БД.
-            obj.version = str(min(next_version, 999))
-
         super().save_model(request, obj, form, change)
 
-        action_text = "Создан новый протокол" if is_new else "Протокол отредактирован"
-        if not is_new and has_changes:
-            action_text += f" (изменены поля: {', '.join(form.changed_data)})"
         PAKDocumentHistory.objects.create(
             pak_source=obj,
             user=request.user,
-            action=action_text,
+            action=("Создан новый протокол" if not change else "Протокол отредактирован")
         )
 
-        # Автогенерация PDF только при наличии изменений (как в ПСИ ИБП СПМ).
+        # Автоматически формируем PDF сразу после сохранения протокола.
         # Ошибку генерации не «роняем» на пользователя — сохранение уже прошло,
         # просто показываем предупреждение.
-        if has_changes:
-            try:
-                generated = generate_pak_pdf_logic(obj, request.user)
-                self.message_user(
-                    request,
-                    f"✅ PDF протокола сформирован автоматически (версия {generated.version})."
-                )
-            except Exception as e:
-                self.message_user(
-                    request,
-                    f"⚠️ Протокол сохранён, но PDF не сформировался: {e}",
-                    level=messages.WARNING,
-                )
+        try:
+            generated = generate_pak_pdf_logic(obj, request.user)
+            self.message_user(
+                request,
+                f"✅ PDF протокола сформирован автоматически (версия {generated.version})."
+            )
+        except Exception as e:
+            self.message_user(
+                request,
+                f"⚠️ Протокол сохранён, но PDF не сформировался: {e}",
+                level=messages.WARNING,
+            )
 
     # ---- Экшен генерации PDF ----
-#    @admin.action(description="Сгенерировать PDF протокол ПАК СПМ")
- #   def create_pak_pdf_action(self, request, queryset):
-  #      count = 0
-   #     for obj in queryset:
-    #        generate_pak_pdf_logic(obj, request.user)
-     #       count += 1
-      #  self.message_user(request, f"✅ PDF сформированы для {count} протокол(ов) ПАК СПМ.")
+    @admin.action(description="Сгенерировать PDF протокол ПАК СПМ")
+    def create_pak_pdf_action(self, request, queryset):
+        count = 0
+        for obj in queryset:
+            generate_pak_pdf_logic(obj, request.user)
+            count += 1
+        self.message_user(request, f"✅ PDF сформированы для {count} протокол(ов) ПАК СПМ.")
 
 
 #@admin.register(PAKGeneratedDocument)
