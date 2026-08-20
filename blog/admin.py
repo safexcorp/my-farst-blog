@@ -8252,11 +8252,13 @@ class PAKDocumentForm(forms.ModelForm):
     # Группа разработок, с которой работает эта сущность (лист замечаний 21.07.2026).
     PRODUCT_GROUP_NAME = "ПАК СПМ"
 
-    # Три допустимых варианта для полей проверок (п. 8): «нет данных» по умолчанию.
+    # Три допустимых варианта для полей проверок (п. 8): «Нет данных» по умолчанию.
+    # Значения обязаны совпадать с PAKDocument.STATUS_CHOICES, иначе валидация
+    # модели отбрасывает их с ошибкой «Выберите корректный вариант».
     CHECK_CHOICES = [
-        ('нет данных', 'Нет данных'),
-        ('соответствует', 'Соответствует'),
-        ('не соответствует', 'Не соответствует'),
+        ('Нет данных', 'Нет данных'),
+        ('Соответствует', 'Соответствует'),
+        ('Не соответствует', 'Не соответствует'),
     ]
     # Обычные поля проверок (кроме п. 4 «check_alarm», у него своя логика с файлом).
     CHECK_FIELDS = (
@@ -8275,19 +8277,21 @@ class PAKDocumentForm(forms.ModelForm):
         if 'check_alarm' in self.fields:
             self.fields['check_alarm'].required = False
             self.fields['check_alarm'].choices = [
-                ('соответствует', 'Соответствует'),
-                ('не соответствует', 'Не соответствует'),
+                ('Соответствует', 'Соответствует'),
+                ('Не соответствует', 'Не соответствует'),
             ]
         if 'alarm_note' in self.fields:
             self.fields['alarm_note'].required = False
 
         # --- Поля проверок: только 3 варианта, без пустого «---------» (п. 8) ---
-        # По умолчанию «нет данных» — для новых протоколов.
+        # По умолчанию «Нет данных» — для новых протоколов.
+        # Поля необязательные: протокол можно сохранить, не заполнив проверки.
         for name in self.CHECK_FIELDS:
             if name in self.fields:
+                self.fields[name].required = False
                 self.fields[name].choices = self.CHECK_CHOICES
                 if not (self.instance and self.instance.pk) and not self.initial.get(name):
-                    self.initial[name] = 'нет данных'
+                    self.initial[name] = 'Нет данных'
 
         # --- Обязательные поля (лист замечаний 21.07.2026, п. 1-4) ---
         # На уровне модели поля остаются null/blank, чтобы не ломать старые записи
@@ -8370,9 +8374,9 @@ class PAKDocumentForm(forms.ModelForm):
         alarm_note = cleaned_data.get('alarm_note')
 
         if not alarm_log_file:
-            # если файл с логами не прикреплён — статус п. 4 автоматически "нет данных"
-            cleaned_data['check_alarm'] = 'не соответствует'
-        elif check_alarm == 'не соответствует' and not (alarm_note and alarm_note.strip()):
+            # если файл с логами не прикреплён — статус п. 4 автоматически "Не соответствует"
+            cleaned_data['check_alarm'] = 'Не соответствует'
+        elif check_alarm == 'Не соответствует' and not (alarm_note and alarm_note.strip()):
             # Файл прикреплён, выбрано "Не соответствует" — примечание обязательно
             self.add_error(
                 'alarm_note',
@@ -8716,11 +8720,13 @@ class SchurDocumentForm(forms.ModelForm):
     # Группа разработок, с которой работает эта сущность.
     PRODUCT_GROUP_NAME = "ЩИТ УЧЕТА РАСПРЕДЕЛИТЕЛЬНЫЙ"
 
-    # Три допустимых варианта для полей проверок, «нет данных» по умолчанию.
+    # Три допустимых варианта для полей проверок, «Нет данных» по умолчанию.
+    # Значения обязаны совпадать с SchurDocument.STATUS_CHOICES, иначе валидация
+    # модели отбрасывает их с ошибкой «Выберите корректный вариант».
     CHECK_CHOICES = [
-        ('нет данных', 'Нет данных'),
-        ('соответствует', 'Соответствует'),
-        ('не соответствует', 'Не соответствует'),
+        ('Нет данных', 'Нет данных'),
+        ('Соответствует', 'Соответствует'),
+        ('Не соответствует', 'Не соответствует'),
     ]
     CHECK_FIELDS = (
         'check_kd_appearance', 'check_marking', 'check_shock_protection',
@@ -8735,11 +8741,13 @@ class SchurDocumentForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         # --- Поля проверок: только 3 варианта, без пустого «---------» ---
+        # Поля необязательные: протокол можно сохранить, не заполнив проверки.
         for name in self.CHECK_FIELDS:
             if name in self.fields:
+                self.fields[name].required = False
                 self.fields[name].choices = self.CHECK_CHOICES
                 if not (self.instance and self.instance.pk) and not self.initial.get(name):
-                    self.initial[name] = 'нет данных'
+                    self.initial[name] = 'Нет данных'
 
         # --- Обязательные поля ---
         # На уровне модели поля остаются null/blank, чтобы не ломать старые записи;
