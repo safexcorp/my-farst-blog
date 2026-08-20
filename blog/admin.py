@@ -52,7 +52,8 @@ from shared_repository.models import (SharedRepository, IndependentDocumentAccep
 KnowledgeBase, KnowledgeBaseFile, QMSDocument,QMSDocumentAcceptSignature, AdministrativeOrder,
 AdministrativeOrderAcceptSignature, DocumentTemplate, DocumentTemplateAcceptSignature)
 
-from .models import (PSIDocument, GeneratedDocument, DocumentHistory, PAKDocument, PAKGeneratedDocument, PAKDocumentHistory)
+from .models import (PSIDocument, GeneratedDocument, DocumentHistory, PAKDocument, PAKGeneratedDocument, PAKDocumentHistory,
+                     SchurDocument, SchurGeneratedDocument, SchurDocumentHistory)
 
 from .admin_forms import (
     RescheduleAdminForm,
@@ -2092,17 +2093,28 @@ class ShipmentAdmin(admin.ModelAdmin):
     def psi_conclusion_status(self, obj):
         """Итоговое заключение по протоколу ПСИ для этого изделия.
         готов / не готов — по заключению протокола (у которого есть готовый PDF);
-        — (прочерк) — если PDF на изделие ещё не сформирован."""
+        нет ПСИ (синим) — если протокол ПСИ на изделие ещё не заведён;
+        — (прочерк) — протокол есть, но готовый PDF ещё не сформирован."""
         doc = (
                 PSIDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
                 or PAKDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
+                or SchurDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
         )
-        if not doc:
+        if doc:
+            if doc.conclusion == 'готов к отгрузке':
+                return format_html('<b style="color:#28a745;">готов</b>')
+            if doc.conclusion == 'не готов':
+                return format_html('<b style="color:#dc3545;">не готов</b>')
             return "—"
-        if doc.conclusion == 'готов к отгрузке':
-            return format_html('<b style="color:#28a745;">готов</b>')
-        if doc.conclusion == 'не готов':
-            return format_html('<b style="color:#dc3545;">не готов</b>')
+        # Готового протокола (с PDF) нет. Если ПСИ вообще не заведён на это изделие —
+        # подсвечиваем синим, чтобы сразу видеть, на что ещё нужен ПСИ.
+        has_any_psi = (
+            PSIDocument.objects.filter(shipment=obj).exists()
+            or PAKDocument.objects.filter(shipment=obj).exists()
+            or SchurDocument.objects.filter(shipment=obj).exists()
+        )
+        if not has_any_psi:
+            return format_html('<b style="color:#0d6efd;">нет ПСИ</b>')
         return "—"
 
 
@@ -7933,7 +7945,55 @@ class PAKDocumentHistoryInline(admin.TabularInline):
     fields = ('action', 'user', 'timestamp')
 
 
+def shipment_ids_without_psi(shipment_ids):
+    """Из переданных pk изделий возвращает те, на которые ещё нет Протокола ПСИ
+    (ни ПСИ ИБП СПМ, ни ПСИ ПАК СПМ, ни ПСИ ЩУР СПМ)."""
+    ids = set(shipment_ids)
+    if not ids:
+        return frozenset()
+    with_psi = set()
+    for model in (PSIDocument, PAKDocument, SchurDocument):
+        with_psi.update(
+            model.objects.filter(shipment_id__in=ids).values_list('shipment_id', flat=True)
+        )
+    return frozenset(ids - with_psi)
+
+
+class ShipmentSelect(forms.Select):
+    """Выпадающий список «Изделие к отгрузке»: синим цветом подсвечивает
+    заводские номера, на которые ещё нет Протокола ПСИ (как в ПСИ ИБП СПМ)."""
+
+    no_psi_ids = frozenset()
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs
+        )
+        # value для реальных пунктов — ModelChoiceIteratorValue (pk в .value),
+        # для «---------» — пустая строка.
+        raw = getattr(value, "value", value)
+        if raw not in ("", None) and raw in self.no_psi_ids:
+            option["attrs"]["style"] = "color: #1a56db;"
+            option["attrs"]["data-no-psi"] = "1"
+        return option
+
+
 class PAKDocumentForm(forms.ModelForm):
+    # Группа разработок, с которой работает эта сущность (лист замечаний 21.07.2026).
+    PRODUCT_GROUP_NAME = "ПАК СПМ"
+
+    # Три допустимых варианта для полей проверок (п. 8): «нет данных» по умолчанию.
+    CHECK_CHOICES = [
+        ('нет данных', 'Нет данных'),
+        ('соответствует', 'Соответствует'),
+        ('не соответствует', 'Не соответствует'),
+    ]
+    # Обычные поля проверок (кроме п. 4 «check_alarm», у него своя логика с файлом).
+    CHECK_FIELDS = (
+        'check_marking', 'check_kd_appearance', 'check_server_link',
+        'check_battery_status', 'check_radio_settings', 'check_long_run',
+    )
+
     class Meta:
         model = PAKDocument
         fields = '__all__'
@@ -7951,8 +8011,89 @@ class PAKDocumentForm(forms.ModelForm):
         if 'alarm_note' in self.fields:
             self.fields['alarm_note'].required = False
 
+        # --- Поля проверок: только 3 варианта, без пустого «---------» (п. 8) ---
+        # По умолчанию «нет данных» — для новых протоколов.
+        for name in self.CHECK_FIELDS:
+            if name in self.fields:
+                self.fields[name].choices = self.CHECK_CHOICES
+                if not (self.instance and self.instance.pk) and not self.initial.get(name):
+                    self.initial[name] = 'нет данных'
+
+        # --- Обязательные поля (лист замечаний 21.07.2026, п. 1-4) ---
+        # На уровне модели поля остаются null/blank, чтобы не ломать старые записи
+        # и не требовать миграции с NOT NULL; обязательность включаем только здесь.
+        for req_name in ('shipment', 'developer_org', 'post', 'fw_version',
+                         'test_date_start', 'test_date_end'):
+            if req_name in self.fields:
+                self.fields[req_name].required = True
+
+        # «Представитель ОТК» и «Текущий ответственный» — обязательные поля.
+        # По умолчанию подставляется создатель протокола
+        # (см. PAKDocumentAdmin.get_changeform_initial_data), но остаётся
+        # выпадающий список всех пользователей — значение можно изменить.
+        _all_users = User.objects.all().order_by('last_name', 'first_name', 'username')
+        for _user_field in ('inspector', 'current_responsible'):
+            if _user_field in self.fields:
+                self.fields[_user_field].required = True
+                self.fields[_user_field].queryset = _all_users
+
+        # --- Каскад «Группа → Разработка (модификация) → Изделие к отгрузке» (п. 5) ---
+        # Разработку выбираем только из группы «ПАК СПМ».
+        if 'post' in self.fields:
+            self.fields['post'].queryset = Post.objects.filter(
+                product_group__name=self.PRODUCT_GROUP_NAME
+            ).order_by('name')
+
+        # «Изделие к отгрузке» — только отгрузки выбранной разработки.
+        if 'shipment' in self.fields:
+            field = self.fields['shipment']
+
+            # Свой виджет: синим подсвечивает изделия без Протокола ПСИ.
+            # Меняем виджет ДО присвоения queryset, чтобы choices попали в него.
+            # В админке поле обёрнуто в RelatedFieldWidgetWrapper (кнопки «+», «✎»),
+            # поэтому подменяем вложенный виджет, а обёртку сохраняем.
+            wrapper = field.widget
+            inner = getattr(wrapper, 'widget', wrapper)
+            new_widget = ShipmentSelect(attrs=inner.attrs)
+            new_widget.is_required = field.required
+            if inner is wrapper:
+                field.widget = new_widget
+            else:
+                wrapper.widget = new_widget
+
+            selected_post = None
+            if self.is_bound:
+                selected_post = self.data.get(self.add_prefix('post')) or None
+            elif getattr(self.instance, 'post_id', None):
+                selected_post = self.instance.post_id
+            if selected_post:
+                qs = Shipment.objects.filter(post_id=selected_post)
+            else:
+                qs = Shipment.objects.filter(
+                    post__product_group__name=self.PRODUCT_GROUP_NAME
+                )
+            qs = qs.order_by('serial_number')
+
+            # Присвоение queryset пробрасывает choices в новый виджет.
+            field.queryset = qs
+
+            # Заводские номера без Протокола ПСИ — для синей подсветки.
+            new_widget.no_psi_ids = shipment_ids_without_psi(
+                qs.values_list('pk', flat=True)
+            )
+
     def clean(self):
         cleaned_data = super().clean()
+
+        # Даты испытаний независимы, но начало не может быть позже окончания
+        # (допускается один и тот же день — испытания в пределах суток).
+        date_start = cleaned_data.get('test_date_start')
+        date_end = cleaned_data.get('test_date_end')
+        if date_start and date_end and date_start > date_end:
+            self.add_error(
+                'test_date_start',
+                'Дата начала испытаний не может быть позже даты окончания .'
+            )
 
         alarm_log_file = cleaned_data.get('alarm_log_file')
         check_alarm = cleaned_data.get('check_alarm')
@@ -7967,6 +8108,29 @@ class PAKDocumentForm(forms.ModelForm):
                 'alarm_note',
                 'При статусе «Не соответствует» необходимо заполнить «Примечание (п. 4)».'
             )
+
+        # Прямая связь «Разработка → Изделие к отгрузке» (п. 5):
+        # изделие обязано принадлежать выбранной разработке.
+        post = cleaned_data.get('post')
+        shipment = cleaned_data.get('shipment')
+        if post and shipment and shipment.post_id != post.id:
+            self.add_error(
+                'shipment',
+                'Выбранное изделие к отгрузке не относится к выбранной разработке (модификации).'
+            )
+
+        # Один протокол ПСИ ПАК на один заводской номер (shipment) —
+        # чтобы не плодить дубли по одному изделию.
+        if shipment:
+            duplicates = PAKDocument.objects.filter(shipment=shipment)
+            if self.instance and self.instance.pk:
+                duplicates = duplicates.exclude(pk=self.instance.pk)
+            if duplicates.exists():
+                self.add_error(
+                    'shipment',
+                    'Для этого заводского номера уже существует протокол ПСИ ПАК СПМ. '
+                    'На один заводской номер допускается только один протокол.'
+                )
 
         return cleaned_data
 
@@ -7987,14 +8151,18 @@ class PAKDocumentAdmin(admin.ModelAdmin):
     )
     list_filter = ('test_date_start', 'inspector', 'conclusion')
     search_fields = (
-        'shipment__serial_number',
-        'post__name',
+        'shipment__serial_number',  # заводской номер
+        'post__name',               # модификация
+        'developer_org__name',      # организация-разработчик
         'fw_version',
         'inspector__last_name',   # inspector — FK на User, ищем по полям пользователя
         'inspector__first_name',
         'inspector__username',
+        'comment',
+        'workshop__number_name',
     )
-    autocomplete_fields = ('shipment', 'post', 'developer_org')
+    # post/shipment — зависимые списки (каскад), поэтому убраны из autocomplete.
+    autocomplete_fields = ('developer_org',)
 
     readonly_fields = (
         'created_at',
@@ -8002,17 +8170,72 @@ class PAKDocumentAdmin(admin.ModelAdmin):
         'author',
         'last_editor',
         'conclusion',  # определяется автоматически по результатам проверок
+        'version',  # считается автоматически (+1 при каждом изменении)
         'pdf_count_display',
         'date_of_creation',
     )
 
     inlines = [PAKGeneratedDocumentInline, PAKDocumentHistoryInline]
 
+    class Media:
+        # Жирная подпись пункта 4 (проверка обнаружения/регистрации аварии).
+        css = {
+            'all': ('blog/pak_admin_bold.css',)
+        }
+        # Каскад «Разработка → Изделие к отгрузке».
+        js = ('blog/js/chained_shipment.js',)
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                'shipments-for-post/',
+                self.admin_site.admin_view(self.shipments_for_post_view),
+                name='blog_pakdocument_shipments_for_post',
+            ),
+        ]
+        return custom + urls
+
+    def shipments_for_post_view(self, request):
+        """JSON-список изделий к отгрузке для выбранной разработки (каскад).
+
+        Флаг no_psi отмечает заводские номера без протокола ПСИ — на клиенте
+        они подсвечиваются синим (см. blog/js/chained_shipment.js)."""
+        from django.http import JsonResponse
+        post_id = request.GET.get('post_id')
+        results = []
+        if post_id:
+            qs = Shipment.objects.filter(post_id=post_id).order_by('serial_number')
+            no_psi_ids = shipment_ids_without_psi(qs.values_list('pk', flat=True))
+            results = [
+                {'id': s.pk, 'text': str(s), 'no_psi': s.pk in no_psi_ids}
+                for s in qs
+            ]
+        return JsonResponse({'results': results})
+
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        # Передаём JS URL для подгрузки изделий выбранной разработки.
+        if 'post' in form.base_fields:
+            form.base_fields['post'].widget.attrs['data-shipments-url'] = reverse(
+                'admin:blog_pakdocument_shipments_for_post'
+            )
+        return form
+
+    def get_changeform_initial_data(self, request):
+        """По умолчанию «Представитель ОТК» и «Текущий ответственный» — текущий
+        пользователь (создатель протокола); значения можно изменить в форме."""
+        initial = super().get_changeform_initial_data(request)
+        initial = dict(initial or {})
+        initial.setdefault('inspector', request.user.pk)
+        initial.setdefault('current_responsible', request.user.pk)
+        return initial
+
     fieldsets = (
         ('1. Основная информация', {
             'fields': (
-                'shipment',
                 'post',
+                'shipment',
                 'developer_org',
                 'fw_version',
                 'test_date_start',
@@ -8103,41 +8326,63 @@ class PAKDocumentAdmin(admin.ModelAdmin):
 
     # ---- Автор / редактор + автогенерация PDF ----
     def save_model(self, request, obj, form, change):
+        is_new = obj.pk is None
+        # Изменения на самой сущности (без учёта инлайнов).
+        has_changes = is_new or bool(form.changed_data)
+
         if not obj.author_id:
             obj.author = request.user
         obj.last_editor = request.user
+
+        # «Версия» вычисляется программно и проставляется после каждого реального
+        # изменения сущности (+1 по порядку). Поле только для чтения — вручную
+        # его менять нельзя. При создании версия = «1».
+        if is_new:
+            obj.version = "1"
+        elif has_changes:
+            try:
+                next_version = int(obj.version or "0") + 1
+            except (TypeError, ValueError):
+                next_version = 1
+            # version — CharField(max_length=3): не выходим за пределы столбца БД.
+            obj.version = str(min(next_version, 999))
+
         super().save_model(request, obj, form, change)
 
+        action_text = "Создан новый протокол" if is_new else "Протокол отредактирован"
+        if not is_new and has_changes:
+            action_text += f" (изменены поля: {', '.join(form.changed_data)})"
         PAKDocumentHistory.objects.create(
             pak_source=obj,
             user=request.user,
-            action=("Создан новый протокол" if not change else "Протокол отредактирован")
+            action=action_text,
         )
 
-        # Автоматически формируем PDF сразу после сохранения протокола.
+        # Автогенерация PDF только при наличии изменений (как в ПСИ ИБП СПМ).
         # Ошибку генерации не «роняем» на пользователя — сохранение уже прошло,
         # просто показываем предупреждение.
-        try:
-            generated = generate_pak_pdf_logic(obj, request.user)
-            self.message_user(
-                request,
-                f"✅ PDF протокола сформирован автоматически (версия {generated.version})."
-            )
-        except Exception as e:
-            self.message_user(
-                request,
-                f"⚠️ Протокол сохранён, но PDF не сформировался: {e}",
-                level=messages.WARNING,
-            )
+        if has_changes:
+            try:
+                generated = generate_pak_pdf_logic(obj, request.user)
+                self.message_user(
+                    request,
+                    f"✅ PDF протокола сформирован автоматически (версия {generated.version})."
+                )
+            except Exception as e:
+                self.message_user(
+                    request,
+                    f"⚠️ Протокол сохранён, но PDF не сформировался: {e}",
+                    level=messages.WARNING,
+                )
 
     # ---- Экшен генерации PDF ----
-    @admin.action(description="Сгенерировать PDF протокол ПАК СПМ")
-    def create_pak_pdf_action(self, request, queryset):
-        count = 0
-        for obj in queryset:
-            generate_pak_pdf_logic(obj, request.user)
-            count += 1
-        self.message_user(request, f"✅ PDF сформированы для {count} протокол(ов) ПАК СПМ.")
+#    @admin.action(description="Сгенерировать PDF протокол ПАК СПМ")
+ #   def create_pak_pdf_action(self, request, queryset):
+  #      count = 0
+   #     for obj in queryset:
+    #        generate_pak_pdf_logic(obj, request.user)
+     #       count += 1
+      #  self.message_user(request, f"✅ PDF сформированы для {count} протокол(ов) ПАК СПМ.")
 
 
 #@admin.register(PAKGeneratedDocument)
@@ -8158,6 +8403,365 @@ class PAKDocumentAdmin(admin.ModelAdmin):
 #    list_display = ('pak_source', 'action', 'user', 'timestamp')
 #    list_filter = ('timestamp', 'user')
 #    readonly_fields = ('pak_source', 'action', 'user', 'timestamp')
+
+
+# ============================================================================
+#  ПСИ ЩУР СПМ (щит учёта распределительный)
+#  Устроено так же, как ПСИ ИБП СПМ и ПСИ ПАК СПМ.
+# ============================================================================
+from .utils import generate_schur_pdf_logic
+
+
+class SchurGeneratedDocumentInline(admin.TabularInline):
+    model = SchurGeneratedDocument
+    extra = 0
+    can_delete = False
+    readonly_fields = ('version', 'file_link', 'generated_at')
+    fields = ('version', 'file_link', 'generated_at')
+
+    def file_link(self, obj):
+        if obj.file:
+            if obj.schur_source and obj.schur_source.shipment:
+                serial = obj.schur_source.shipment.serial_number
+            else:
+                serial = "—"
+            return format_html(
+                '<a href="{}" target="_blank">📄 Протокол_ПСИ_ЩУР_СПМ_{}_v{}</a>',
+                obj.file.url, serial, obj.version
+            )
+        return "Файл отсутствует"
+
+    file_link.short_description = "Ссылка"
+
+
+class SchurDocumentHistoryInline(admin.TabularInline):
+    model = SchurDocumentHistory
+    extra = 0
+    can_delete = False
+    readonly_fields = ('action', 'user', 'timestamp')
+    fields = ('action', 'user', 'timestamp')
+
+
+class SchurDocumentForm(forms.ModelForm):
+    # Группа разработок, с которой работает эта сущность.
+    PRODUCT_GROUP_NAME = "ЩИТ УЧЕТА РАСПРЕДЕЛИТЕЛЬНЫЙ"
+
+    # Три допустимых варианта для полей проверок, «нет данных» по умолчанию.
+    CHECK_CHOICES = [
+        ('нет данных', 'Нет данных'),
+        ('соответствует', 'Соответствует'),
+        ('не соответствует', 'Не соответствует'),
+    ]
+    CHECK_FIELDS = (
+        'check_kd_appearance', 'check_marking', 'check_shock_protection',
+        'check_circuits', 'check_continuity', 'check_mechanical',
+    )
+
+    class Meta:
+        model = SchurDocument
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # --- Поля проверок: только 3 варианта, без пустого «---------» ---
+        for name in self.CHECK_FIELDS:
+            if name in self.fields:
+                self.fields[name].choices = self.CHECK_CHOICES
+                if not (self.instance and self.instance.pk) and not self.initial.get(name):
+                    self.initial[name] = 'нет данных'
+
+        # --- Обязательные поля ---
+        # На уровне модели поля остаются null/blank, чтобы не ломать старые записи;
+        # обязательность включаем только в форме админки.
+        for req_name in ('shipment', 'developer_org', 'post'):
+            if req_name in self.fields:
+                self.fields[req_name].required = True
+
+        # «Представитель ОТК» и «Текущий ответственный» — обязательные поля.
+        # По умолчанию подставляется создатель протокола
+        # (см. SchurDocumentAdmin.get_changeform_initial_data).
+        _all_users = User.objects.all().order_by('last_name', 'first_name', 'username')
+        for _user_field in ('inspector', 'current_responsible'):
+            if _user_field in self.fields:
+                self.fields[_user_field].required = True
+                self.fields[_user_field].queryset = _all_users
+
+        # --- Каскад «Группа → Разработка (модификация) → Изделие к отгрузке» ---
+        if 'post' in self.fields:
+            self.fields['post'].queryset = Post.objects.filter(
+                product_group__name=self.PRODUCT_GROUP_NAME
+            ).order_by('name')
+
+        # «Изделие к отгрузке» — только отгрузки выбранной разработки.
+        if 'shipment' in self.fields:
+            field = self.fields['shipment']
+
+            # Свой виджет: синим подсвечивает изделия без Протокола ПСИ.
+            # Меняем виджет ДО присвоения queryset, чтобы choices попали в него.
+            wrapper = field.widget
+            inner = getattr(wrapper, 'widget', wrapper)
+            new_widget = ShipmentSelect(attrs=inner.attrs)
+            new_widget.is_required = field.required
+            if inner is wrapper:
+                field.widget = new_widget
+            else:
+                wrapper.widget = new_widget
+
+            selected_post = None
+            if self.is_bound:
+                selected_post = self.data.get(self.add_prefix('post')) or None
+            elif getattr(self.instance, 'post_id', None):
+                selected_post = self.instance.post_id
+            if selected_post:
+                qs = Shipment.objects.filter(post_id=selected_post)
+            else:
+                qs = Shipment.objects.filter(
+                    post__product_group__name=self.PRODUCT_GROUP_NAME
+                )
+            qs = qs.order_by('serial_number')
+
+            field.queryset = qs
+
+            new_widget.no_psi_ids = shipment_ids_without_psi(
+                qs.values_list('pk', flat=True)
+            )
+
+    def clean(self):
+        cleaned_data = super().clean()
+
+        # Прямая связь «Разработка → Изделие к отгрузке»:
+        # изделие обязано принадлежать выбранной разработке.
+        post = cleaned_data.get('post')
+        shipment = cleaned_data.get('shipment')
+        if post and shipment and shipment.post_id != post.id:
+            self.add_error(
+                'shipment',
+                'Выбранное изделие к отгрузке не относится к выбранной разработке (модификации).'
+            )
+
+        # Один протокол ПСИ ЩУР на один заводской номер (shipment).
+        if shipment:
+            duplicates = SchurDocument.objects.filter(shipment=shipment)
+            if self.instance and self.instance.pk:
+                duplicates = duplicates.exclude(pk=self.instance.pk)
+            if duplicates.exists():
+                self.add_error(
+                    'shipment',
+                    'Для этого заводского номера уже существует протокол ПСИ ЩУР СПМ. '
+                    'На один заводской номер допускается только один протокол.'
+                )
+
+        return cleaned_data
+
+
+@admin.register(SchurDocument)
+class SchurDocumentAdmin(admin.ModelAdmin):
+    form = SchurDocumentForm
+    list_display = (
+        'get_model_name',
+        'get_serial_number',
+        'get_developer_name',
+        'test_date',
+        'inspector',
+        'conclusion',
+        'pdf_link',
+        'created_at',
+    )
+    list_filter = ('test_date', 'inspector', 'conclusion')
+    search_fields = (
+        'shipment__serial_number',  # заводской номер
+        'post__name',               # модификация
+        'developer_org__name',      # организация-разработчик
+        'inspector__last_name',
+        'inspector__first_name',
+        'inspector__username',
+        'comment',
+        'workshop__number_name',
+    )
+    # post/shipment — зависимые списки (каскад), поэтому убраны из autocomplete.
+    autocomplete_fields = ('developer_org',)
+
+    readonly_fields = (
+        'created_at',
+        'date_of_change',
+        'author',
+        'last_editor',
+        'conclusion',  # определяется автоматически по результатам проверок
+        'version',     # считается автоматически (+1 при каждом изменении)
+        'pdf_count_display',
+        'date_of_creation',
+    )
+
+    inlines = [SchurGeneratedDocumentInline, SchurDocumentHistoryInline]
+
+    class Media:
+        # Каскад «Разработка → Изделие к отгрузке».
+        js = ('blog/js/chained_shipment.js',)
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                'shipments-for-post/',
+                self.admin_site.admin_view(self.shipments_for_post_view),
+                name='blog_schurdocument_shipments_for_post',
+            ),
+        ]
+        return custom + urls
+
+    def shipments_for_post_view(self, request):
+        """JSON-список изделий к отгрузке для выбранной разработки (каскад).
+
+        Флаг no_psi отмечает заводские номера без протокола ПСИ — на клиенте
+        они подсвечиваются синим (см. blog/js/chained_shipment.js)."""
+        from django.http import JsonResponse
+        post_id = request.GET.get('post_id')
+        results = []
+        if post_id:
+            qs = Shipment.objects.filter(post_id=post_id).order_by('serial_number')
+            no_psi_ids = shipment_ids_without_psi(qs.values_list('pk', flat=True))
+            results = [
+                {'id': s.pk, 'text': str(s), 'no_psi': s.pk in no_psi_ids}
+                for s in qs
+            ]
+        return JsonResponse({'results': results})
+
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        # Передаём JS URL для подгрузки изделий выбранной разработки.
+        if 'post' in form.base_fields:
+            form.base_fields['post'].widget.attrs['data-shipments-url'] = reverse(
+                'admin:blog_schurdocument_shipments_for_post'
+            )
+        return form
+
+    def get_changeform_initial_data(self, request):
+        """По умолчанию «Представитель ОТК» и «Текущий ответственный» — текущий
+        пользователь (создатель протокола); значения можно изменить в форме."""
+        initial = super().get_changeform_initial_data(request)
+        initial = dict(initial or {})
+        initial.setdefault('inspector', request.user.pk)
+        initial.setdefault('current_responsible', request.user.pk)
+        return initial
+
+    fieldsets = (
+        ('1. Основная информация', {
+            'fields': (
+                'post',
+                'shipment',
+                'developer_org',
+                'test_date',
+            )
+        }),
+        ('2. Общие проверки (ТУ, ПМ)', {
+            'fields': (
+                'check_kd_appearance',
+                'check_marking',
+                'check_shock_protection',
+                'check_circuits',
+                'check_continuity',
+                'check_mechanical',
+            )
+        }),
+        ('3. Итоговое заключение', {
+            'fields': ('conclusion', 'comment'),
+        }),
+        ('4. Метеоусловия и Персонал', {
+            'fields': ('inspector', 'workshop', 'remark', 'temperature', 'humidity', 'pressure'),
+        }),
+        ('5. Системные данные', {
+            'fields': (
+                'author',
+                'current_responsible',
+                'last_editor',
+                'version',
+                'date_of_creation',
+                'date_of_change',
+            ),
+        }),
+    )
+
+    # ---- Колонки списка ----
+    @admin.display(description='Модификация')
+    def get_model_name(self, obj):
+        return obj.post.name if obj.post else "—"
+
+    @admin.display(description='Заводской номер')
+    def get_serial_number(self, obj):
+        return obj.shipment.serial_number if obj.shipment else "—"
+
+    @admin.display(description='Организация')
+    def get_developer_name(self, obj):
+        return obj.developer_org.name if obj.developer_org else "—"
+
+    @admin.display(description='Протокол PDF')
+    def pdf_link(self, obj):
+        """Кликабельная ссылка на актуальную (последнюю) версию PDF."""
+        latest = obj.pdfs.order_by('-version').first()
+        if not latest or not latest.file:
+            return "—"
+        return format_html(
+            '<a href="{}" target="_blank">📄 v{}</a>',
+            latest.file.url, latest.version
+        )
+
+    @admin.display(description='Протокол PDF')
+    def pdf_count_display(self, obj):
+        latest = obj.pdfs.order_by('-version').first()
+        if not latest or not latest.file:
+            return "—"
+        return format_html(
+            '<a href="{}" target="_blank">📄 v{}</a>',
+            latest.file.url, latest.version
+        )
+
+    # ---- Автор / редактор + автогенерация PDF ----
+    def save_model(self, request, obj, form, change):
+        is_new = obj.pk is None
+        # Изменения на самой сущности (без учёта инлайнов).
+        has_changes = is_new or bool(form.changed_data)
+
+        if not obj.author_id:
+            obj.author = request.user
+        obj.last_editor = request.user
+
+        # «Версия» вычисляется программно (+1 при каждом реальном изменении).
+        if is_new:
+            obj.version = "1"
+        elif has_changes:
+            try:
+                next_version = int(obj.version or "0") + 1
+            except (TypeError, ValueError):
+                next_version = 1
+            # version — CharField(max_length=3): не выходим за пределы столбца БД.
+            obj.version = str(min(next_version, 999))
+
+        super().save_model(request, obj, form, change)
+
+        action_text = "Создан новый протокол" if is_new else "Протокол отредактирован"
+        if not is_new and has_changes:
+            action_text += f" (изменены поля: {', '.join(form.changed_data)})"
+        SchurDocumentHistory.objects.create(
+            schur_source=obj,
+            user=request.user,
+            action=action_text,
+        )
+
+        # Автогенерация PDF только при наличии изменений (как в ПСИ ИБП/ПАК СПМ).
+        if has_changes:
+            try:
+                generated = generate_schur_pdf_logic(obj, request.user)
+                self.message_user(
+                    request,
+                    f"✅ PDF протокола сформирован автоматически (версия {generated.version})."
+                )
+            except Exception as e:
+                self.message_user(
+                    request,
+                    f"⚠️ Протокол сохранён, но PDF не сформировался: {e}",
+                    level=messages.WARNING,
+                )
 
 
 # ============================================================================

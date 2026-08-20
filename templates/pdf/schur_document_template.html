@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Протокол ПСИ ПАК СПМ - {{ protocol_number }}</title>
+    <title>Протокол ПСИ ЩУР СПМ - {{ protocol_number }}</title>
     <style>
         @page {
             size: A4;
@@ -142,7 +142,7 @@
         <div class="header-cell header-left">
             <div class="company-name">
                 ОБЩЕСТВО С ОГРАНИЧЕННОЙ<br>
-                ОТВЕТСТВЕННОСТЬЮ {{ pak.developer_org.name|cut:"ООО " }}
+                ОТВЕТСТВЕННОСТЬЮ {{ schur.developer_org.name|cut:"ООО " }}
             </div>
         </div>
         <div class="header-cell header-right">
@@ -155,7 +155,7 @@
     <div class="title-block">
         <h1>ПРОТОКОЛ № <span class="protocol-num-red">{{ protocol_number }}</span></h1>
         <div class="subtitle">приемо-сдаточных испытаний</div>
-        <div class="subtitle">Программно-аппаратного комплекса</div>
+        <div class="subtitle">Щита учета распределительного</div>
         <div class="model-name">{{ model_name }}</div>
     </div>
 <!-- Заводской номер из Shipment -->
@@ -163,25 +163,19 @@
         <span class="info-label">Зав. №</span>
         <span class="val">{{ serial_number }}</span>
         <span class="info-label">от</span>
-        <span class="val">{{ pak.test_date_end|date:"d.m.Y" }}</span>
+        <span class="val">{{ schur.test_date|date:"d.m.Y" }}</span>
     </div>
 <div>
 <!-- ВВОДНЫЙ ТЕКСТ -->
     <div class="intro-text">
-        Изделие изготовлено в соответствии с техническими условиями <span style="white-space:nowrap">СИ.40522001.000ТУ</span>. Программа и методика испытаний в соответствии с <span style="white-space:nowrap">СИ.40522001.000ПМ1</span>.
+        Изделие изготовлено в соответствии с техническими условиями <span style="white-space:nowrap">СИ.40526074.000ТУ</span>. Программа и методика испытаний в соответствии с <span style="white-space:nowrap">СИ.40526074.000ПМ</span>.
     </div>
 
-    <div class="intro-meta">Дата начала проведения испытаний:
-        <span class="val">{{ pak.test_date_start|date:"d.m.Y" }}</span>
-    </div>
-    <div class="intro-meta">Дата окончания испытаний:
-        <span class="val">{{ pak.test_date_end|date:"d.m.Y" }}</span>
+    <div class="intro-meta">Дата проведения испытаний:
+        <span class="val">{{ schur.test_date|date:"d.m.Y" }}</span>
     </div>
     <div class="intro-meta">Место проведения испытаний:
-        <span class="val">{{ pak.developer_org.name }}</span>
-    </div>
-    <div class="intro-meta">Версия ПО:
-        <span class="val">{{ pak.fw_version }}</span>
+        <span class="val">{{ schur.developer_org.name }}</span>
     </div>
 
     <p>Результаты проведения испытаний представлены в таблице 1.</p>
@@ -190,53 +184,47 @@
     <table class="results">
         <thead>
             <tr>
-                <th style="width: 42%;">Наименование проверки<br>(№ п. ТУ, № п. ПМ)</th>
-                <th style="width: 20%;">Значение параметра (соответствие)</th>
+                <th style="width: 30%;">Наименование проверки<br>по ТУ и ПМ</th>
+                <th style="width: 32%;">Значение параметра (соответствие)</th>
                 <th style="width: 20%;">Данные испытания (контроля)</th>
                 <th style="width: 18%;">Примечание</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td class="name">1 Проверка содержания маркировки (1.5.2 ТУ, 3.1 ПМ)</td>
-                <td>Соответствует ТУ</td>
-                <td class="result-cell">{{ pak.get_check_marking_display }}</td>
+                <td class="name">1 Проверка соответствия КД и проверка внешнего вида</td>
+                <td class="name">Состав изделия соответствует КД. Повреждения отсутствуют. Уплотнитель, кабельные вводы и оргстекло установлено плотно. Корпус без дефектов</td>
+                <td class="result-cell">{{ schur.get_check_kd_appearance_display }}</td>
                 <td></td>
             </tr>
             <tr>
-                <td class="name">2 Проверка соответствия ПАК СПМ основному комплекту КД, проверка внешнего вида (1.1.1, 1.1.9 ТУ, 3.2 ПМ)</td>
-                <td>Соответствует ТУ</td>
-                <td class="result-cell">{{ pak.get_check_kd_appearance_display }}</td>
+                <td class="name">2 Проверка содержания маркировки</td>
+                <td class="name">Маркировка соответствует КД (утвержденному образцу)</td>
+                <td class="result-cell">{{ schur.get_check_marking_display }}</td>
                 <td></td>
             </tr>
             <tr>
-                <td class="name">3 Проверка обеспечения связи с сервером (1.1.5, 1.1.4 ТУ, 3.3 ПМ)</td>
-                <td>Соответствует ТУ</td>
-                <td class="result-cell">{{ pak.get_check_server_link_display }}</td>
+                <td class="name">3 Проверка защиты от поражения электрическим током (визуальная)</td>
+                <td class="name">Токоведущие части недоступны. Изоляция защитной оболочки и ограждения целы</td>
+                <td class="result-cell">{{ schur.get_check_shock_protection_display }}</td>
                 <td></td>
             </tr>
             <tr>
-                <td class="name">4 Проверка обнаружения и регистрации аварии (1.1.2, 1.1.4 ТУ, 3.4 ПМ)</td>
-                <td>Соответствует ТУ</td>
-                <td class="result-cell">{{ pak.get_check_alarm_display }}</td>
-                <td>{% if not pak.alarm_log_file %}нет данных{% elif pak.check_alarm == 'соответствует' %}Файл с логами от прибора{% else %}{{ pak.alarm_note }}{% endif %}</td>
-            </tr>
-            <tr>
-                <td class="name">5 Проверка контроля и передачи статуса батареи (1.1.7 ТУ, 3.5 ПМ)</td>
-                <td>Соответствует ТУ</td>
-                <td class="result-cell">{{ pak.get_check_battery_status_display }}</td>
+                <td class="name">4 Проверка электрических цепей и соединений (визуальная)</td>
+                <td class="name">Соединения соответствуют электрической схеме; проводники уложены правильно; изоляция проводов не повреждена; контактные соединения надежны</td>
+                <td class="result-cell">{{ schur.get_check_circuits_display }}</td>
                 <td></td>
             </tr>
             <tr>
-                <td class="name">6 Проверка обеспечения изменения настроек по радиоканалу ближней связи (1.1.6 ТУ, 3.6 ПМ)</td>
-                <td>Соответствует ТУ</td>
-                <td class="result-cell">{{ pak.get_check_radio_settings_display }}</td>
+                <td class="name">5 Проверка непрерывности электрических цепей</td>
+                <td class="name">Цепи от счетчика до автоматического выключателя, выключателя нагрузки и силовых клемм нейтрали (при их наличии) имеют непрерывность; обрывы соединений отсутствуют</td>
+                <td class="result-cell">{{ schur.get_check_continuity_display }}</td>
                 <td></td>
             </tr>
             <tr>
-                <td class="name">7 Проверка длительной работы ПАК СПМ (3.7 ПМ)</td>
-                <td>Соответствует ТУ</td>
-                <td class="result-cell">{{ pak.get_check_long_run_display }}</td>
+                <td class="name">6 Проверка механического функционирования</td>
+                <td class="name">Выключатели переключаются свободно и фиксируются в положениях «Вкл» и «Откл». Дверца и замок (замки) обеспечивают надежное запирание</td>
+                <td class="result-cell">{{ schur.get_check_mechanical_display }}</td>
                 <td></td>
             </tr>
         </tbody>
@@ -245,15 +233,15 @@
     <div class="conclusion-block">
         <p style="text-align: center; font-weight: bold;">Заключение</p>
         <div class="conclusion-text">
-            {% if pak.conclusion == 'готов к отгрузке' %}
-                Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
+            {% if schur.conclusion == 'готов к отгрузке' %}
+                Изделие Щит учета распределительный <strong>{{ model_name }}</strong>
                 Зав. № <strong>{{ serial_number }}</strong>
-                соответствует требованиям <span style="white-space:nowrap">СИ.40522001.000ТУ</span> и годно для
+                соответствует требованиям <span style="white-space:nowrap">СИ.40526074.000ТУ</span> и годно для
                 использования по назначению (эксплуатации).
             {% else %}
-                Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
+                Изделие Щит учета распределительный <strong>{{ model_name }}</strong>
                 Зав. № <strong>{{ serial_number }}</strong>
-                не соответствует требованиям <span style="white-space:nowrap">СИ.40522001.000ТУ</span> и подлежит
+                не соответствует требованиям <span style="white-space:nowrap">СИ.40526074.000ТУ</span> и подлежит
                 возврату на устранение дефектов и доработку.
             {% endif %}
         </div>
@@ -264,8 +252,8 @@
             <tr>
                 <td class="sig-role" style="width: 26%;">Представитель ОТК</td>
                 <td style="width: 24%;"><span class="sig-underline" style="letter-spacing: 2px;">ЭЦП</span><span class="sig-caption">Подпись</span></td>
-                <td style="width: 24%;"><span class="sig-underline">{{ pak.test_date_end|date:"d.m.Y" }}</span><span class="sig-caption">Дата</span></td>
-                <td style="width: 26%;"><span class="sig-underline">{{ pak.get_inspector_display }}</span><span class="sig-caption">ФИО</span></td>
+                <td style="width: 24%;"><span class="sig-underline">{{ schur.test_date|date:"d.m.Y" }}</span><span class="sig-caption">Дата</span></td>
+                <td style="width: 26%;"><span class="sig-underline">{{ schur.get_inspector_display }}</span><span class="sig-caption">ФИО</span></td>
             </tr>
         </table>
     </div>

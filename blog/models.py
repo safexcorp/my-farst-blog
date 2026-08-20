@@ -3094,33 +3094,33 @@ class PSIDocument(models.Model):
 
     # --- Варианты выбора для статусов ---
     STATUS_CHOICES = [
-        ('соответствует', 'Соответствует'),
-        ('не соответствует', 'Не соответствует'),
-        ('нет данных', 'Нет данных'),
+        ('Соответствует', 'Соответствует'),
+        ('Не соответствует', 'Не соответствует'),
+        ('Нет данных', 'Нет данных'),
     ]
     SHIPMENT_CHOICES = [
-        ('готов к отгрузке', 'Готов к отгрузке'),
-        ('не готов', 'Не готов')
+        ('Готов к отгрузке', 'Готов к отгрузке'),
+        ('Не готов', 'Не готов')
     ]
     ELECTRO_CHOICES = [
         ('≥ 1 МОм', '≥ 1 МОм'),
-        ('отклонение', 'Отклонение'),
-        ('нет данных', 'Нет данных')
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
     ]
     TEMPERATURE_CHOICES = [
-        ('норма (15 °С ... 35 °С)', 'Норма (15 °С ... 35 °С)'),
-        ('отклонение', 'Отклонение'),
-        ('нет данных', 'Нет данных')
+        ('Норма (15 °С ... 35 °С)', 'Норма (15 °С ... 35 °С)'),
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
     ]
     HUMIDITY_CHOICES = [
-        ('норма (30 % ... 60 %)', 'норма (30 % ... 60 %)'),
-        ('отклонение', 'Отклонение'),
-        ('нет данных', 'Нет данных')
+        ('Норма (30 % ... 60 %)', 'Норма (30 % ... 60 %)'),
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
     ]
     PRESSURE_CHOICES = [
-        ('норма (84 кПа ... 106,7 кПа)', 'норма (84 кПа ... 106,7 кПа)'),
-        ('отклонение', 'Отклонение'),
-        ('нет данных', 'Нет данных')
+        ('Норма (84 кПа ... 106,7 кПа)', 'Норма (84 кПа ... 106,7 кПа)'),
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
     ]
 
     # --- Общие проверки ---
@@ -3340,28 +3340,28 @@ class PAKDocument(models.Model):
     """Протокол приёмо-сдаточных испытаний ПАК СПМ."""
 
     STATUS_CHOICES = [
-        ('соответствует', 'Соответствует'),
-        ('не соответствует', 'Не соответствует'),
-        ('нет данных', 'Нет данных'),
+        ('Соответствует', 'Соответствует'),
+        ('Не соответствует', 'Не соответствует'),
+        ('Нет данных', 'Нет данных'),
     ]
     SHIPMENT_CHOICES = [
-        ('готов к отгрузке', 'Готов к отгрузке'),
-        ('не готов', 'Не готов'),
+        ('Готов к отгрузке', 'Готов к отгрузке'),
+        ('Не готов', 'Не готов'),
     ]
     TEMPERATURE_CHOICES = [
-        ('норма (15 °С ... 35 °С)', 'Норма (15 °С ... 35 °С)'),
-        ('отклонение', 'Отклонение'),
-        ('нет данных', 'Нет данных')
+        ('Норма (15 °С ... 35 °С)', 'Норма (15 °С ... 35 °С)'),
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
     ]
     HUMIDITY_CHOICES = [
-        ('норма (30 % ... 60 %)', 'норма (30 % ... 60 %)'),
-        ('отклонение', 'Отклонение'),
-        ('нет данных', 'Нет данных')
+        ('Норма (30 % ... 60 %)', 'Норма (30 % ... 60 %)'),
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
     ]
     PRESSURE_CHOICES = [
-        ('норма (84 кПа ... 106,7 кПа)', 'норма (84 кПа ... 106,7 кПа)'),
-        ('отклонение', 'Отклонение'),
-        ('нет данных', 'Нет данных')
+        ('Норма (84 кПа ... 106,7 кПа)', 'Норма (84 кПа ... 106,7 кПа)'),
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
     ]
 
     # --- Связи (как у ИБП: номер/зав.№ берутся из shipment) ---
@@ -3379,26 +3379,30 @@ class PAKDocument(models.Model):
     )
 
     # --- Основная информация ---
-    fw_version = models.CharField('Версия ПО', max_length=50, blank=True, default='')
+    fw_version = models.CharField('Версия ПО', max_length=50)
     test_date_start = models.DateField('Дата начала проведения испытаний')
+    # null=True оставлен намеренно: в базе есть протоколы с пустой датой окончания.
+    # Перевод колонки в NOT NULL требует one-off default, который проставил бы
+    # выдуманную дату в уже подписанные протоколы (по ней печатается «дата
+    # изготовления» в PDF). Обязательность поля включена в PAKDocumentForm.
     test_date_end = models.DateField('Дата окончания испытаний', null=True, blank=True)
 
     # --- Проверки (Таблица 1) ---
     check_marking = models.CharField(
         '1 Проверка содержания маркировки (1.5.2 ТУ, 3.1 ПМ)',
-        max_length=20, choices=STATUS_CHOICES
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
     )
     check_kd_appearance = models.CharField(
         '2 Проверка соответствия ПАК СПМ КД и внешнего вида (1.1.1, 1.1.9 ТУ, 3.2 ПМ)',
-        max_length=20, choices=STATUS_CHOICES
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
     )
     check_server_link = models.CharField(
         '3 Проверка обеспечения связи с сервером (1.1.5, 1.1.4 ТУ, 3.3 ПМ)',
-        max_length=20, choices=STATUS_CHOICES
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
     )
     check_alarm = models.CharField(
         '4 Проверка обнаружения и регистрации аварии (1.1.2, 1.1.4 ТУ, 3.4 ПМ)',
-        max_length=20, choices=STATUS_CHOICES
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
     )
     # Пункт 4: файл с логами от прибора + примечание
     alarm_log_file = models.FileField(
@@ -3411,15 +3415,15 @@ class PAKDocument(models.Model):
     )
     check_battery_status = models.CharField(
         '5 Проверка контроля и передачи статуса батареи (1.1.7 ТУ, 3.5 ПМ)',
-        max_length=20, choices=STATUS_CHOICES
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
     )
     check_radio_settings = models.CharField(
         '6 Проверка обеспечения изменения настроек по радиоканалу ближней связи (1.1.6 ТУ, 3.6 ПМ)',
-        max_length=20, choices=STATUS_CHOICES
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
     )
     check_long_run = models.CharField(
         '7 Проверка длительной работы ПАК СПМ (3.7 ПМ)',
-        max_length=20, choices=STATUS_CHOICES
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
     )
 
     # --- Заключение ---
@@ -3522,6 +3526,19 @@ class PAKDocument(models.Model):
             self.conclusion = 'не готов'
         super().save(*args, **kwargs)
 
+    def get_inspector_display(self):
+        """Возвращает полное ФИО испытателя на русском (Фамилия Имя Отчество)."""
+        if not self.inspector:
+            return "—"
+        user = self.inspector
+        last = user.last_name or ''
+        first = user.first_name or ''
+        patronymic = ''
+        if hasattr(user, 'profile') and user.profile.patronymic:
+            patronymic = user.profile.patronymic
+        parts = [p for p in [last, first, patronymic] if p]
+        return ' '.join(parts) if parts else user.username
+
 
 class PAKGeneratedDocument(models.Model):
     """Сгенерированный PDF протокола ПАК СПМ."""
@@ -3558,4 +3575,206 @@ class PAKDocumentHistory(models.Model):
     class Meta:
         verbose_name = 'История протокола ПАК СПМ'
         verbose_name_plural = 'История протоколов ПАК СПМ'
+        ordering = ['-timestamp']
+
+
+# ПСИ ЩУР СПМ (щит учёта распределительный)
+class SchurDocument(models.Model):
+    """Протокол приёмо-сдаточных испытаний щита учёта распределительного."""
+
+    STATUS_CHOICES = [
+        ('Соответствует', 'Соответствует'),
+        ('Не соответствует', 'Не соответствует'),
+        ('Нет данных', 'Нет данных'),
+    ]
+    SHIPMENT_CHOICES = [
+        ('Готов к отгрузке', 'Готов к отгрузке'),
+        ('Не готов', 'Не готов'),
+    ]
+    TEMPERATURE_CHOICES = [
+        ('Норма (15 °С ... 35 °С)', 'Норма (15 °С ... 35 °С)'),
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
+    ]
+    HUMIDITY_CHOICES = [
+        ('Норма (30 % ... 60 %)', 'Норма (30 % ... 60 %)'),
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
+    ]
+    PRESSURE_CHOICES = [
+        ('Норма (84 кПа ... 106,7 кПа)', 'Норма (84 кПа ... 106,7 кПа)'),
+        ('Отклонение', 'Отклонение'),
+        ('Нет данных', 'Нет данных')
+    ]
+
+    # --- Связи (номер протокола и зав. № берутся из shipment, как у ИБП и ПАК) ---
+    shipment = models.ForeignKey(
+        'Shipment', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='schur_documents', verbose_name='Изделие к отгрузке'
+    )
+    post = models.ForeignKey(
+        'Post', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='schur_documents', verbose_name='Модификация ЩУР'
+    )
+    developer_org = models.ForeignKey(
+        'RKDDeveloper', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='schur_documents', verbose_name='Организация-разработчик'
+    )
+
+    # --- Основная информация ---
+    # У ЩУР одна дата испытаний (как в ПСИ ИБП СПМ), она же печатается
+    # в шапке протокола как дата изготовления.
+    test_date = models.DateField('Дата проведения испытаний')
+
+    # --- Проверки (Таблица 1) ---
+    check_kd_appearance = models.CharField(
+        '1 Проверка соответствия КД и проверка внешнего вида',
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+    )
+    check_marking = models.CharField(
+        '2 Проверка содержания маркировки',
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+    )
+    check_shock_protection = models.CharField(
+        '3 Проверка защиты от поражения электрическим током (визуальная)',
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+    )
+    check_circuits = models.CharField(
+        '4 Проверка электрических цепей и соединений (визуальная)',
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+    )
+    check_continuity = models.CharField(
+        '5 Проверка непрерывности электрических цепей',
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+    )
+    check_mechanical = models.CharField(
+        '6 Проверка механического функционирования',
+        max_length=20, choices=STATUS_CHOICES, default='нет данных'
+    )
+
+    # --- Заключение ---
+    conclusion = models.CharField(
+        'Заключение', max_length=20, choices=SHIPMENT_CHOICES, blank=True, default=''
+    )
+    comment = models.TextField('Комментарий', blank=True, default='')
+
+    # --- ОТК ---
+    inspector = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='schur_inspector', verbose_name='Представитель ОТК',
+    )
+
+    # связь с помещением
+    workshop = models.ForeignKey(
+        'enterprise_asset_management.ProductionArea', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='schur_documents',
+        verbose_name='Производственная площадка (Цех)'
+    )
+
+    remark = models.TextField('Комментарий', blank=True)
+    temperature = models.CharField('Температура', choices=TEMPERATURE_CHOICES, max_length=50, default='нет данных')
+    humidity = models.CharField('Влажность', choices=HUMIDITY_CHOICES, max_length=50, default='нет данных')
+    pressure = models.CharField('Давление', choices=PRESSURE_CHOICES, max_length=50, default='нет данных')
+
+    created_at = models.DateTimeField('Создан', auto_now_add=True)
+
+    author = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='authored_schur_created', verbose_name='Автор',
+    )
+    date_of_creation = models.DateTimeField(auto_now=True, verbose_name='Дата и время создания')
+    last_editor = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='edited_schur_documents', verbose_name='Последний редактор',
+    )
+    version = models.CharField(max_length=3, default='1', verbose_name='Версия')
+    version_diff = models.TextField(
+        blank=True, default='Стартовая версия', verbose_name='Сравнение версий',
+    )
+    date_of_change = models.DateTimeField(auto_now=True, verbose_name='Дата и время последнего изменения')
+    current_responsible = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='schur_document_responsible', verbose_name='Текущий ответственный',
+    )
+
+    class Meta:
+        verbose_name = 'ПСИ ЩУР СПМ'
+        verbose_name_plural = 'ПСИ ЩУР СПМ'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        serial = self.shipment.serial_number if self.shipment else '—'
+        return f'Протокол ЩУР {serial}'
+
+    def all_checks_passed(self):
+        """True, только если ВСЕ проверки в статусе 'соответствует'
+        (нет ни одного 'не соответствует' или 'нет данных')."""
+        checks = (
+            self.check_kd_appearance,
+            self.check_marking,
+            self.check_shock_protection,
+            self.check_circuits,
+            self.check_continuity,
+            self.check_mechanical,
+        )
+        return all(status == 'соответствует' for status in checks)
+
+    def save(self, *args, **kwargs):
+        # Заключение определяется автоматически по результатам проверок:
+        # любое 'не соответствует' или 'нет данных' -> не готов к отгрузке.
+        if self.all_checks_passed():
+            self.conclusion = 'готов к отгрузке'
+        else:
+            self.conclusion = 'не готов'
+        super().save(*args, **kwargs)
+
+    def get_inspector_display(self):
+        """Возвращает полное ФИО представителя ОТК на русском (Фамилия Имя Отчество)."""
+        if not self.inspector:
+            return "—"
+        user = self.inspector
+        last = user.last_name or ''
+        first = user.first_name or ''
+        patronymic = ''
+        if hasattr(user, 'profile') and user.profile.patronymic:
+            patronymic = user.profile.patronymic
+        parts = [p for p in [last, first, patronymic] if p]
+        return ' '.join(parts) if parts else user.username
+
+
+class SchurGeneratedDocument(models.Model):
+    """Сгенерированный PDF протокола ЩУР СПМ."""
+    schur_source = models.ForeignKey(
+        SchurDocument, on_delete=models.CASCADE, related_name='pdfs',
+        verbose_name='Протокол-источник', null=True, blank=True
+    )
+    file = models.FileField('Готовый PDF', upload_to='schur_generated_pdfs/')
+    version = models.PositiveIntegerField('Версия')
+    generated_at = models.DateTimeField('Сгенерирован', auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Сгенерированный PDF (ЩУР СПМ)'
+        verbose_name_plural = 'Сгенерированные PDF (ЩУР СПМ)'
+        ordering = ['-version']
+
+    def __str__(self):
+        return f'PDF ЩУР СПМ v{self.version}'
+
+
+class SchurDocumentHistory(models.Model):
+    """История изменений протокола ЩУР СПМ."""
+    schur_source = models.ForeignKey(
+        SchurDocument, on_delete=models.CASCADE, related_name='history',
+        verbose_name='Протокол', null=True, blank=True
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True,
+        related_name='schur_document_history', verbose_name='Пользователь'
+    )
+    action = models.CharField('Действие', max_length=255)
+    timestamp = models.DateTimeField('Время', auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'История протокола ЩУР СПМ'
+        verbose_name_plural = 'История протоколов ЩУР СПМ'
         ordering = ['-timestamp']

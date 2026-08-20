@@ -133,11 +133,15 @@
             margin: 4px 0 0 0;
         }
 
-        /* Блок «Зав. № … дата изготовления»: отступ только сверху (от модификации),
-           снизу разрыва нет — вводный текст «Изделие изготовлено…» идёт вплотную */
+        /* Блок «Зав. № … дата изготовления»: по центру, с отступами сверху,
+           снизу и между самими надписями (как в протоколе ПАК СПМ) */
         .info-block {
-            margin: 24px 0 0 0;
+            margin: 18px 0 20px 0;
+            text-align: center;
         }
+        .info-block .info-label { margin: 0 6px; }
+        .info-block .info-value { margin-right: 24px; }
+        .info-block .info-value:last-child { margin-right: 0; }
 
         /* Строка "Зав. №" — как в PDF: с подчёркиванием */
         .serial-row {
@@ -342,8 +346,8 @@
     <!-- Заводской номер из Shipment -->
 <div class="info-block">
     <div class="info-row">
-        <span class="info-label" style="white-space:nowrap">Зав.&nbsp;№&nbsp;</span><span class="info-value">{{ serial_number|default:"-" }}</span>
-        <span class="info-label" style="margin-left: 30px;">дата изготовления&nbsp;</span><span class="info-value">{{ psi.test_date|date:"d.m.Y" }}</span>
+        <span class="info-label" style="white-space:nowrap">Зав.&nbsp;№</span><span class="info-value">{{ serial_number|default:"-" }}</span>
+        <span class="info-label">от</span><span class="info-value">{{ psi.test_date|date:"d.m.Y" }}</span>
     </div>
 </div>
 
