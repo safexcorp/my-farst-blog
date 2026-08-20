@@ -130,3 +130,57 @@ def generate_pak_pdf_logic(pak_document, user):
     except Exception as e:
         print(f"Ошибка генерации PDF ПАК СПМ: {e}")
         raise
+
+
+# ПСИ ЩУР СПМ
+def generate_schur_pdf_logic(schur_document, user):
+    """Генерация PDF протокола ПСИ ЩУР СПМ."""
+    try:
+        # Заводской номер из изделия к отгрузке
+        serial_number = (
+            schur_document.shipment.serial_number
+            if schur_document.shipment else "—"
+        )
+
+        # Номер протокола: как у ИБП и ПАК — 5 символов из заводского номера
+        # Пример: "2000012026" -> "00001"
+        if schur_document.shipment and schur_document.shipment.serial_number:
+            sn = schur_document.shipment.serial_number
+            protocol_number = sn[1:6] if len(sn) >= 6 else sn.zfill(5)
+        else:
+            protocol_number = "—"
+
+        model_name = schur_document.post.name if schur_document.post else "ЩУР"
+
+        version = schur_document.pdfs.count() + 1
+
+        context = {
+            'schur': schur_document,
+            'generated_at': timezone.now(),
+            'serial_number': serial_number,
+            'protocol_number': protocol_number,
+            'model_name': model_name,
+            'version': version,
+        }
+
+        html_string = render_to_string('pdf/schur_document_template.html', context)
+        pdf_file = HTML(string=html_string).write_pdf()
+
+        filename = f"Протокол_ПСИ_ЩУР_СПМ_{serial_number}_v{version}.pdf"
+
+        from blog.models import SchurGeneratedDocument
+        generated_doc = SchurGeneratedDocument(schur_source=schur_document, version=version)
+        generated_doc.file.save(filename, ContentFile(pdf_file), save=True)
+
+        from blog.models import SchurDocumentHistory
+        SchurDocumentHistory.objects.create(
+            schur_source=schur_document,
+            user=user,
+            action=f"Сгенерирован PDF версии {generated_doc.version}"
+        )
+
+        return generated_doc
+
+    except Exception as e:
+        print(f"Ошибка генерации PDF ЩУР СПМ: {e}")
+        raise
