@@ -99,24 +99,49 @@ def _eds_download_links(task):
     )
 
 
-class _AdminOnlyMixin:
+class _AdminOrPermissionMixin:
+    """Доступ есть у группы «Согласование: Администратор» ИЛИ у любого,
+    кому явно выданы соответствующие Django-права (view/add/change/delete) —
+    аддитивно, права группы «Администратор» этим не урезаются."""
+
     def has_module_permission(self, request):
-        return is_approval_admin(request.user)
+        return is_approval_admin(request.user) or super().has_module_permission(request)
 
     def has_view_permission(self, request, obj=None):
-        return is_approval_admin(request.user)
+        return is_approval_admin(request.user) or super().has_view_permission(request, obj)
 
     def has_add_permission(self, request):
-        return is_approval_admin(request.user)
+        return is_approval_admin(request.user) or super().has_add_permission(request)
 
     def has_change_permission(self, request, obj=None):
-        return is_approval_admin(request.user)
+        return is_approval_admin(request.user) or super().has_change_permission(request, obj)
 
     def has_delete_permission(self, request, obj=None):
-        return is_approval_admin(request.user)
+        return is_approval_admin(request.user) or super().has_delete_permission(request, obj)
 
 
-class DepartmentMemberInline(admin.TabularInline):
+class _ChildOfParentPermissionMixin:
+    """Права на подсущность = права на родителя (self.parent_model) — своего
+    отдельного права у неё нет, доступна только через родителя."""
+
+    def _parent_can(self, request, action):
+        parent_admin = admin.site._registry.get(self.parent_model)
+        return bool(parent_admin) and getattr(parent_admin, f"has_{action}_permission")(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._parent_can(request, "view") or self._parent_can(request, "change")
+
+    def has_add_permission(self, request, obj=None):
+        return self._parent_can(request, "change")
+
+    def has_change_permission(self, request, obj=None):
+        return self._parent_can(request, "change")
+
+    def has_delete_permission(self, request, obj=None):
+        return self._parent_can(request, "change")
+
+
+class DepartmentMemberInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = DepartmentMember
     extra = 1
     autocomplete_fields = ("user",)
@@ -128,7 +153,7 @@ class DepartmentMemberInline(admin.TabularInline):
 
 
 @admin.register(Department)
-class DepartmentAdmin(_AdminOnlyMixin, admin.ModelAdmin):
+class DepartmentAdmin(_AdminOrPermissionMixin, admin.ModelAdmin):
     list_display = ("name", "code", "members_preview", "is_active")
     list_filter = ("is_active",)
     search_fields = ("name", "code")
@@ -144,7 +169,7 @@ class DepartmentAdmin(_AdminOnlyMixin, admin.ModelAdmin):
 
 
 @admin.register(Vacation)
-class VacationAdmin(_AdminOnlyMixin, admin.ModelAdmin):
+class VacationAdmin(_AdminOrPermissionMixin, admin.ModelAdmin):
     list_display = (
         "user", "absence_type", "start_date", "end_date",
         "days_display", "reason",
@@ -312,7 +337,7 @@ def _collect_responsible_items(user, limit_per_model=200):
     return items
 
 
-class ApprovalRouteStepInline(admin.TabularInline):
+class ApprovalRouteStepInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     """Шаги маршрута согласования — только по роли, последовательно."""
     model = ApprovalRouteStep
     extra = 1
@@ -324,7 +349,7 @@ class ApprovalRouteStepInline(admin.TabularInline):
         js = ("approvals/js/inline_order.js",)
 
 
-class AckRouteStepInline(admin.StackedInline):
+class AckRouteStepInline(_ChildOfParentPermissionMixin, admin.StackedInline):
     """Шаги маршрута ознакомления — по роли, отделу, всем или руководителям."""
     model = ApprovalRouteStep
     extra = 1
@@ -340,7 +365,7 @@ class AckRouteStepInline(admin.StackedInline):
 
 
 @admin.register(ApprovalRoute)
-class ApprovalRouteAdmin(_AdminOnlyMixin, admin.ModelAdmin):
+class ApprovalRouteAdmin(_AdminOrPermissionMixin, admin.ModelAdmin):
     list_display = ("name", "steps_preview", "is_active")
     list_filter = ("is_active",)
     search_fields = ("name", "description")
@@ -374,7 +399,7 @@ class ApprovalRouteAdmin(_AdminOnlyMixin, admin.ModelAdmin):
 
 
 @admin.register(AcknowledgmentRoute)
-class AcknowledgmentRouteAdmin(_AdminOnlyMixin, admin.ModelAdmin):
+class AcknowledgmentRouteAdmin(_AdminOrPermissionMixin, admin.ModelAdmin):
     list_display = ("name", "steps_preview", "is_active")
     list_filter = ("is_active",)
     search_fields = ("name", "description")
@@ -410,6 +435,7 @@ class AcknowledgmentRouteAdmin(_AdminOnlyMixin, admin.ModelAdmin):
 
 
 class ApprovalTaskInline(admin.TabularInline):
+    """Только просмотр — задачи создаёт/меняет ApprovalEngine, не форма."""
     model = ApprovalTask
     extra = 0
     can_delete = False
@@ -419,6 +445,12 @@ class ApprovalTaskInline(admin.TabularInline):
     )
     readonly_fields = fields
     verbose_name = "Задача"
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
     verbose_name_plural = "История задач"
 
     def has_add_permission(self, request, obj=None):

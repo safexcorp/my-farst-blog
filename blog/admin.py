@@ -109,13 +109,16 @@ from .models import (
     RKDDeveloperAdditionalFile,
     Shipment,
     ShipmentAdditionalFile,
+    GroupComment,
 )
 from .services import WorkAssignmentService
 
+from django.apps import apps as django_apps
 from django.contrib import admin
+from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.forms import UserChangeForm
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, Permission, User
 from shared_repository.models import Department, EmployeeProfile
 
 
@@ -173,6 +176,33 @@ def _universal_rkd_planned_review_show_warning(validity_date, *, days: int) -> b
         d = 0
     today = timezone.now().date()
     return (validity_date - today).days <= d
+
+
+class _ChildOfParentPermissionMixin:
+    """Права на подсущность = права на родителя (self.parent_model): подсущность
+    доступна только «за плюсиком»/ссылкой внутри родителя и не должна иметь
+    собственного отдельного права в списке прав группы/пользователя.
+
+    Для инлайнов self.parent_model Django проставляет автоматически. Для
+    отдельно зарегистрированных ModelAdmin, скрытых из бокового меню, но
+    открываемых по ссылке из родителя, parent_model указывается явно.
+    """
+
+    def _parent_can(self, request, action):
+        parent_admin = admin.site._registry.get(self.parent_model)
+        return bool(parent_admin) and getattr(parent_admin, f"has_{action}_permission")(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._parent_can(request, "view") or self._parent_can(request, "change")
+
+    def has_add_permission(self, request, obj=None):
+        return self._parent_can(request, "change")
+
+    def has_change_permission(self, request, obj=None):
+        return self._parent_can(request, "change")
+
+    def has_delete_permission(self, request, obj=None):
+        return self._parent_can(request, "change")
 
 
 def _file_link_marker(file_field) -> str:
@@ -761,7 +791,7 @@ class UniversalRKDInline(admin.TabularInline):
     )
 
 
-class ShipmentAdditionalFileInline(admin.TabularInline):
+class ShipmentAdditionalFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = ShipmentAdditionalFile
     extra = 1
     fields = ("file",)
@@ -785,7 +815,7 @@ class ShipmentInline(admin.TabularInline):
     autocomplete_fields = ("buyer", "recipient", "manufacturer_org", "supplier_org")
 
 
-class ProductGroupDocumentInline(admin.TabularInline):
+class ProductGroupDocumentInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = ProductGroupDocument
     extra = 0
     fields = ("title", "kind", "file", "note")
@@ -1314,7 +1344,7 @@ except admin.sites.NotRegistered:
 admin.site.register(Post, PostAdmin)
 
 
-class RKDDeveloperAdditionalFileInline(admin.TabularInline):
+class RKDDeveloperAdditionalFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = RKDDeveloperAdditionalFile
     extra = 1
     fields = ("file",)
@@ -1399,7 +1429,7 @@ def _rkd_docs_section_header(title: str):
     )
 
 
-class UniversalRKDSignatureInline(admin.TabularInline):
+class UniversalRKDSignatureInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = UniversalRKDSignature
     extra = 0
     fields = ("role", "signed_by", "signature_file", "signed_at")
@@ -2523,6 +2553,9 @@ class ProductAdmin(admin.ModelAdmin):
     list_filter = ('name_of_product',)
     search_fields = ('name_of_product', 'description')
 
+    def has_module_permission(self, request):
+        return False
+
 
 class Deal_stageAdmin(admin.ModelAdmin):
     list_display = ('deal', 'start_date_step', 'status')
@@ -3155,7 +3188,10 @@ class Company_branchAdmin(admin.ModelAdmin):
     list_filter = (RevenueRangeFilter,)
     search_fields = ('name_of_company', 'address')  # Поиск по этим полям
 
-class MeetingFileInline(admin.TabularInline):
+    def has_module_permission(self, request):
+        return False
+
+class MeetingFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = MeetingFile
     extra = 1
     fields = ['file', 'description', 'uploaded_at']
@@ -3253,7 +3289,7 @@ class MeetingAdmin(admin.ModelAdmin):
 
 
 # Inline для комментариев
-class TicketCommentInline(admin.TabularInline):
+class TicketCommentInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = TicketComment
     form = TicketCommentForm
     extra = 1
@@ -3365,6 +3401,9 @@ class TicketCommentAdmin(admin.ModelAdmin):
     search_fields = ['text', 'ticket__id', 'author__username']
     readonly_fields = ['created_date']
 
+    def has_module_permission(self, request):
+        return False
+
     def truncated_text(self, obj):
         return obj.text[:100] + '...' if len(obj.text) > 100 else obj.text
 
@@ -3386,27 +3425,27 @@ admin.site.register(Call, CallAdmin)
 
 
 # EAM (СИСТЕМА УПРАВЛЕНИЕ АКТИВАМИ)
-class WorkEquipmentFileInline(admin.TabularInline):
+class WorkEquipmentFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = WorkEquipmentFile
     extra = 0
     fields = ("title", "file", "note")
     verbose_name_plural = "Сопроводительные документы"
 
-class TransportVehicleFileInline(admin.TabularInline):
+class TransportVehicleFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = TransportVehicleFile
     extra = 1
 
-class ProductionAreaFileInline(admin.TabularInline):
+class ProductionAreaFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = ProductionAreaFile
     extra = 1
 
-class WorkEquipmentRepairFileInline(admin.TabularInline):
+class WorkEquipmentRepairFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = WorkEquipmentRepairFile
     extra = 1
     verbose_name_plural = "Документы, чеки"
 
 
-class WorkEquipmentRepairInline(admin.StackedInline):
+class WorkEquipmentRepairInline(_ChildOfParentPermissionMixin, admin.StackedInline):
     model = WorkEquipmentRepair
     extra = 0
     show_change_link = True
@@ -3424,7 +3463,7 @@ class WorkEquipmentRepairInline(admin.StackedInline):
         return super().get_queryset(request).select_related("work_equipment")
 
 
-class TransportRepairFileInline(admin.TabularInline):
+class TransportRepairFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = TransportRepairFile
     extra = 1
 
@@ -3661,7 +3700,8 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
 
 # Ремонты / ТО рабочего оборудования
 @admin.register(WorkEquipmentRepair)
-class WorkEquipmentRepairAdmin(admin.ModelAdmin):
+class WorkEquipmentRepairAdmin(_ChildOfParentPermissionMixin, admin.ModelAdmin):
+    parent_model = WorkEquipment
 
     list_display = (
         "work_equipment",
@@ -3829,7 +3869,8 @@ class TransportVehicleAdmin(admin.ModelAdmin):
 
 #ремонтТС
 @admin.register(TransportRepair)
-class TransportRepairAdmin(admin.ModelAdmin):
+class TransportRepairAdmin(_ChildOfParentPermissionMixin, admin.ModelAdmin):
+    parent_model = TransportVehicle
 
     list_display = (
         "transport_vehicle",
@@ -3882,7 +3923,8 @@ class TransportRepairAdmin(admin.ModelAdmin):
 
 # ПроизводственныеПлощадки
 @admin.register(ProductionAreaLocation)
-class ProductionAreaLocationAdmin(admin.ModelAdmin):
+class ProductionAreaLocationAdmin(_ChildOfParentPermissionMixin, admin.ModelAdmin):
+    parent_model = ProductionArea
     search_fields = ("name",)
     list_display = ("name",)
 
@@ -4044,7 +4086,7 @@ class RevisionTaskAdmin(admin.ModelAdmin):
     autocomplete_fields = ['post']
 
 
-class DeadlineChangeInline(admin.TabularInline):
+class DeadlineChangeInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = WorkAssignmentDeadlineChange
     extra = 0
     can_delete = False
@@ -4064,7 +4106,7 @@ class DeadlineChangeInline(admin.TabularInline):
         return initial
 
 
-class WorkAssignmentSubtaskInline(admin.TabularInline):
+class WorkAssignmentSubtaskInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = WorkAssignmentSubtask
     extra = 0
     can_delete = True
@@ -5374,7 +5416,7 @@ class ProcessAdmin(admin.ModelAdmin):
         return False
 
 
-class RouteProcessInline(admin.TabularInline):
+class RouteProcessInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = RouteProcess
     extra = 0
     autocomplete_fields = ("process",)
@@ -5589,9 +5631,12 @@ class CheckDocumentWorkflowAdmin(admin.ModelAdmin):
     class AttachmentAdmin(admin.ModelAdmin):
         list_display = ('id', 'file')
 
+        def has_module_permission(self, request):
+            return False
+
 #admin.site.register(SharedRepository, SoftwareProductAdmin)
 
-class IndependentDocumentAcceptSignatureInline(admin.TabularInline):
+class IndependentDocumentAcceptSignatureInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     """Inline для множественных подписей ознакомления"""
     model = IndependentDocumentAcceptSignature
     extra = 1
@@ -6015,7 +6060,7 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     #search_fields = ['document__document_title']
 
 
-class KnowledgeBaseFileInline(admin.TabularInline):
+class KnowledgeBaseFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     """Inline для множественных файлов"""
     model = KnowledgeBaseFile
     extra = 1
@@ -6248,7 +6293,7 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
     #readonly_fields = ['uploaded_at']
 
 
-class QMSDocumentAcceptSignatureInline(admin.TabularInline):
+class QMSDocumentAcceptSignatureInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     """Inline для множественных подписей ознакомления"""
     model = QMSDocumentAcceptSignature
     extra = 1
@@ -6611,7 +6656,7 @@ class QMSDocumentAdmin(admin.ModelAdmin):
     #readonly_fields = ['uploaded_at']
 
       #Приказы
-class AdministrativeOrderAcceptSignatureInline(admin.TabularInline):
+class AdministrativeOrderAcceptSignatureInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     """Inline для множественных подписей ознакомления приказов"""
     model = AdministrativeOrderAcceptSignature
     extra = 1
@@ -6854,7 +6899,7 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
     def display_lu_lo_sheets(self, obj):
         return _admin_lu_lo_sheets_column_html(obj)
 
-class DocumentTemplateAcceptSignatureInline(admin.TabularInline):
+class DocumentTemplateAcceptSignatureInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     """Inline для множественных подписей ознакомления шаблонов"""
     model = DocumentTemplateAcceptSignature
     extra = 1
@@ -7040,7 +7085,7 @@ from blog.utils import generate_pdf_logic
 
 
 #ПСИ СПМ ИБП
-class GeneratedDocumentInline(admin.TabularInline):
+class GeneratedDocumentInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     """Inline для отображения сгенерированных PDF внутри протокола"""
     model = GeneratedDocument
     extra = 0
@@ -7063,7 +7108,7 @@ class GeneratedDocumentInline(admin.TabularInline):
     file_link.short_description = "Ссылка"
 
 
-class DocumentHistoryInline(admin.TabularInline):
+class DocumentHistoryInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     """Inline для отображения истории изменений протокола"""
     model = DocumentHistory
     extra = 0
@@ -7777,9 +7822,10 @@ class UserWithProfileForm(UserChangeForm):
 
 
 @admin.register(Department)
-class DepartmentAdmin(admin.ModelAdmin):
+class DepartmentAdmin(_ChildOfParentPermissionMixin, admin.ModelAdmin):
     """Справочник отделов. Скрыт из бокового меню — заполняется через «плюсик»
-    в карточке пользователя (поле «Отдел»)."""
+    в карточке пользователя (поле «Отдел»). Права = права на пользователя."""
+    parent_model = User
     list_display = ('name', 'is_active')
     search_fields = ('name',)
 
@@ -7787,10 +7833,234 @@ class DepartmentAdmin(admin.ModelAdmin):
         return {}
 
 
+# ============================================================================
+#  Виджет прав (форма группы/пользователя): вместо плоского списка всех
+#  Django-прав по всем моделям — группировка по блокам левого бара (те же
+#  AppConfig.verbose_name, что и в сайдбаре) и скрытие прав на:
+#   - служебные модели Django (contenttypes/sessions/admin/auth.permission) —
+#     они ни на что не влияют, для них нет ни одной страницы в админке;
+#   - мёртвые легаси-модели (закомментированные регистрации, заменены
+#     TechnicalProposal/подсистемой согласований);
+#   - подсущности, схлопнутые в родителя через _ChildOfParentPermissionMixin —
+#     у них больше нет своего отдельного права, доступ даёт право родителя.
+#  auth.user/auth.group — реальный, используемый блок, но не входит в 5
+#  приложений левого бара, поэтому уходит отдельным блоком в конец списка.
+# ============================================================================
+_PERMISSION_APP_ORDER = [
+    "blog", "crm", "enterprise_asset_management", "shared_repository", "approvals",
+]
+
+_HIDDEN_PERMISSION_MODELS = {
+    # схлопнуто в родителя (_ChildOfParentPermissionMixin) — своего права не нужно
+    ("crm", "ticketcomment"),
+    ("crm", "meetingfile"),
+    ("blog", "productgroupdocument"),
+    ("blog", "rkddeveloperadditionalfile"),
+    ("blog", "shipmentadditionalfile"),
+    ("blog", "universalrkdsignature"),
+    ("blog", "workassignmentsubtask"),
+    ("blog", "workassignmentdeadlinechange"),
+    ("blog", "routeprocess"),
+    ("blog", "generateddocument"),
+    ("blog", "documenthistory"),
+    ("blog", "pakgenerateddocument"),
+    ("blog", "pakdocumenthistory"),
+    ("enterprise_asset_management", "workequipmentfile"),
+    ("enterprise_asset_management", "workequipmentrepair"),
+    ("enterprise_asset_management", "workequipmentrepairfile"),
+    ("enterprise_asset_management", "transportvehiclefile"),
+    ("enterprise_asset_management", "transportrepair"),
+    ("enterprise_asset_management", "transportrepairfile"),
+    ("enterprise_asset_management", "productionareafile"),
+    ("shared_repository", "independentdocumentacceptsignature"),
+    ("shared_repository", "knowledgebasefile"),
+    ("shared_repository", "qmsdocumentacceptsignature"),
+    ("shared_repository", "administrativeorderacceptsignature"),
+    ("shared_repository", "documenttemplateacceptsignature"),
+    ("shared_repository", "department"),
+    ("approvals", "departmentmember"),
+    ("approvals", "approvalroutestep"),
+    ("approvals", "approvaltask"),  # доступ жёстко завязан на назначение/группу, право инертно
+    # нет ни одной живой ссылки вообще (ни отдельной страницы, ни инлайна)
+    ("blog", "attachment"),
+    # мёртвые легаси-модели, регистрация закомментирована, заменены TechnicalProposal
+    ("blog", "addreporttechnicalproposal"),
+    ("blog", "drawingpartproduct"),
+    ("blog", "drawingpartunit"),
+    ("blog", "electronicmodelpartproduct"),
+    ("blog", "electronicmodelpartunit"),
+    ("blog", "electronicmodelproduct"),
+    ("blog", "electronicmodelunit"),
+    ("blog", "generaldrawingproduct"),
+    ("blog", "generaldrawingunit"),
+    ("blog", "generalelectricaldiagram"),
+    ("blog", "listtechnicalproposal"),
+    ("blog", "protocoltechnicalproposal"),
+    ("blog", "reporttechnicalproposal"),
+    ("blog", "softwareproduct"),
+    ("crm", "call"),
+    ("crm", "notifications"),  # голая регистрация, ни одной ссылки в коде кроме неё самой
+    # ContentType без модели вообще (класс переименован/удалён, право осталось
+    # висеть в auth_permission) — model_class() возвращает None, поэтому и
+    # показывались нечитаемые английские ярлыки вида "technicalproposal".
+    ("blog", "drawingunit"),
+    ("blog", "generalelectricalcircuit"),
+    ("blog", "okrtask"),
+    ("blog", "productsoftware"),
+    ("blog", "reworktask"),
+    ("blog", "shipmentsupplier"),
+    ("blog", "technicalassignment"),
+    ("blog", "technicalproposal"),
+    ("blog", "techtask"),
+    ("blog", "template"),
+    ("blog", "workplan"),
+    ("crm", "knowledgebasearticle"),
+    ("crm", "letter"),
+    ("enterprise_asset_management", "infrastructure"),
+    ("shared_repository", "documenthistory"),
+    ("shared_repository", "generateddocument"),
+    ("shared_repository", "psidocument"),
+    # по вашему подтверждению — старые сущности старого workflow, больше не
+    # используются (замещены approvals/TechnicalProposal)
+    ("blog", "approvaldocumentworkflow"),
+    ("blog", "checkdocumentworkflow"),
+    ("blog", "conformityassessment"),
+    ("blog", "patenting"),
+    ("blog", "pilotsample"),
+    ("blog", "prelim_design"),
+    ("blog", "process"),
+    ("blog", "procurement"),
+    ("blog", "production"),
+    ("blog", "productionlaunch"),
+    ("blog", "route"),
+    ("blog", "sales"),
+    ("blog", "service"),
+    ("blog", "technical_design"),
+    ("blog", "workingdocumentation"),
+    ("crm", "company_branch"),
+    # нет ни одной страницы в админке вообще (не зарегистрированы) — строки
+    # листов заполняет ApprovalEngine/сервис подписи, не форма админки
+    ("blog", "universalrkdacknowledgment"),
+    ("approvals", "approvalsheetrecord"),
+    # профиль сотрудника правится только «за плюсиком» в карточке пользователя
+    # (CustomUserAdmin.save_model), отдельной страницы нет; реальный профиль —
+    # в личном кабинете, не в админке
+    ("shared_repository", "employeeprofile"),
+    ("blog", "groupcomment"),  # правится только вместе с группой, своей страницы нет
+    # уведомления — не зарегистрированы в админке, доступ каждому только к
+    # своим (filter recipient=request.user) в approvals/admin.py, без прав
+    ("approvals", "notification"),
+    # схлопнуто в родителя (ProductionArea) — см. _ChildOfParentPermissionMixin
+    ("enterprise_asset_management", "productionarealocation"),
+}
+
+# Точечные orphaned-права по codename (опечатка в старой миграции: "prouct"
+# вместо "product", нигде в коде не встречается — мусор в auth_permission).
+_HIDDEN_PERMISSION_CODENAMES = {
+    "add_prouct", "change_prouct", "delete_prouct", "view_prouct",
+}
+
+
+_PERMISSION_ACTION_LABELS = {
+    "add": "Добавление",
+    "change": "Изменение",
+    "delete": "Удаление",
+    "view": "Просмотр",
+}
+
+
+def _permission_block_label(app_label):
+    if app_label not in _PERMISSION_APP_ORDER:
+        return "Технические (пользователи и группы Django)"
+    try:
+        return str(django_apps.get_app_config(app_label).verbose_name)
+    except LookupError:
+        return app_label
+
+
+def _permission_label(perm):
+    """«Блок — Модель — Действие» вместо родного Django `Can add …` —
+    название модели не прячется в хвосте строки."""
+    block_label = _permission_block_label(perm.content_type.app_label)
+    model_cls = perm.content_type.model_class()
+    model_label = str(model_cls._meta.verbose_name) if model_cls else perm.content_type.model
+    model_label = model_label[:1].upper() + model_label[1:]
+    action = perm.codename.split("_", 1)[0]
+    return f"{block_label} — {model_label} — {_PERMISSION_ACTION_LABELS.get(action, action)}"
+
+
+class _PermissionWidgetMixin:
+    """Общий виджет прав для форм User и Group: прячет служебные/мёртвые/
+    схлопнутые права и группирует оставшиеся по блокам левого бара."""
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        field = super().formfield_for_manytomany(db_field, request, **kwargs)
+        if db_field.name in ("permissions", "user_permissions"):
+            qs = Permission.objects.exclude(
+                content_type__app_label__in=("contenttypes", "sessions", "admin"),
+            ).exclude(
+                content_type__app_label="auth", content_type__model="permission",
+            )
+            for app_label, model_name in _HIDDEN_PERMISSION_MODELS:
+                qs = qs.exclude(content_type__app_label=app_label, content_type__model=model_name)
+            qs = qs.exclude(codename__in=_HIDDEN_PERMISSION_CODENAMES)
+            order = Case(
+                *[When(content_type__app_label=a, then=i) for i, a in enumerate(_PERMISSION_APP_ORDER)],
+                default=len(_PERMISSION_APP_ORDER),
+                output_field=IntegerField(),
+            )
+            field.queryset = qs.select_related("content_type").annotate(_block=order).order_by(
+                "_block", "content_type__model", "codename",
+            )
+            field.label_from_instance = _permission_label
+        return field
+
+
+class GroupAdminForm(forms.ModelForm):
+    comment = forms.CharField(
+        label="Комментарий",
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 2}),
+    )
+
+    class Meta:
+        model = Group
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:
+            gc = GroupComment.objects.filter(group=self.instance).first()
+            if gc:
+                self.fields["comment"].initial = gc.comment
+
+
+admin.site.unregister(Group)
+
+@admin.register(Group)
+class CustomGroupAdmin(_PermissionWidgetMixin, BaseGroupAdmin):
+    form = GroupAdminForm
+    list_display = ("name", "comment_display")
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("comment_obj")
+
+    @admin.display(description="Комментарий")
+    def comment_display(self, obj):
+        gc = getattr(obj, "comment_obj", None)
+        return (gc.comment if gc else "") or "—"
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        GroupComment.objects.update_or_create(
+            group=obj, defaults={"comment": form.cleaned_data.get("comment", "")},
+        )
+
+
 admin.site.unregister(User)
 
 @admin.register(User)
-class CustomUserAdmin(BaseUserAdmin):
+class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
     form = UserWithProfileForm
 
     _PROFILE_FIELDS = (
@@ -7903,7 +8173,7 @@ class CustomUserAdmin(BaseUserAdmin):
 from .utils import generate_pak_pdf_logic
 
 
-class PAKGeneratedDocumentInline(admin.TabularInline):
+class PAKGeneratedDocumentInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = PAKGeneratedDocument
     extra = 0
     can_delete = False
@@ -7925,7 +8195,7 @@ class PAKGeneratedDocumentInline(admin.TabularInline):
     file_link.short_description = "Ссылка"
 
 
-class PAKDocumentHistoryInline(admin.TabularInline):
+class PAKDocumentHistoryInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     model = PAKDocumentHistory
     extra = 0
     can_delete = False
@@ -8177,4 +8447,5 @@ _hide_from_admin_index(
     WorkAssignmentDeadlineChange,
     CheckDocumentWorkflow,
     ApprovalDocumentWorkflow,
+    Notifications,
 )

@@ -3,6 +3,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.core.validators import FileExtensionValidator, RegexValidator
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Max
@@ -3559,3 +3560,20 @@ class PAKDocumentHistory(models.Model):
         verbose_name = 'История протокола ПАК СПМ'
         verbose_name_plural = 'История протоколов ПАК СПМ'
         ordering = ['-timestamp']
+
+
+class GroupComment(models.Model):
+    """Комментарий к группе прав — для чего она нужна, чтобы не гадать по названию."""
+
+    group = models.OneToOneField(
+        Group, on_delete=models.CASCADE, related_name='comment_obj',
+        verbose_name='Группа',
+    )
+    comment = models.TextField('Комментарий', blank=True, default='')
+
+    class Meta:
+        verbose_name = 'Комментарий к группе'
+        verbose_name_plural = 'Комментарии к группам'
+
+    def __str__(self):
+        return self.comment[:50] if self.comment else f'Комментарий к группе «{self.group.name}»'
