@@ -3673,9 +3673,9 @@ class SchurDocument(models.Model):
     )
 
     remark = models.TextField('Комментарий', blank=True)
-    temperature = models.CharField('Температура', choices=TEMPERATURE_CHOICES, max_length=50, default='нет данных')
-    humidity = models.CharField('Влажность', choices=HUMIDITY_CHOICES, max_length=50, default='нет данных')
-    pressure = models.CharField('Давление', choices=PRESSURE_CHOICES, max_length=50, default='нет данных')
+    temperature = models.CharField('Температура', choices=TEMPERATURE_CHOICES, max_length=50, default='Норма (15 °С ... 35 °С)')
+    humidity = models.CharField('Влажность', choices=HUMIDITY_CHOICES, max_length=50, default='Норма (30 % ... 60 %)')
+    pressure = models.CharField('Давление', choices=PRESSURE_CHOICES, max_length=50, default='Норма (84 кПа ... 106,7 кПа)')
 
     created_at = models.DateTimeField('Создан', auto_now_add=True)
 
