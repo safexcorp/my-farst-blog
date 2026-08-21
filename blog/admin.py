@@ -2119,32 +2119,22 @@ class ShipmentAdmin(admin.ModelAdmin):
     def shipment_post_column(self, obj):
         return obj.post or "—"
 
-    @admin.display(description="Заключение")
+    @admin.display(description="Заключение ПСИ")
     def psi_conclusion_status(self, obj):
         """Итоговое заключение по протоколу ПСИ для этого изделия.
         готов / не готов — по заключению протокола (у которого есть готовый PDF);
-        нет ПСИ (синим) — если протокол ПСИ на изделие ещё не заведён;
-        — (прочерк) — протокол есть, но готовый PDF ещё не сформирован."""
+        — (прочерк) — если готовый PDF на изделие ещё не сформирован."""
         doc = (
                 PSIDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
                 or PAKDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
                 or SchurDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
         )
-        if doc:
-            if doc.conclusion == 'готов к отгрузке':
-                return format_html('<b style="color:#28a745;">готов</b>')
-            if doc.conclusion == 'не готов':
-                return format_html('<b style="color:#dc3545;">не готов</b>')
+        if not doc:
             return "—"
-        # Готового протокола (с PDF) нет. Если ПСИ вообще не заведён на это изделие —
-        # подсвечиваем синим, чтобы сразу видеть, на что ещё нужен ПСИ.
-        has_any_psi = (
-            PSIDocument.objects.filter(shipment=obj).exists()
-            or PAKDocument.objects.filter(shipment=obj).exists()
-            or SchurDocument.objects.filter(shipment=obj).exists()
-        )
-        if not has_any_psi:
-            return format_html('<b style="color:#0d6efd;">нет ПСИ</b>')
+        if doc.conclusion == 'готов к отгрузке':
+            return format_html('<b style="color:#28a745;">готов</b>')
+        if doc.conclusion == 'не готов':
+            return format_html('<b style="color:#dc3545;">не готов</b>')
         return "—"
 
 
@@ -8252,13 +8242,13 @@ class PAKDocumentForm(forms.ModelForm):
     # Группа разработок, с которой работает эта сущность (лист замечаний 21.07.2026).
     PRODUCT_GROUP_NAME = "ПАК СПМ"
 
-    # Три допустимых варианта для полей проверок (п. 8): «Нет данных» по умолчанию.
+    # Три допустимых варианта для полей проверок (п. 8): «нет данных» по умолчанию.
     # Значения обязаны совпадать с PAKDocument.STATUS_CHOICES, иначе валидация
     # модели отбрасывает их с ошибкой «Выберите корректный вариант».
     CHECK_CHOICES = [
-        ('Нет данных', 'Нет данных'),
-        ('Соответствует', 'Соответствует'),
-        ('Не соответствует', 'Не соответствует'),
+        ('нет данных', 'Нет данных'),
+        ('соответствует', 'Соответствует'),
+        ('не соответствует', 'Не соответствует'),
     ]
     # Обычные поля проверок (кроме п. 4 «check_alarm», у него своя логика с файлом).
     CHECK_FIELDS = (
@@ -8277,8 +8267,8 @@ class PAKDocumentForm(forms.ModelForm):
         if 'check_alarm' in self.fields:
             self.fields['check_alarm'].required = False
             self.fields['check_alarm'].choices = [
-                ('Соответствует', 'Соответствует'),
-                ('Не соответствует', 'Не соответствует'),
+                ('соответствует', 'Соответствует'),
+                ('не соответствует', 'Не соответствует'),
             ]
         if 'alarm_note' in self.fields:
             self.fields['alarm_note'].required = False
@@ -8291,7 +8281,7 @@ class PAKDocumentForm(forms.ModelForm):
                 self.fields[name].required = False
                 self.fields[name].choices = self.CHECK_CHOICES
                 if not (self.instance and self.instance.pk) and not self.initial.get(name):
-                    self.initial[name] = 'Нет данных'
+                    self.initial[name] = 'нет данных'
 
         # --- Обязательные поля (лист замечаний 21.07.2026, п. 1-4) ---
         # На уровне модели поля остаются null/blank, чтобы не ломать старые записи
@@ -8375,8 +8365,8 @@ class PAKDocumentForm(forms.ModelForm):
 
         if not alarm_log_file:
             # если файл с логами не прикреплён — статус п. 4 автоматически "Не соответствует"
-            cleaned_data['check_alarm'] = 'Не соответствует'
-        elif check_alarm == 'Не соответствует' and not (alarm_note and alarm_note.strip()):
+            cleaned_data['check_alarm'] = 'не соответствует'
+        elif check_alarm == 'не соответствует' and not (alarm_note and alarm_note.strip()):
             # Файл прикреплён, выбрано "Не соответствует" — примечание обязательно
             self.add_error(
                 'alarm_note',
@@ -8720,13 +8710,13 @@ class SchurDocumentForm(forms.ModelForm):
     # Группа разработок, с которой работает эта сущность.
     PRODUCT_GROUP_NAME = "ЩИТ УЧЕТА РАСПРЕДЕЛИТЕЛЬНЫЙ"
 
-    # Три допустимых варианта для полей проверок, «Нет данных» по умолчанию.
+    # Три допустимых варианта для полей проверок, «нет данных» по умолчанию.
     # Значения обязаны совпадать с SchurDocument.STATUS_CHOICES, иначе валидация
     # модели отбрасывает их с ошибкой «Выберите корректный вариант».
     CHECK_CHOICES = [
-        ('Нет данных', 'Нет данных'),
-        ('Соответствует', 'Соответствует'),
-        ('Не соответствует', 'Не соответствует'),
+        ('нет данных', 'Нет данных'),
+        ('соответствует', 'Соответствует'),
+        ('не соответствует', 'Не соответствует'),
     ]
     CHECK_FIELDS = (
         'check_kd_appearance', 'check_marking', 'check_shock_protection',
@@ -8747,7 +8737,7 @@ class SchurDocumentForm(forms.ModelForm):
                 self.fields[name].required = False
                 self.fields[name].choices = self.CHECK_CHOICES
                 if not (self.instance and self.instance.pk) and not self.initial.get(name):
-                    self.initial[name] = 'Нет данных'
+                    self.initial[name] = 'нет данных'
 
         # --- Обязательные поля ---
         # На уровне модели поля остаются null/blank, чтобы не ломать старые записи;

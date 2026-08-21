@@ -4,3 +4,8 @@ __pycache__
 myvenv
 db.sqlite3
 .DS_Store
+
+# Протоколы ПСИ, которые админка генерирует на лету — в репозитории не нужны.
+media/generated_pdfs/
+media/pak_generated_pdfs/
+media/schur_generated_pdfs/

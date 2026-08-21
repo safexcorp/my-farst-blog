@@ -117,14 +117,19 @@
             break-inside: avoid;
         }
         .sig-table { width: 100%; border-collapse: collapse; }
-        /* vertical-align: top — «Представитель ОТК» встаёт на одну линию
-           с полями ЭЦП / Дата / ФИО. */
-        .sig-table td { text-align: center; padding: 4px 8px; vertical-align: top; }
-        .sig-role {
+        /* «Представитель ОТК» вынесен в верхний ряд, под ним — ЭЦП / Дата / ФИО
+           по центру своих колонок, с отступами по бокам. */
+        .sig-table td { text-align: center; padding: 4px 10px; vertical-align: top; }
+        /* td.sig-role — специфичность выше, чем у «.sig-table td»,
+           иначе выравнивание перебивается на center. */
+        .sig-table td.sig-role {
             text-align: left;
             white-space: nowrap;
-            padding-left: 0;
+            /* 10px — тот же отступ, что у ячеек ниже, чтобы надпись начиналась
+               ровно на левом крае подчёркивания «ЭЦП». */
+            padding-left: 10px;
             padding-right: 12px;
+            padding-bottom: 10px;
         }
         .sig-underline {
             display: block;
@@ -132,6 +137,8 @@
             min-height: 18px;
             font-weight: bold;
         }
+        /* ФИО не переносим на вторую строку, даже если оно длинное. */
+        .sig-underline.sig-name { white-space: nowrap; }
         .sig-caption { font-size: 10pt; font-style: italic; }
     </style>
 </head>
@@ -235,12 +242,12 @@
         <div class="conclusion-text">
             {% if schur.conclusion == 'готов к отгрузке' %}
                 Изделие Щит учета распределительный <strong>{{ model_name }}</strong>
-                Зав. № <strong>{{ serial_number }}</strong>
+                <span style="white-space:nowrap">Зав. № <strong>{{ serial_number }}</strong></span>
                 соответствует требованиям <span style="white-space:nowrap">СИ.40526074.000ТУ</span> и годно для
                 использования по назначению (эксплуатации).
             {% else %}
                 Изделие Щит учета распределительный <strong>{{ model_name }}</strong>
-                Зав. № <strong>{{ serial_number }}</strong>
+                <span style="white-space:nowrap">Зав. № <strong>{{ serial_number }}</strong></span>
                 не соответствует требованиям <span style="white-space:nowrap">СИ.40526074.000ТУ</span> и подлежит
                 возврату на устранение дефектов и доработку.
             {% endif %}
@@ -250,10 +257,12 @@
     <div class="sig-wrap">
         <table class="sig-table">
             <tr>
-                <td class="sig-role" style="width: 26%;">Представитель ОТК</td>
-                <td style="width: 24%;"><span class="sig-underline" style="letter-spacing: 2px;">ЭЦП</span><span class="sig-caption">Подпись</span></td>
-                <td style="width: 24%;"><span class="sig-underline">{{ schur.test_date|date:"d.m.Y" }}</span><span class="sig-caption">Дата</span></td>
-                <td style="width: 26%;"><span class="sig-underline">{{ schur.get_inspector_display }}</span><span class="sig-caption">ФИО</span></td>
+                <td class="sig-role" colspan="3">Представитель ОТК</td>
+            </tr>
+            <tr>
+                <td style="width: 26%;"><span class="sig-underline" style="letter-spacing: 2px;">ЭЦП</span><span class="sig-caption">Подпись</span></td>
+                <td style="width: 26%;"><span class="sig-underline">{{ schur.test_date|date:"d.m.Y" }}</span><span class="sig-caption">Дата</span></td>
+                <td style="width: 48%;"><span class="sig-underline sig-name">{{ schur.get_inspector_display }}</span><span class="sig-caption">ФИО</span></td>
             </tr>
         </table>
     </div>
