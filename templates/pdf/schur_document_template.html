@@ -108,7 +108,18 @@
         table.results tbody { break-inside: auto; }
         table.results th { font-weight: bold; }
         table.results td.name { text-align: left; }
+        /* Колонка «Значение параметра» — самая многословная в протоколе.
+           Более мелкий шрифт и увеличенная ширина (за счёт пустой колонки
+           «Примечание») сокращают высоту таблицы, чтобы протокол уверенно
+           укладывался в две страницы. */
+        table.results td.param-cell { font-size: 10pt; }
         .result-cell { text-align: center; }
+        /* Заключение и подписи — единый блок: подпись не должна уезжать
+           на отдельную страницу без заключения. */
+        .closing-block {
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
         .conclusion-block { margin-top: 18px; }
         .conclusion-text { margin: 8px 0; text-align: justify; }
         .sig-wrap {
@@ -192,51 +203,52 @@
         <thead>
             <tr>
                 <th style="width: 30%;">Наименование проверки<br>по ТУ и ПМ</th>
-                <th style="width: 32%;">Значение параметра (соответствие)</th>
+                <th style="width: 40%;">Значение параметра (соответствие)</th>
                 <th style="width: 20%;">Данные испытания (контроля)</th>
-                <th style="width: 18%;">Примечание</th>
+                <th style="width: 10%;">Примечание</th>
             </tr>
         </thead>
         <tbody>
             <tr>
                 <td class="name">1 Проверка соответствия КД и проверка внешнего вида</td>
-                <td class="name">Состав изделия соответствует КД. Повреждения отсутствуют. Уплотнитель, кабельные вводы и оргстекло установлено плотно. Корпус без дефектов</td>
+                <td class="name param-cell">Состав изделия соответствует КД. Повреждения отсутствуют. Уплотнитель, кабельные вводы и оргстекло установлено плотно. Корпус без дефектов</td>
                 <td class="result-cell">{{ schur.get_check_kd_appearance_display }}</td>
                 <td></td>
             </tr>
             <tr>
                 <td class="name">2 Проверка содержания маркировки</td>
-                <td class="name">Маркировка соответствует КД (утвержденному образцу)</td>
+                <td class="name param-cell">Маркировка соответствует КД (утвержденному образцу)</td>
                 <td class="result-cell">{{ schur.get_check_marking_display }}</td>
                 <td></td>
             </tr>
             <tr>
                 <td class="name">3 Проверка защиты от поражения электрическим током (визуальная)</td>
-                <td class="name">Токоведущие части недоступны. Изоляция защитной оболочки и ограждения целы</td>
+                <td class="name param-cell">Токоведущие части недоступны. Изоляция защитной оболочки и ограждения целы</td>
                 <td class="result-cell">{{ schur.get_check_shock_protection_display }}</td>
                 <td></td>
             </tr>
             <tr>
                 <td class="name">4 Проверка электрических цепей и соединений (визуальная)</td>
-                <td class="name">Соединения соответствуют электрической схеме; проводники уложены правильно; изоляция проводов не повреждена; контактные соединения надежны</td>
+                <td class="name param-cell">Соединения соответствуют электрической схеме; проводники уложены правильно; изоляция проводов не повреждена; контактные соединения надежны</td>
                 <td class="result-cell">{{ schur.get_check_circuits_display }}</td>
                 <td></td>
             </tr>
             <tr>
                 <td class="name">5 Проверка непрерывности электрических цепей</td>
-                <td class="name">Цепи от счетчика до автоматического выключателя, выключателя нагрузки и силовых клемм нейтрали (при их наличии) имеют непрерывность; обрывы соединений отсутствуют</td>
+                <td class="name param-cell">Цепи от счетчика до автоматического выключателя, выключателя нагрузки и силовых клемм нейтрали (при их наличии) имеют непрерывность; обрывы соединений отсутствуют</td>
                 <td class="result-cell">{{ schur.get_check_continuity_display }}</td>
                 <td></td>
             </tr>
             <tr>
                 <td class="name">6 Проверка механического функционирования</td>
-                <td class="name">Выключатели переключаются свободно и фиксируются в положениях «Вкл» и «Откл». Дверца и замок (замки) обеспечивают надежное запирание</td>
+                <td class="name param-cell">Выключатели переключаются свободно и фиксируются в положениях «Вкл» и «Откл». Дверца и замок (замки) обеспечивают надежное запирание</td>
                 <td class="result-cell">{{ schur.get_check_mechanical_display }}</td>
                 <td></td>
             </tr>
         </tbody>
     </table>
-<!-- ЗАКЛЮЧЕНИЕ -->
+<!-- ЗАКЛЮЧЕНИЕ И ПОДПИСИ (единым блоком, чтобы подпись не осталась одна на странице) -->
+    <div class="closing-block">
     <div class="conclusion-block">
         <p style="text-align: center; font-weight: bold;">Заключение</p>
         <div class="conclusion-text">
@@ -265,6 +277,7 @@
                 <td style="width: 48%;"><span class="sig-underline sig-name">{{ schur.get_inspector_display }}</span><span class="sig-caption">ФИО</span></td>
             </tr>
         </table>
+    </div>
     </div>
 
 </body>

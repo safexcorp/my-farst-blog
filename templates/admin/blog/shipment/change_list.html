@@ -15,6 +15,11 @@
 {% block object-tools-items %}
   {% if has_add_permission %}
   <li>
+    <a href="{% url 'admin:blog_shipment_bulk_add' %}" class="addlink">
+      Добавить списком
+    </a>
+  </li>
+  <li>
     {% url cl.opts|admin_urlname:'add' as add_url %}
     <a href="{% add_preserved_filters add_url is_popup to_field %}" class="addlink">
       Добавить изделие к отгрузке

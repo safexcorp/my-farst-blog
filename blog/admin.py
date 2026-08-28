@@ -10,6 +10,8 @@ from django.utils.html import escape, format_html, format_html_join, strip_tags
 from django.template.defaultfilters import linebreaksbr
 from django.utils.safestring import mark_safe
 import re
+from django.core.exceptions import PermissionDenied
+from django.db import IntegrityError, transaction
 from django.db.models import Q, F, Value , TextField, DateField, BooleanField, Case, When, IntegerField
 from django.db.models.functions import Cast
 from functools import reduce
@@ -65,6 +67,7 @@ from .admin_forms import (
     WorkAssignmentSubmitReviewForm,
 )
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
+from .shipment_bulk import ShipmentBulkAddForm
 from .helpers import (
     first_incomplete_step_code,
     next_step_code_after,
@@ -2072,6 +2075,68 @@ class ShipmentAdmin(admin.ModelAdmin):
         if post_id:
             extra_context["shipment_breadcrumb_post"] = Post.objects.filter(pk=post_id).first()
         return super().changelist_view(request, extra_context)
+
+    def get_urls(self):
+        """Страница массового ввода списком — см. blog/shipment_bulk.py."""
+        custom = [
+            path(
+                "bulk-add/",
+                self.admin_site.admin_view(self.bulk_add_view),
+                name="blog_shipment_bulk_add",
+            ),
+        ]
+        return custom + super().get_urls()
+
+    def bulk_add_view(self, request):
+        """Создание пачки изделий по списку «номер SN», как он ведётся в заметке.
+
+        Шаг «Проверить» показывает разбор списка таблицей, шаг «Создать»
+        записывает всё одной транзакцией. Строки с уже занятыми заводскими
+        номерами пропускаются, ошибочные — блокируют создание.
+        """
+        if not self.has_add_permission(request):
+            raise PermissionDenied
+
+        form = ShipmentBulkAddForm(request.POST or None, admin_site=self.admin_site)
+        ready = form.is_bound and form.is_valid()
+
+        if ready and request.POST.get("step") == "create":
+            shipments = form.build_shipments(request.user)
+            skipped = len(form.rows) - len(shipments)
+            try:
+                with transaction.atomic():
+                    Shipment.objects.bulk_create(shipments, batch_size=200)
+                    for shipment in shipments:
+                        self.log_addition(request, shipment, [{"added": {}}])
+            except IntegrityError:
+                self.message_user(
+                    request,
+                    "Ничего не создано: часть заводских номеров уже занята. "
+                    "Проверьте список и повторите.",
+                    messages.ERROR,
+                )
+            else:
+                report = "Создано изделий: {}.".format(len(shipments))
+                if skipped:
+                    report += " Пропущено (уже были заведены): {}.".format(skipped)
+                self.message_user(request, report, messages.SUCCESS)
+                changelist_url = reverse("admin:blog_shipment_changelist")
+                return redirect(
+                    "{}?post__id__exact={}".format(
+                        changelist_url, form.cleaned_data["post"].pk
+                    )
+                )
+
+        context = dict(
+            self.admin_site.each_context(request),
+            title="Добавить изделия списком",
+            opts=self.opts,
+            form=form,
+            rows=form.rows,
+            to_create=len(form.rows_to_create()),
+            ready=ready,
+        )
+        return render(request, "admin/blog/shipment/bulk_add.html", context)
 
     @admin.display(description="Изготовитель", ordering="manufacturer_org__name")
     def manufacturer_column(self, obj):
