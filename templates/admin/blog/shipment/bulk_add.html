@@ -1,0 +1,119 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block extrahead %}{{ block.super }}
+  <script src="{% url 'admin:jsi18n' %}"></script>
+  {{ form.media }}
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; Добавить списком
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .bulk-hint {
+    margin: 0 0 16px; padding: 10px 14px; border-radius: 8px; font-size: 13px;
+    background: rgba(121, 174, 200, .08); border-left: 3px solid #79aec8;
+  }
+  .bulk-hint code { font-size: 13px; }
+  #id_items { width: 100%; max-width: 520px; box-sizing: border-box; font-family: monospace; }
+  table.bulk-preview { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.bulk-preview th, table.bulk-preview td {
+    border: 1px solid var(--hairline-color, #ddd); padding: 5px 9px; text-align: left;
+  }
+  table.bulk-preview th { font-weight: 600; }
+  table.bulk-preview td.bulk-num { text-align: right; width: 44px; color: var(--body-quiet-color, #888); }
+  tr.bulk-row-error td { background: rgba(229, 57, 53, .12); }
+  tr.bulk-row-skip td { background: rgba(255, 160, 0, .12); }
+  .bulk-counts { font-weight: normal; font-size: 13px; }
+</style>
+
+<div class="bulk-hint">
+  Общие поля заполняются один раз на всю пачку, список вставляется из заметки как есть —
+  по одному изделию в строке, <code>номер SN</code>, например <code>910 00885509</code>.
+  Заводской номер и примечание собираются автоматически:
+  <code>910</code> + год из даты изготовления → <code>2009102026</code>,
+  <code>00885509</code> → <code>ПУ - SN:00885509</code>.
+  Сначала «Проверить список», затем «Создать».
+</div>
+
+<form method="post" novalidate>
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+
+  <fieldset class="module aligned">
+    <h2>Общие данные пачки</h2>
+    {% for field in form %}{% if field.name != "items" %}
+    <div class="form-row">
+      {{ field.errors }}
+      <div>
+        <label for="{{ field.id_for_label }}"{% if field.field.required %} class="required"{% endif %}>{{ field.label }}:</label>
+        {{ field }}
+        {% if field.help_text %}<div class="help">{{ field.help_text }}</div>{% endif %}
+      </div>
+    </div>
+    {% endif %}{% endfor %}
+  </fieldset>
+
+  <fieldset class="module aligned">
+    <h2>Список изделий</h2>
+    <div class="form-row">
+      {{ form.items.errors }}
+      <div>
+        <label for="{{ form.items.id_for_label }}" class="required">{{ form.items.label }}:</label>
+        {{ form.items }}
+        <div class="help">{{ form.items.help_text }}</div>
+      </div>
+    </div>
+  </fieldset>
+
+  {% if rows %}
+  <fieldset class="module">
+    <h2>
+      Предпросмотр
+      <span class="bulk-counts">— строк: {{ rows|length }}, будет создано: {{ to_create }}</span>
+    </h2>
+    <table class="bulk-preview">
+      <thead>
+        <tr>
+          <th>Стр.</th>
+          <th>Из списка</th>
+          <th>Заводской номер</th>
+          <th>Примечание</th>
+          <th>Что будет</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="{% if row.error %}bulk-row-error{% elif row.duplicate %}bulk-row-skip{% endif %}">
+          <td class="bulk-num">{{ row.line_no }}</td>
+          <td>{{ row.raw }}</td>
+          <td>{{ row.serial_number|default:"—" }}</td>
+          <td>{{ row.note|default:"—" }}</td>
+          <td>
+            {% if row.error %}Ошибка: {{ row.error }}
+            {% elif row.duplicate %}Пропустим — такой зав. № уже заведён
+            {% else %}Будет создано{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </fieldset>
+  {% endif %}
+
+  <div class="submit-row">
+    <button type="submit" name="step" value="preview" class="button">Проверить список</button>
+    {% if ready and to_create %}
+    <button type="submit" name="step" value="create" class="default">Создать изделия ({{ to_create }})</button>
+    {% endif %}
+    <a href="{% url opts|admin_urlname:'changelist' %}" class="button cancel-link">Отмена</a>
+  </div>
+</form>
+{% endblock %}

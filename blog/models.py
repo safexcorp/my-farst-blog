@@ -3540,6 +3540,18 @@ class PAKDocument(models.Model):
         parts = [p for p in [last, first, patronymic] if p]
         return ' '.join(parts) if parts else user.username
 
+    @property
+    def alarm_log_filename(self):
+        """Имя файла с логами по п. 4 без пути — для колонки «Примечание» в PDF.
+
+        upload_to у поля содержит дату (pak_documents/alarm_logs/%Y/%m/%d/),
+        поэтому обрезать фиксированный префикс фильтром `cut`, как у ИБП, нельзя.
+        """
+        if not self.alarm_log_file:
+            return ''
+        # Storage всегда хранит имя через прямые слеши, независимо от ОС.
+        return self.alarm_log_file.name.rsplit('/', 1)[-1]
+
 
 class PAKGeneratedDocument(models.Model):
     """Сгенерированный PDF протокола ПАК СПМ."""

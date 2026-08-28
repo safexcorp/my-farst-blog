@@ -109,6 +109,15 @@
         table.results th { font-weight: bold; }
         table.results td.name { text-align: left; }
         .result-cell { text-align: center; }
+        /* «Примечание»: имя загруженного файла — длинная неразрывная строка,
+           переносим её по любым символам, чтобы не растягивать столбец. */
+        .note-cell { overflow-wrap: anywhere; }
+        /* Заключение и подписи — единый блок: подпись не должна уезжать
+           на отдельную страницу без заключения. */
+        .closing-block {
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
         .conclusion-block { margin-top: 18px; }
         .conclusion-text { margin: 8px 0; text-align: justify; }
         .sig-wrap {
@@ -226,7 +235,7 @@
                 <td class="name">4 Проверка обнаружения и регистрации аварии (1.1.2, 1.1.4 ТУ, 3.4 ПМ)</td>
                 <td>Соответствует ТУ</td>
                 <td class="result-cell">{{ pak.get_check_alarm_display }}</td>
-                <td>{% if not pak.alarm_log_file %}нет данных{% elif pak.check_alarm == 'соответствует' %}Файл с логами от прибора{% else %}{{ pak.alarm_note }}{% endif %}</td>
+                <td class="note-cell">{% if not pak.alarm_log_file %}нет данных{% elif pak.check_alarm == 'соответствует' %}{{ pak.alarm_log_filename }}{% else %}{{ pak.alarm_note }}{% endif %}</td>
             </tr>
             <tr>
                 <td class="name">5 Проверка контроля и передачи статуса батареи (1.1.7 ТУ, 3.5 ПМ)</td>
@@ -248,17 +257,18 @@
             </tr>
         </tbody>
     </table>
-<!-- ЗАКЛЮЧЕНИЕ -->
+<!-- ЗАКЛЮЧЕНИЕ И ПОДПИСИ (единым блоком, чтобы подпись не осталась одна на странице) -->
+    <div class="closing-block">
     <div class="conclusion-block">
         <p style="text-align: center; font-weight: bold;">Заключение</p>
         <div class="conclusion-text">
             {% if pak.conclusion == 'готов к отгрузке' %}
-                Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
+                Изделие Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
                 <span style="white-space:nowrap">Зав. № <strong>{{ serial_number }}</strong></span>
                 соответствует требованиям <span style="white-space:nowrap">СИ.40522001.000ТУ</span> и годно для
                 использования по назначению (эксплуатации).
             {% else %}
-                Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
+                Изделие Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
                 <span style="white-space:nowrap">Зав. № <strong>{{ serial_number }}</strong></span>
                 не соответствует требованиям <span style="white-space:nowrap">СИ.40522001.000ТУ</span> и подлежит
                 возврату на устранение дефектов и доработку.
@@ -277,6 +287,7 @@
                 <td style="width: 48%;"><span class="sig-underline sig-name">{{ pak.get_inspector_display }}</span><span class="sig-caption">ФИО</span></td>
             </tr>
         </table>
+    </div>
     </div>
 
 </body>
