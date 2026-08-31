@@ -955,6 +955,11 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
                 name="approvals_user_profile",
             ),
             path(
+                "cabinet/contact/<int:pk>/delete/",
+                self.admin_site.admin_view(self.my_contact_delete_view),
+                name="approvals_my_contact_delete",
+            ),
+            path(
                 "cabinet/notifications/read-all/",
                 self.admin_site.admin_view(self.notifications_read_all_view),
                 name="approvals_notification_read_all",
@@ -1229,7 +1234,7 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
         return JsonResponse({"ok": True})
 
     def my_profile_save_view(self, request):
-        from shared_repository.models import EmployeeProfile
+        from shared_repository.models import ContactEntry, EmployeeProfile
 
         if request.method != "POST":
             return redirect(f"{reverse('admin:approvals_cabinet')}?tab=profile")
@@ -1252,9 +1257,31 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             elif avatar:
                 profile.avatar = avatar
             profile.save()
+
+            if form.cleaned_data.get("new_phone_value"):
+                ContactEntry.objects.create(
+                    profile=profile, kind=ContactEntry.KIND_PHONE,
+                    value=form.cleaned_data["new_phone_value"],
+                    note=form.cleaned_data.get("new_phone_note", ""),
+                )
+            if form.cleaned_data.get("new_email_value"):
+                ContactEntry.objects.create(
+                    profile=profile, kind=ContactEntry.KIND_EMAIL,
+                    value=form.cleaned_data["new_email_value"],
+                    note=form.cleaned_data.get("new_email_note", ""),
+                )
             messages.success(request, "Профиль обновлён.")
         else:
             messages.error(request, "Не удалось сохранить профиль: проверьте поля формы.")
+        return redirect(f"{reverse('admin:approvals_cabinet')}?tab=profile")
+
+    def my_contact_delete_view(self, request, pk):
+        from shared_repository.models import ContactEntry
+
+        if request.method != "POST":
+            return redirect(f"{reverse('admin:approvals_cabinet')}?tab=profile")
+
+        ContactEntry.objects.filter(pk=pk, profile__user=request.user).delete()
         return redirect(f"{reverse('admin:approvals_cabinet')}?tab=profile")
 
     def user_profile_view(self, request, user_id):

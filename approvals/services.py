@@ -152,6 +152,7 @@ def _resolve_step_users(step, on_date=None):
     - Весь отдел / Все / Руководители: рассылка всем сразу (для ознакомления).
     """
     from .models import ApprovalRouteStep
+    from shared_repository.models import EmployeeProfile
 
     on_date = on_date or timezone.localdate()
     User = get_user_model()
@@ -161,7 +162,7 @@ def _resolve_step_users(step, on_date=None):
 
     if step.target_type == ApprovalRouteStep.TARGET_HEADS:
         return list(
-            User.objects.filter(is_active=True, profile__is_head=True)
+            User.objects.filter(is_active=True, profile__org_level=EmployeeProfile.ORG_LEVEL_LINE_MANAGER)
             .order_by("last_name", "username")
         )
 

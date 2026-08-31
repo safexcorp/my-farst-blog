@@ -60,7 +60,6 @@ class SharedRepository(models.Model):
         verbose_name='Утвердил',
         blank=True,
         null=True,
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 5. Подпись
@@ -103,14 +102,12 @@ class SharedRepository(models.Model):
         on_delete=models.PROTECT,
         related_name='authored_shared_repository',
         verbose_name='Создатель (автор)',
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 10. Дата и время создания
     date_of_creation = models.DateTimeField(
         verbose_name='Дата и время создания',
         default=timezone.now,
-        help_text='Формат: YYYY-MM-DD HH:MI:SS'
     )
 
     # 11. Последний редактор
@@ -119,14 +116,12 @@ class SharedRepository(models.Model):
         on_delete=models.PROTECT,
         related_name='last_edited_shared_repository',
         verbose_name='Последний редактор',
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 12. Дата и время последнего изменения
     date_of_change = models.DateTimeField(
         verbose_name='Дата и время последнего изменения',
         auto_now=True,
-        help_text='Формат: YYYY-MM-DD HH:MI:SS'
     )
 
     # 13. Текущий ответственный
@@ -135,7 +130,6 @@ class SharedRepository(models.Model):
         on_delete=models.PROTECT,
         related_name='responsible_shared_repository',
         verbose_name='Текущий ответственный',
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 14. Версия
@@ -143,7 +137,6 @@ class SharedRepository(models.Model):
         max_length=3,
         verbose_name='Версия',
         default='1',
-        help_text='Цифры, 3 символа max. Значение по умолчанию: 1'
     )
 
     # 15. Загружаемый файл
@@ -595,14 +588,12 @@ class QMSDocument(models.Model):
         on_delete=models.PROTECT,
         related_name='created_qms_documents',
         verbose_name='Создатель (автор)',
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 10. Дата и время создания
     date_of_creation = models.DateTimeField(
         verbose_name='Дата и время создания',
         default=timezone.now,
-        help_text='YYYY-MM-DD HH:MI:SS'
     )
 
     # 11. Последний редактор
@@ -611,14 +602,12 @@ class QMSDocument(models.Model):
         on_delete=models.PROTECT,
         related_name='edited_qms_documents',
         verbose_name='Последний редактор',
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 12. Дата и время последнего изменения
     date_of_change = models.DateTimeField(
         verbose_name='Дата и время последнего изменения',
         auto_now=True,
-        help_text='YYYY-MM-DD HH:MI:SS'
     )
 
     # 13. Текущий ответственный
@@ -627,7 +616,6 @@ class QMSDocument(models.Model):
         on_delete=models.PROTECT,
         related_name='responsible_qms_documents',
         verbose_name='Текущий ответственный',
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 14. Версия
@@ -635,7 +623,6 @@ class QMSDocument(models.Model):
         max_length=3,
         verbose_name='Версия',
         default='1',
-        help_text='Цифры, 3 символа max. Значение по умолчанию: 1'
     )
 
     # 15. Загружаемый файл (основной документ)
@@ -677,7 +664,7 @@ class QMSDocument(models.Model):
         verbose_name='Дата планового пересмотра',
         blank=True,
         null=True,
-        help_text='YYYY-MM-DD. За 60 дней до этой даты появится предупреждение'
+        help_text='За 60 дней до этой даты появится предупреждение'
     )
 
     # 18. Связанные документы
@@ -1224,6 +1211,15 @@ class Department(models.Model):
 
 
 class EmployeeProfile(models.Model):
+    ORG_LEVEL_TOP_MANAGER = 'top_manager'
+    ORG_LEVEL_LINE_MANAGER = 'line_manager'
+    ORG_LEVEL_EXECUTOR = 'executor'
+    ORG_LEVEL_CHOICES = [
+        (ORG_LEVEL_TOP_MANAGER, 'Топ-менеджер'),
+        (ORG_LEVEL_LINE_MANAGER, 'Линейный менеджер'),
+        (ORG_LEVEL_EXECUTOR, 'Исполнитель'),
+    ]
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -1248,7 +1244,12 @@ class EmployeeProfile(models.Model):
         related_name='employees',
         verbose_name='Структурное подразделение (Отдел)',
     )
-    is_head = models.BooleanField('Руководитель отдела', default=False)
+    org_level = models.CharField(
+        'Уровень в структуре организации',
+        max_length=20,
+        choices=ORG_LEVEL_CHOICES,
+        default=ORG_LEVEL_EXECUTOR,
+    )
     position = models.CharField('Должность', max_length=100, blank=True)
     supervisor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -1269,5 +1270,39 @@ class EmployeeProfile(models.Model):
         parts = [p for p in [self.user.last_name, self.user.first_name, self.patronymic] if p]
         return ' '.join(parts) if parts else self.user.username
 
+    def phones(self):
+        return self.contacts.filter(kind=ContactEntry.KIND_PHONE)
+
+    def emails(self):
+        return self.contacts.filter(kind=ContactEntry.KIND_EMAIL)
+
     def __str__(self):
         return f"Профиль: {self.full_name()}"
+
+
+class ContactEntry(models.Model):
+    """Дополнительный телефон или email сотрудника (сверх основных полей профиля)."""
+    KIND_PHONE = 'phone'
+    KIND_EMAIL = 'email'
+    KIND_CHOICES = [
+        (KIND_PHONE, 'Телефон'),
+        (KIND_EMAIL, 'Email'),
+    ]
+
+    profile = models.ForeignKey(
+        EmployeeProfile,
+        on_delete=models.CASCADE,
+        related_name='contacts',
+        verbose_name='Профиль сотрудника',
+    )
+    kind = models.CharField('Тип', max_length=10, choices=KIND_CHOICES)
+    value = models.CharField('Значение', max_length=254)
+    note = models.CharField('Примечание', max_length=100, blank=True)
+
+    class Meta:
+        verbose_name = 'Доп. контакт сотрудника'
+        verbose_name_plural = 'Доп. контакты сотрудников'
+        ordering = ['kind', 'id']
+
+    def __str__(self):
+        return f"{self.get_kind_display()}: {self.value}"

@@ -6431,7 +6431,7 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         }),
     )
 
-    _NO_RELATED_POPUPS_FIELDS = {'approval', 'related_documents', 'current_responsible'}
+    _NO_RELATED_POPUPS_FIELDS = {'approval', 'related_documents', 'related_sharedrepository', 'current_responsible'}
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
@@ -6674,30 +6674,6 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
     def get_form(self, request, obj=None, **kwargs):
         """Кастомизация формы в админке"""
         form = super().get_form(request, obj, **kwargs)
-
-        # Устанавливаем help_text для полей как в ТЗ
-        help_texts = {
-            'id': 'Уникальное поле',
-            'category': 'Значение по умолчанию "ОД"',
-            'document_title': 'Уникальное поле. Все текстовые символы - 100 символов max',
-            'approval': 'Имя пользователя системы (ссылка на User)',
-            'signature_approval': 'Возможность подгрузить только один файл ЭЦП',
-            'date_approval': 'Текст, до 20 символов. Значение по умолчанию "---"',
-            'accept': 'ЭЦП',
-            'author': 'Имя пользователя системы (ссылка на User)',
-            'date_of_creation': 'Формат: YYYY-MM-DD HH:MI:SS',
-            'last_editor': 'Имя пользователя системы (ссылка на User)',
-            'date_of_change': 'Формат: YYYY-MM-DD HH:MI:SS',
-            'current_responsible': 'Имя пользователя системы (ссылка на User)',
-            'version': 'Цифры, 3 символа max. Значение по умолчанию: 1',
-            'uploaded_file': 'Подгружаем только один файл',
-            'document_purpose': 'Все текстовые символы - 5000 символов max',
-            'note': 'Дополнительные заметки и комментарии',
-        }
-
-        for field_name, help_text in help_texts.items():
-            if field_name in form.base_fields:
-                form.base_fields[field_name].help_text = help_text
 
         cr_field = form.base_fields.get('current_responsible')
         if cr_field is not None:
@@ -8632,7 +8608,11 @@ class UserWithProfileForm(UserChangeForm):
         queryset=Department.objects.all(),
         required=False,
     )
-    is_head = forms.BooleanField(label='Руководитель отдела', required=False)
+    org_level = forms.ChoiceField(
+        label='Уровень в структуре организации',
+        choices=EmployeeProfile.ORG_LEVEL_CHOICES,
+        required=False,
+    )
     position = forms.CharField(label='Должность', max_length=100, required=False)
     supervisor = forms.ModelChoiceField(
         label='Непосредственное подчинение',
@@ -8654,7 +8634,7 @@ class UserWithProfileForm(UserChangeForm):
             self.fields['birth_date'].initial = profile.birth_date
             self.fields['avatar'].initial = profile.avatar
             self.fields['org_department'].initial = profile.org_department_id
-            self.fields['is_head'].initial = profile.is_head
+            self.fields['org_level'].initial = profile.org_level
             self.fields['position'].initial = profile.position
             self.fields['supervisor'].initial = profile.supervisor_id
             self.fields['roles_responsibilities'].initial = profile.roles_responsibilities
@@ -8914,7 +8894,7 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
 
     _PROFILE_FIELDS = (
         'patronymic', 'phone', 'birth_date', 'avatar', 'org_department',
-        'is_head', 'position', 'supervisor', 'roles_responsibilities',
+        'org_level', 'position', 'supervisor', 'roles_responsibilities',
     )
 
     fieldsets = (
@@ -8923,7 +8903,7 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
             'fields': ('first_name', 'last_name', 'patronymic', 'birth_date', 'phone', 'email', 'avatar'),
         }),
         ('Профиль сотрудника', {
-            'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities'),
+            'fields': ('org_department', 'org_level', 'position', 'supervisor', 'roles_responsibilities'),
         }),
         ('Права доступа', {
             'classes': ('collapse',),
@@ -8948,7 +8928,7 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
             elif avatar:
                 profile.avatar = avatar
             profile.org_department = form.cleaned_data.get('org_department')
-            profile.is_head = form.cleaned_data.get('is_head', False)
+            profile.org_level = form.cleaned_data.get('org_level') or EmployeeProfile.ORG_LEVEL_EXECUTOR
             profile.position = form.cleaned_data.get('position', '')
             profile.supervisor = form.cleaned_data.get('supervisor')
             profile.roles_responsibilities = form.cleaned_data.get('roles_responsibilities', '')
@@ -8962,7 +8942,7 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
         'email',
         'get_phone',
         'get_department',
-        'get_is_head',
+        'get_org_level',
         'get_position',
         'get_supervisor',
         'is_active',
@@ -8979,9 +8959,9 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
         name = f"{obj.last_name} {obj.first_name}".strip()
         return name or obj.username
 
-    @admin.display(description='Руководитель', boolean=True, ordering='profile__is_head')
-    def get_is_head(self, obj):
-        return obj.profile.is_head if hasattr(obj, 'profile') else False
+    @admin.display(description='Уровень в структуре организации', ordering='profile__org_level')
+    def get_org_level(self, obj):
+        return obj.profile.get_org_level_display() if hasattr(obj, 'profile') else ''
 
     def get_patronymic(self, obj):
         return obj.profile.patronymic if hasattr(obj, 'profile') else ''
