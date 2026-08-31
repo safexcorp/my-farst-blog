@@ -151,6 +151,17 @@ class DepartmentMemberInline(_ChildOfParentPermissionMixin, admin.TabularInline)
     class Media:
         js = ("approvals/js/inline_order.js",)
 
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == "user":
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
 
 @admin.register(Department)
 class DepartmentAdmin(_AdminOrPermissionMixin, admin.ModelAdmin):
@@ -179,6 +190,17 @@ class VacationAdmin(_AdminOrPermissionMixin, admin.ModelAdmin):
     autocomplete_fields = ("user",)
     date_hierarchy = "start_date"
     fields = ("user", "absence_type", ("start_date", "end_date"), "reason")
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == "user":
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
     @admin.display(description="Дней", ordering="start_date")
     def days_display(self, obj):
@@ -933,6 +955,11 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
                 name="approvals_user_profile",
             ),
             path(
+                "cabinet/contact/<int:pk>/delete/",
+                self.admin_site.admin_view(self.my_contact_delete_view),
+                name="approvals_my_contact_delete",
+            ),
+            path(
                 "cabinet/notifications/read-all/",
                 self.admin_site.admin_view(self.notifications_read_all_view),
                 name="approvals_notification_read_all",
@@ -1207,7 +1234,7 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
         return JsonResponse({"ok": True})
 
     def my_profile_save_view(self, request):
-        from shared_repository.models import EmployeeProfile
+        from shared_repository.models import ContactEntry, EmployeeProfile
 
         if request.method != "POST":
             return redirect(f"{reverse('admin:approvals_cabinet')}?tab=profile")
@@ -1230,9 +1257,31 @@ class ApprovalTaskAdmin(admin.ModelAdmin):
             elif avatar:
                 profile.avatar = avatar
             profile.save()
+
+            if form.cleaned_data.get("new_phone_value"):
+                ContactEntry.objects.create(
+                    profile=profile, kind=ContactEntry.KIND_PHONE,
+                    value=form.cleaned_data["new_phone_value"],
+                    note=form.cleaned_data.get("new_phone_note", ""),
+                )
+            if form.cleaned_data.get("new_email_value"):
+                ContactEntry.objects.create(
+                    profile=profile, kind=ContactEntry.KIND_EMAIL,
+                    value=form.cleaned_data["new_email_value"],
+                    note=form.cleaned_data.get("new_email_note", ""),
+                )
             messages.success(request, "Профиль обновлён.")
         else:
             messages.error(request, "Не удалось сохранить профиль: проверьте поля формы.")
+        return redirect(f"{reverse('admin:approvals_cabinet')}?tab=profile")
+
+    def my_contact_delete_view(self, request, pk):
+        from shared_repository.models import ContactEntry
+
+        if request.method != "POST":
+            return redirect(f"{reverse('admin:approvals_cabinet')}?tab=profile")
+
+        ContactEntry.objects.filter(pk=pk, profile__user=request.user).delete()
         return redirect(f"{reverse('admin:approvals_cabinet')}?tab=profile")
 
     def user_profile_view(self, request, user_id):

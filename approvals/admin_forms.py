@@ -15,9 +15,44 @@ class MyProfileForm(forms.Form):
     last_name = forms.CharField(label="Фамилия", max_length=150, required=False)
     patronymic = forms.CharField(label="Отчество", max_length=100, required=False)
     birth_date = forms.DateField(label="Дата рождения", required=False, widget=AdminDateWidget)
-    phone = forms.CharField(label="Телефон", max_length=20, required=False)
-    email = forms.EmailField(label="Email", required=False)
+    phone = forms.CharField(
+        label="Телефон", max_length=20, required=False,
+        widget=forms.TextInput(attrs={"form": "my-profile-form"}),
+    )
+    email = forms.EmailField(
+        label="Email", required=False,
+        widget=forms.EmailInput(attrs={"form": "my-profile-form"}),
+    )
     avatar = forms.ImageField(label="Фото", required=False)
+
+    new_phone_value = forms.CharField(
+        label="Ещё телефон", max_length=254, required=False,
+        widget=forms.TextInput(attrs={
+            "form": "my-profile-form", "placeholder": "Телефон",
+            "style": "flex:1; min-width:120px;",
+        }),
+    )
+    new_phone_note = forms.CharField(
+        label="Примечание", max_length=100, required=False,
+        widget=forms.TextInput(attrs={
+            "form": "my-profile-form", "placeholder": "Примечание",
+            "style": "flex:1; min-width:120px;",
+        }),
+    )
+    new_email_value = forms.CharField(
+        label="Ещё email", max_length=254, required=False,
+        widget=forms.TextInput(attrs={
+            "form": "my-profile-form", "placeholder": "Email",
+            "style": "flex:1; min-width:120px;",
+        }),
+    )
+    new_email_note = forms.CharField(
+        label="Примечание", max_length=100, required=False,
+        widget=forms.TextInput(attrs={
+            "form": "my-profile-form", "placeholder": "Примечание",
+            "style": "flex:1; min-width:120px;",
+        }),
+    )
 
 
 class StartApprovalForm(forms.Form):

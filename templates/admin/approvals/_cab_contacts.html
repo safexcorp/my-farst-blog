@@ -1,0 +1,25 @@
+{% if entries %}
+<div class="cab-field" style="margin-top:-8px;">
+  {% for c in entries %}
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:5px 10px; margin:4px 0; border-radius:6px; background:rgba(121,174,200,.08); border-left:3px solid #79aec8;">
+    <span style="font-size:13px;">{{ c.value }}{% if c.note %} <span style="color:var(--body-quiet-color,#999); font-size:12px;">- {{ c.note }}</span>{% endif %}</span>
+    <form method="post" action="{% url 'admin:approvals_my_contact_delete' c.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="cab-wa-btn cab-wa-btn--gray" style="padding:0 7px; line-height:18px;" title="Удалить">×</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+<details class="cab-field" style="margin-top:-8px;">
+  <summary style="cursor:pointer; color:#417690; font-size:12px; list-style:none;">{% if kind == "phone" %}+ Добавить ещё телефон{% else %}+ Добавить ещё email{% endif %}</summary>
+  <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
+    {% if kind == "phone" %}
+    {{ my_profile_form.new_phone_value }}
+    {{ my_profile_form.new_phone_note }}
+    {% else %}
+    {{ my_profile_form.new_email_value }}
+    {{ my_profile_form.new_email_note }}
+    {% endif %}
+  </div>
+</details>

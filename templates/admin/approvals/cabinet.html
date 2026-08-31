@@ -539,12 +539,18 @@
         {% if viewed_profile.position %}<div class="subtitle">{{ viewed_profile.position }}</div>{% endif %}
         <div class="meta">
           {% if viewed_profile.org_department %}<span class="pill pill-blue">{{ viewed_profile.org_department }}</span>{% endif %}
-          {% if viewed_profile.is_head %}<span class="pill pill-orange">Руководитель отдела</span>{% endif %}
+          <span class="pill pill-orange">{{ viewed_profile.get_org_level_display }}</span>
         </div>
         <div class="meta">
           {% if profile_user.email %}Email: {{ profile_user.email }}{% endif %}
           {% if viewed_profile.phone %} · Телефон: {{ viewed_profile.phone }}{% endif %}
         </div>
+        {% for c in viewed_profile.phones %}
+        <div class="meta">Телефон: {{ c.value }}{% if c.note %} ({{ c.note }}){% endif %}</div>
+        {% endfor %}
+        {% for c in viewed_profile.emails %}
+        <div class="meta">Email: {{ c.value }}{% if c.note %} ({{ c.note }}){% endif %}</div>
+        {% endfor %}
         {% if viewed_profile.supervisor %}
         <div class="meta">Руководитель: {{ viewed_profile.supervisor.profile.full_name|default:viewed_profile.supervisor.username }}</div>
         {% endif %}
@@ -995,7 +1001,7 @@
 
   <div class="cab-panel" data-panel="profile">
     <div class="cab-card" style="flex-direction:column; align-items:stretch;">
-      <form method="post" action="{% url 'admin:approvals_my_profile_save' %}" enctype="multipart/form-data">
+      <form id="my-profile-form" method="post" action="{% url 'admin:approvals_my_profile_save' %}" enctype="multipart/form-data">
         {% csrf_token %}
         <div class="cab-profile-header">
           {% if my_profile.avatar %}
@@ -1024,21 +1030,25 @@
           <label for="{{ my_profile_form.birth_date.id_for_label }}">{{ my_profile_form.birth_date.label }}</label>
           {{ my_profile_form.birth_date }}
         </div>
+      </form>
+      <div>
         <div class="cab-field">
           <label for="{{ my_profile_form.phone.id_for_label }}">{{ my_profile_form.phone.label }}</label>
           {{ my_profile_form.phone }}
         </div>
+        {% include "admin/approvals/_cab_contacts.html" with kind="phone" entries=my_profile.phones %}
         <div class="cab-field">
           <label for="{{ my_profile_form.email.id_for_label }}">{{ my_profile_form.email.label }}</label>
           {{ my_profile_form.email }}
         </div>
-        <button type="submit" class="cab-wa-btn cab-wa-btn--green">Сохранить</button>
-      </form>
+        {% include "admin/approvals/_cab_contacts.html" with kind="email" entries=my_profile.emails %}
+        <button type="submit" form="my-profile-form" class="cab-wa-btn cab-wa-btn--green">Сохранить</button>
+      </div>
       <div class="cab-profile-readonly">
         <div class="meta">Логин: <strong>{{ request.user.username }}</strong></div>
         <div class="meta">Отдел: <strong>{{ my_profile.org_department|default:"—" }}</strong></div>
         <div class="meta">Должность: <strong>{{ my_profile.position|default:"—" }}</strong></div>
-        {% if my_profile.is_head %}<div class="meta">Руководитель отдела</div>{% endif %}
+        <div class="meta">{{ my_profile.get_org_level_display }}</div>
         {% if my_profile.supervisor %}
         <div class="meta">Руководитель: <strong>{{ my_profile.supervisor.profile.full_name|default:my_profile.supervisor.username }}</strong></div>
         {% endif %}

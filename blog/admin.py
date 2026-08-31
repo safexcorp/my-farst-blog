@@ -108,7 +108,6 @@ from .models import (
     WorkAssignmentDeadlineChange,
     Attachment,
     UniversalRKD,
-    UniversalRKDSignature,
     RKDDeveloper,
     RKDDeveloperAdditionalFile,
     Shipment,
@@ -466,14 +465,13 @@ class TechnicalProposalDocumentAdmin(admin.ModelAdmin):
 
     autocomplete_fields = (
         "post",
-        "author",
-        "last_editor",
-        "current_responsible",
         "checked_by",
         "approved_by",
         "develop_org",
     )
     readonly_fields = (
+        "author",
+        "last_editor",
         "date_of_creation",
         "date_of_change",
         "tp_display_files_list",
@@ -555,7 +553,7 @@ class TechnicalProposalDocumentAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Ответственные",
+            "Системные данные",
             {
                 "fields": (
                     "author",
@@ -696,6 +694,33 @@ class TechnicalProposalDocumentAdmin(admin.ModelAdmin):
         obj.last_editor = request.user
         super().save_model(request, obj, form, change)
 
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _TechnicalProposalDocumentForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get("current_responsible")
+                if cr_field is None:
+                    return
+
+                if not self.is_bound:
+                    current_val = self.initial.get("current_responsible") or getattr(
+                        self.instance, "current_responsible_id", None
+                    )
+                    if not current_val:
+                        self.initial["current_responsible"] = request.user.pk
+
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list("pk", flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _TechnicalProposalDocumentForm
+
     _PDF_FILE_FIELDS = {
         "approval_document",
         "attestation_document",
@@ -704,6 +729,7 @@ class TechnicalProposalDocumentAdmin(admin.ModelAdmin):
         "approval_source",
         "attestation_source",
     }
+    _NO_RELATED_POPUPS_FIELDS = {"checked_by", "approved_by", "current_responsible"}
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
@@ -717,6 +743,13 @@ class TechnicalProposalDocumentAdmin(admin.ModelAdmin):
                 "accept",
                 ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
+        if name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
         return formfield
 
 class ListTechnicalProposalInline(admin.TabularInline):
@@ -732,15 +765,32 @@ class ListTechnicalProposalInline(admin.TabularInline):
 
 class TaskForDesignWorkInline(admin.TabularInline):
     model = TaskForDesignWork
-    extra = 1
+    extra = 0
+    classes = ("collapse",)
+    show_change_link = True
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 class RevisionTaskInline(admin.TabularInline):
     model = RevisionTask
-    extra = 1
+    extra = 0
+    classes = ("collapse",)
+    show_change_link = True
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 class WorkAssignmentInline(admin.TabularInline):
     model = WorkAssignment
     extra = 0
+    classes = ("collapse",)
     readonly_fields = ("wa_code_inline",)
     fields = (
         "wa_code_inline",
@@ -756,34 +806,22 @@ class WorkAssignmentInline(admin.TabularInline):
     )
     show_change_link = True
 
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
     @admin.display(description="Код")
     def wa_code_inline(self, obj):
         return obj.wa_full_code or "—"
-
-    def get_extra_buttons(self, obj):
-        if obj and obj.id:
-            url = reverse("admin:blog_workassignment_add") + f"?post={obj.id}"
-            return format_html(
-                '<a class="button" href="{}">➕ Добавить рабочее задание</a>', url
-            )
-        return ""
-
-    def get_fieldsets(self, request, obj=None):
-        fieldsets = super().get_fieldsets(request, obj)
-        if obj and obj.id:
-            return [
-                (
-                    f"Рабочие задания {self.get_extra_buttons(obj)}",
-                    {"fields": self.fields},
-                )
-            ]
-        return fieldsets
 
 
 class UniversalRKDInline(admin.TabularInline):
     model = UniversalRKD
     form = UniversalRKDForm
     extra = 0
+    classes = ("collapse",)
     show_change_link = True
     fields = (
         "specification_section",
@@ -793,6 +831,12 @@ class UniversalRKDInline(admin.TabularInline):
         "name",
         "status",
     )
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 class ShipmentAdditionalFileInline(_ChildOfParentPermissionMixin, admin.TabularInline):
@@ -1042,23 +1086,22 @@ class PostAdmin(admin.ModelAdmin):
         ("Уровень технической зрелости", {
             "fields": ("litera", "trl"),
         }),
-        ("Версионирование", {
-            "classes": ("collapse",),
-            "fields": ("version", "version_diff_display"),
-        }),
-        ("Системные сведения", {
+        ("Системные данные", {
             "fields": (
                 "author",
-                "date_of_creation",
-                "last_editor",
-                "date_of_change",
                 "current_responsible",
+                "last_editor",
+                "version",
+                "version_diff_display",
+                "date_of_creation",
+                "date_of_change",
             ),
         }),
         ("Изделия к отгрузке", {
+            "classes": ("collapse",),
             "fields": ("shipments_selector",),
         }),
-        ("Дополнительные сведения", {
+        ("Дополнительные сведения (постановка на производство)", {
             "classes": ("collapse",),
             "fields": (
                 "in_production",
@@ -1129,14 +1172,22 @@ class PostAdmin(admin.ModelAdmin):
                     if f is not None:
                         f.required = False
 
-                if not self.is_bound:
-                    cr_field = self.fields.get("current_responsible")
-                    if cr_field is not None:
+                cr_field = self.fields.get("current_responsible")
+                if cr_field is not None:
+                    if not self.is_bound:
                         current_val = self.initial.get("current_responsible") or getattr(
                             self.instance, "current_responsible_id", None
                         )
                         if not current_val:
                             self.initial["current_responsible"] = request.user.pk
+
+                    inactive_pks = set(
+                        cr_field.queryset.filter(is_active=False).values_list("pk", flat=True)
+                    )
+                    old_select = cr_field.widget.widget
+                    new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                    new_select.inactive_pks = inactive_pks
+                    cr_field.widget.widget = new_select
 
                 for org_field_name in ("develop_org", "manufacturer_org_post"):
                     field = self.fields.get(org_field_name)
@@ -1170,12 +1221,21 @@ class PostAdmin(admin.ModelAdmin):
                 formfield.widget,
                 rel,
                 self.admin_site,
-                can_add_related=True,
-                can_change_related=True,
-                can_delete_related=True,
-                can_view_related=True,
+                can_add_related=False,
+                can_change_related=False,
+                can_delete_related=False,
+                can_view_related=False,
             )
             formfield.help_text = ""
+            return formfield
+
+        if db_field.name == "current_responsible":
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
             return formfield
 
         return formfield
@@ -1433,15 +1493,6 @@ def _rkd_docs_section_header(title: str):
     )
 
 
-class UniversalRKDSignatureInline(_ChildOfParentPermissionMixin, admin.TabularInline):
-    model = UniversalRKDSignature
-    extra = 0
-    fields = ("role", "signed_by", "signature_file", "signed_at")
-    autocomplete_fields = ("signed_by",)
-    verbose_name = "Подпись"
-    verbose_name_plural = "Подписание документа"
-
-
 @admin.register(UniversalRKD)
 class UniversalRKDAdmin(admin.ModelAdmin):
     change_form_template = "admin/blog/universal_rkd_category_change_form.html"
@@ -1544,14 +1595,12 @@ class UniversalRKDAdmin(admin.ModelAdmin):
 
     autocomplete_fields = (
         "post",
-        "current_responsible",
         "checked_by",
         "approved_by",
         "develop_org",
         "internal_recipients",
         "external_recipients",
     )
-    inlines = [UniversalRKDSignatureInline]
     readonly_fields = (
         "author",
         "last_editor",
@@ -1947,14 +1996,24 @@ class UniversalRKDAdmin(admin.ModelAdmin):
         class _RKDForm(FormClass):
             def __init__(self, *args, **form_kwargs):
                 super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get("current_responsible")
+                if cr_field is None:
+                    return
+
                 if not self.is_bound:
-                    cr_field = self.fields.get("current_responsible")
-                    if cr_field is not None:
-                        current_val = self.initial.get("current_responsible") or getattr(
-                            self.instance, "current_responsible_id", None
-                        )
-                        if not current_val:
-                            self.initial["current_responsible"] = request.user.pk
+                    current_val = self.initial.get("current_responsible") or getattr(
+                        self.instance, "current_responsible_id", None
+                    )
+                    if not current_val:
+                        self.initial["current_responsible"] = request.user.pk
+
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list("pk", flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
 
         return _RKDForm
 
@@ -1966,6 +2025,11 @@ class UniversalRKDAdmin(admin.ModelAdmin):
     _DOCX_FILE_FIELDS = {
         "approval_source",
         "attestation_source",
+    }
+    _NO_RELATED_POPUPS_FIELDS = {
+        "internal_recipients",
+        "external_recipients",
+        "current_responsible",
     }
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
@@ -1980,6 +2044,13 @@ class UniversalRKDAdmin(admin.ModelAdmin):
                 "accept",
                 ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
+        if name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
         return formfield
 
 
@@ -2021,9 +2092,12 @@ class ShipmentAdmin(admin.ModelAdmin):
         "recipient",
         "manufacturer_org",
         "supplier_org",
+    )
+    readonly_fields = (
         "author",
         "last_editor",
-        "current_responsible",
+        "date_of_creation",
+        "date_of_change",
     )
     fieldsets = (
         (
@@ -2048,18 +2122,78 @@ class ShipmentAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Ответственные",
+            "Системные данные",
             {
                 "fields": (
                     "author",
-                    "last_editor",
                     "current_responsible",
+                    "last_editor",
                     "date_of_creation",
                     "date_of_change",
                 )
             },
         ),
     )
+
+    _NO_RELATED_POPUPS_FIELDS = {
+        "post",
+        "manufacturer_org",
+        "supplier_org",
+        "buyer",
+        "recipient",
+        "current_responsible",
+    }
+
+    _ORG_HELP_TEXT = {
+        "manufacturer_org": (
+            "Чтобы добавить нового изготовителя, используйте раздел "
+            "«Организации-Разработчики/Изготовители/Поставщики»."
+        ),
+        "supplier_org": (
+            "Чтобы добавить нового поставщика, используйте раздел "
+            "«Организации-Разработчики/Изготовители/Поставщики»."
+        ),
+        "buyer": (
+            "Чтобы добавить нового покупателя, используйте раздел "
+            "«Контрагенты»."
+        ),
+        "recipient": (
+            "Чтобы добавить нового грузополучателя, используйте раздел "
+            "«Контрагенты»."
+        ),
+    }
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        if formfield is not None and db_field.name in self._ORG_HELP_TEXT:
+            formfield.help_text = self._ORG_HELP_TEXT[db_field.name]
+        return formfield
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _ShipmentForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get("current_responsible")
+                if cr_field is None:
+                    return
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list("pk", flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _ShipmentForm
 
     def get_queryset(self, request):
         return (
@@ -2165,18 +2299,9 @@ class ShipmentAdmin(admin.ModelAdmin):
             str(obj.recipient),
         )
 
-    def get_readonly_fields(self, request, obj=None):
-        """Создатель фиксируется при первом сохранении; в уже созданной записи только просмотр."""
-        fields = ["date_of_creation", "date_of_change"]
-        if obj is not None:
-            fields.append("author")
-        return fields
-
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
         initial = dict(initial or {})
-        initial["author"] = request.user.pk
-        initial["last_editor"] = request.user.pk
         initial["current_responsible"] = request.user.pk
         return initial
 
@@ -2609,10 +2734,44 @@ class Decision_makerAdmin(admin.ModelAdmin):
 
 
 class DealAdmin(admin.ModelAdmin):
-    list_display = ('customer', 'start_date', 'status', 'deal_amount')
+    list_display = ('customer', 'start_date', 'status', 'deal_amount', 'responsible_manager')
     list_filter = ('customer', 'start_date', 'customer')
     search_fields = ('customer__name_of_company', 'description')
     date_hierarchy = 'start_date'  # Иерархия по дате
+    readonly_fields = ('author', 'last_editor', 'date_of_creation', 'date_of_last_change')
+
+    fieldsets = (
+        (None, {
+            'fields': (
+                'customer', 'post', 'responsible_manager',
+                'start_date', 'date_of_next_activity', 'status',
+                'deal_amount', 'quantity_of_all_product',
+                'description', 'shipping_address',
+            )
+        }),
+        ('Системные данные', {
+            'fields': ('author', 'last_editor', 'date_of_creation', 'date_of_last_change')
+        }),
+    )
+
+    _NO_RELATED_POPUPS_FIELDS = {'responsible_manager', 'post'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def save_model(self, request, obj, form, change):
+        if not change or not obj.author_id:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
 
 
 class ProductAdmin(admin.ModelAdmin):
@@ -2628,6 +2787,62 @@ class Deal_stageAdmin(admin.ModelAdmin):
     list_display = ('deal', 'start_date_step', 'status')
     list_filter = ('status', 'deal')
     search_fields = ('deal__customer__name_of_company', 'description_of_task_at_stage')
+    readonly_fields = ('author', 'last_editor', 'date_of_creation', 'date_of_change')
+
+    fieldsets = (
+        (None, {
+            'fields': (
+                'deal', 'start_date_step', 'end_date_step', 'status',
+                'description_of_task_at_stage',
+                'description_of_what_has_been_achieved_at_a_stage',
+                'description_of_tasks_for_our_specialists',
+                'our_specialists_involved',
+            )
+        }),
+        ('Системные данные', {
+            'fields': ('author', 'current_responsible', 'last_editor', 'date_of_creation', 'date_of_change')
+        }),
+    )
+
+    _NO_RELATED_POPUPS_FIELDS = {'current_responsible', 'our_specialists_involved'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _DealStageForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get('current_responsible')
+                if cr_field is None:
+                    return
+                if not self.is_bound and not self.instance.pk:
+                    self.initial['current_responsible'] = request.user.pk
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list('pk', flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _DealStageForm
+
+    def save_model(self, request, obj, form, change):
+        if not change or not obj.author_id:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
 
 
 #@admin.register(Call)
@@ -2870,7 +3085,7 @@ class IncomingLetterAdmin(admin.ModelAdmin):
     list_filter = ('receipt_method', 'letter_date')
     search_fields = ('sender_identification', 'subject', 'sender__name_of_company')
     date_hierarchy = 'date_of_receipt'
-    readonly_fields = ('date_of_creation', 'date_of_change', 'registration_number_display')
+    readonly_fields = ('author', 'last_editor', 'date_of_creation', 'date_of_change', 'registration_number_display')
     autocomplete_fields = ('sender',)
 
     fieldsets = (
@@ -2889,10 +3104,8 @@ class IncomingLetterAdmin(admin.ModelAdmin):
             )
         }),
         ('Документ', {'fields': ('document_uploaded_file', 'comment')}),
-        ('Ответственные', {'fields': ('current_responsible',)}),
-        ('Версия', {'fields': ('version',)}),
-        ('Системная информация', {
-            'fields': ('date_of_creation', 'date_of_change')
+        ('Системные данные', {
+            'fields': ('author', 'current_responsible', 'last_editor', 'version', 'date_of_creation', 'date_of_change')
         }),
     )
 
@@ -2909,21 +3122,46 @@ class IncomingLetterAdmin(admin.ModelAdmin):
                 except ValueError:
                     fields.append("confirm_registration_recalc")
             fieldsets[0] = (first[0], {**first[1], "fields": tuple(fields)})
-            return (
-                fieldsets[0],
-                fieldsets[1],
-                fieldsets[2],
-                fieldsets[3],
-                ('Системная информация', {
-                    'fields': ('author', 'last_editor', 'date_of_creation', 'date_of_change')
-                }),
-            )
+            return tuple(fieldsets)
         return fieldsets
 
-    def get_readonly_fields(self, request, obj=None):
-        if obj is None:
-            return self.readonly_fields
-        return ('author', 'last_editor') + tuple(self.readonly_fields)
+    _NO_RELATED_POPUPS_FIELDS = {'current_responsible'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _IncomingLetterAdminForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get('current_responsible')
+                if cr_field is None:
+                    return
+                if not self.is_bound and not self.instance.pk:
+                    # current_responsible has a model-level default=1 placeholder
+                    # (leftover from the original migration backfill), so a fresh
+                    # instance always already has a truthy id - can't detect "unset"
+                    # by checking the value. Key off self.instance.pk (new vs saved) instead.
+                    self.initial['current_responsible'] = request.user.pk
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list('pk', flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _IncomingLetterAdminForm
 
     def save_model(self, request, obj, form, change):
         if change and obj.pk:
@@ -3129,7 +3367,7 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
     list_filter = ('send_method', 'letter_date')
     search_fields = ('registration_number', 'subject', 'recipient__name_of_company')
     date_hierarchy = 'letter_date'
-    readonly_fields = ('date_of_creation', 'date_of_change', 'registration_number_display')
+    readonly_fields = ('author', 'last_editor', 'date_of_creation', 'date_of_change', 'registration_number_display')
     autocomplete_fields = ('recipient', 'reply_to')
 
     fieldsets = (
@@ -3151,10 +3389,8 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
             )
         }),
         ('Документы', {'fields': ('document_uploaded_file', 'app_uploaded_file', 'comment')}),
-        ('Ответственные', {'fields': ('current_responsible',)}),
-        ('Версия', {'fields': ('version',)}),
-        ('Системная информация', {
-            'fields': ('date_of_creation', 'date_of_change')
+        ('Системные данные', {
+            'fields': ('author', 'current_responsible', 'last_editor', 'version', 'date_of_creation', 'date_of_change')
         }),
     )
 
@@ -3171,21 +3407,46 @@ class OutgoingLetterAdmin(admin.ModelAdmin):
                 except ValueError:
                     fields.append("confirm_registration_recalc")
             fieldsets[0] = (first[0], {**first[1], "fields": tuple(fields)})
-            return (
-                fieldsets[0],
-                fieldsets[1],
-                fieldsets[2],
-                fieldsets[3],
-                ('Системная информация', {
-                    'fields': ('author', 'last_editor', 'date_of_creation', 'date_of_change')
-                }),
-            )
+            return tuple(fieldsets)
         return fieldsets
 
-    def get_readonly_fields(self, request, obj=None):
-        if obj is None:
-            return self.readonly_fields
-        return ('author', 'last_editor') + tuple(self.readonly_fields)
+    _NO_RELATED_POPUPS_FIELDS = {'current_responsible', 'sender_signature', 'executor'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _OutgoingLetterAdminForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get('current_responsible')
+                if cr_field is None:
+                    return
+                if not self.is_bound and not self.instance.pk:
+                    # current_responsible has a model-level default=1 placeholder
+                    # (leftover from the original migration backfill), so a fresh
+                    # instance always already has a truthy id - can't detect "unset"
+                    # by checking the value. Key off self.instance.pk (new vs saved) instead.
+                    self.initial['current_responsible'] = request.user.pk
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list('pk', flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _OutgoingLetterAdminForm
 
     def save_model(self, request, obj, form, change):
         if change and obj.pk:
@@ -3284,6 +3545,8 @@ class MeetingAdmin(admin.ModelAdmin):
         'decision_maker__full_name',
     )
 
+    readonly_fields = ('author', 'last_editor', 'date_of_creation', 'date_of_change')
+
     fieldsets = (
         ('Основная информация', {
             'fields': ('customer', 'decision_maker', 'responsible_user')
@@ -3294,7 +3557,21 @@ class MeetingAdmin(admin.ModelAdmin):
         ('Статус и описание', {
             'fields': ('status', 'goal_description', 'result_description')
         }),
+        ('Системные данные', {
+            'fields': ('author', 'last_editor', 'date_of_creation', 'date_of_change')
+        }),
     )
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == 'responsible_user':
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
     def display_customer(self, obj):
         """Заказчик с твоим форматированием"""
@@ -3324,6 +3601,9 @@ class MeetingAdmin(admin.ModelAdmin):
         # Автоматически подставляем ЛПР заказчика, если не выбран
         if obj.customer and not obj.decision_maker:
             obj.decision_maker = obj.customer.лпр
+        if not change or not obj.author_id:
+            obj.author = request.user
+        obj.last_editor = request.user
         super().save_model(request, obj, form, change)
 
     def get_search_results(self, request, queryset, search_term):
@@ -3368,27 +3648,38 @@ class TicketCommentInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('author')
 
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == 'author':
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
 
 # Заявки
 @admin.register(SupportTicket)
 class SupportTicketAdmin(admin.ModelAdmin):
     form = SupportTicketForm
-    autocomplete_fields = ('customer', 'product', 'assigned_to')
+    autocomplete_fields = ('customer', 'post', 'assigned_to', 'claim_letter')
     list_display = [
-        'id', 'created_date', 'customer', 'product', 'get_category_display',
+        'id', 'created_date', 'customer', 'post', 'get_category_display',
         'get_intake_channel_display', 'truncated_problem', 'status_badge',
         'claim_type_display', 'status_changed_date',
-        'created_by', 'assigned_to', 'custom_actions',
+        'author', 'assigned_to', 'custom_actions',
     ]
     list_filter = [
         'status', 'category', 'intake_channel', 'claim_type',
-        'created_date', 'customer', 'product', 'assigned_to',
+        'created_date', 'customer', 'post', 'assigned_to',
     ]
     search_fields = [
         'problem', 'description', 'resolution', 'customer__name_of_company',
-        'id', 'created_by__username',
+        'id', 'author__username',
     ]
-    readonly_fields = ['status_changed_date', 'created_by']
+    readonly_fields = ['status_changed_date', 'author']
     inlines = [TicketCommentInline]
     date_hierarchy = 'created_date'
     list_per_page = 25
@@ -3396,17 +3687,48 @@ class SupportTicketAdmin(admin.ModelAdmin):
     fieldsets = (
         ('Обращение', {
             'fields': (
-                'customer', 'product', 'category', 'problem', 'description',
+                'customer', 'post', 'category', 'problem', 'description',
                 'created_date', 'intake_channel',
             ),
         }),
         ('Обработка', {
             'fields': (
-                'status', 'resolution', 'claim_type', 'claim_attachment',
-                'assigned_to', 'created_by', 'status_changed_date',
+                'status', 'resolution', 'claim_type', 'claim_letter',
+                'assigned_to', 'author', 'status_changed_date',
             ),
         }),
     )
+
+    _NO_RELATED_POPUPS_FIELDS = {'assigned_to', 'post'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _SupportTicketForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                assigned_field = self.fields.get('assigned_to')
+                if assigned_field is None:
+                    return
+                if not self.is_bound:
+                    current_val = self.initial.get('assigned_to') or getattr(
+                        self.instance, 'assigned_to_id', None
+                    )
+                    if not current_val:
+                        self.initial['assigned_to'] = request.user.pk
+
+        return _SupportTicketForm
 
     def truncated_problem(self, obj):
         return obj.problem[:50] + '...' if len(obj.problem) > 50 else obj.problem
@@ -3450,14 +3772,14 @@ class SupportTicketAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         if not change:
-            obj.created_by = request.user
+            obj.author = request.user
             if not obj.created_date:
                 obj.created_date = timezone.localdate()
         super().save_model(request, obj, form, change)
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related(
-            'customer', 'product', 'created_by', 'assigned_to'
+            'customer', 'post', 'author', 'assigned_to', 'claim_letter'
         )
 
 # Комментарии (отдельная регистрация для полного управления)
@@ -3566,7 +3888,36 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         if db_field.name == "calibration_info":
             kwargs["widget"] = forms.Textarea(attrs={"rows": 3})
-        return super().formfield_for_dbfield(db_field, request, **kwargs)
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == "current_responsible":
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _WorkEquipmentForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get("current_responsible")
+                if cr_field is None:
+                    return
+                if not self.is_bound and not self.instance.pk:
+                    self.initial["current_responsible"] = request.user.pk
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list("pk", flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _WorkEquipmentForm
 
     @admin.display(description="Средство измерений")
     def measuring_device_display(self, obj):
@@ -3626,38 +3977,33 @@ class WorkEquipmentAdmin(admin.ModelAdmin):
             "replacement_equipment",
             "status",
         )
+        system_data_fieldset = ("Системные данные", {"fields": (
+            "author",
+            "current_responsible",
+            "last_editor",
+            "version",
+            "version_diff_display",
+            "date_of_creation",
+            "date_of_change",
+        )})
         if obj is None:
             return (
                 (None, {"fields": main_fields}),
                 ("Сопроводительные документы", {"fields": ("note",)}),
-                ("Системные данные", {"fields": (
-                    "current_responsible",
-                    "version",
-                    "version_diff_display",
-                    "date_of_creation",
-                    "date_of_change",
-                )}),
+                system_data_fieldset,
             )
         return (
             (None, {"fields": main_fields}),
             ("Сопроводительные документы", {"fields": ("note",)}),
             ("Ремонты / ТО", {"fields": ("repairs_all_link",)}),
-            ("Системные данные", {"fields": (
-                "author",
-                "last_editor",
-                "current_responsible",
-                "version",
-                "version_diff_display",
-                "date_of_creation",
-                "date_of_change",
-            )}),
+            system_data_fieldset,
         )
 
     def get_readonly_fields(self, request, obj=None):
-        base = ("date_of_creation", "date_of_change", "version_diff_display")
+        base = ("author", "last_editor", "date_of_creation", "date_of_change", "version_diff_display")
         if obj is None:
             return base
-        return ("author", "last_editor", "repairs_all_link") + base
+        return ("repairs_all_link",) + base
 
     @admin.display(description="")
     def repairs_all_link(self, obj):
@@ -3848,6 +4194,8 @@ class TransportVehicleAdmin(admin.ModelAdmin):
     )
 
     readonly_fields = (
+        "author",
+        "last_editor",
         "date_of_creation",
         "date_of_change",
     )
@@ -3859,6 +4207,7 @@ class TransportVehicleAdmin(admin.ModelAdmin):
             "fields": (
                 "make_model",
                 "registration_plate",
+                "note",
             )
         }),
         ("Страхование и техосмотр", {
@@ -3869,27 +4218,54 @@ class TransportVehicleAdmin(admin.ModelAdmin):
                 "next_inspection_date",
             )
         }),
-        ("Ответственные", {
+        ("Системные данные", {
             "fields": (
                 "author",
-                "last_editor",
                 "current_responsible",
-                "note",
-            )
-        }),
-        ("Версия", {
-            "fields": ("version",)
-        }),
-        ("Системная информация", {
-            "fields": (
+                "last_editor",
+                "version",
                 "date_of_creation",
                 "date_of_change",
             )
         }),
     )
 
+    _NO_RELATED_POPUPS_FIELDS = {"current_responsible"}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _TransportVehicleForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get("current_responsible")
+                if cr_field is None:
+                    return
+                if not self.is_bound and not self.instance.pk:
+                    self.initial["current_responsible"] = request.user.pk
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list("pk", flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _TransportVehicleForm
+
     def save_model(self, request, obj, form, change):
-        if not change:
+        if not change or not obj.author_id:
             obj.author = request.user
         obj.last_editor = request.user
         super().save_model(request, obj, form, change)
@@ -3959,7 +4335,10 @@ class TransportRepairAdmin(_ChildOfParentPermissionMixin, admin.ModelAdmin):
     )
 
     readonly_fields = (
+        "author",
+        "last_editor",
         "date_of_creation",
+        "date_of_change",
     )
 
     inlines = [TransportRepairFileInline]
@@ -3972,10 +4351,12 @@ class TransportRepairAdmin(_ChildOfParentPermissionMixin, admin.ModelAdmin):
                 "description",
             )
         }),
-        ("Системная информация", {
+        ("Системные данные", {
             "fields": (
                 "author",
+                "last_editor",
                 "date_of_creation",
+                "date_of_change",
             )
         }),
     )
@@ -3984,8 +4365,9 @@ class TransportRepairAdmin(_ChildOfParentPermissionMixin, admin.ModelAdmin):
         return False
 
     def save_model(self, request, obj, form, change):
-        if not change:
+        if not change or not obj.author_id:
             obj.author = request.user
+        obj.last_editor = request.user
         super().save_model(request, obj, form, change)
 
 # ПроизводственныеПлощадки
@@ -4041,15 +4423,12 @@ class ProductionAreaAdmin(admin.ModelAdmin):
                 "note",
             )
         }),
-        ("Ответственные лица", {
-            "fields": (
-                "current_responsible",
-            )
-        }),
-        ("Системная информация", {
+        ("Системные данные", {
             "fields": (
                 "author",
+                "current_responsible",
                 "last_editor",
+                "version",
                 "date_of_creation",
                 "date_of_change",
             )
@@ -4068,6 +4447,38 @@ class ProductionAreaAdmin(admin.ModelAdmin):
         if db_field.name == "location_ref":
             kwargs["queryset"] = ProductionAreaLocation.objects.order_by("name")
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == "current_responsible":
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _ProductionAreaForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get("current_responsible")
+                if cr_field is None:
+                    return
+                if not self.is_bound and not self.instance.pk:
+                    self.initial["current_responsible"] = request.user.pk
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list("pk", flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _ProductionAreaForm
 
     def save_model(self, request, obj, form, change):
         if not change:
@@ -4114,28 +4525,106 @@ class ProductionAreaAdmin(admin.ModelAdmin):
 
 @admin.register(TaskForDesignWork)
 class TaskForDesignWorkAdmin(admin.ModelAdmin):
-    list_display = ('name', 'category', 'author', 'date_of_creation', 'status', 'version', 'post', 'open_task_link', 'add_task_link')
+    list_display = ('name', 'category', 'author', 'date_of_creation', 'status', 'version', 'post')
     search_fields = ('name', 'author__username', 'current_responsible__username')
     list_filter = ('status', 'priority', 'language', 'post')
-    readonly_fields = ('date_of_creation', 'date_of_change')
-    search_fields = ('name',)
+    readonly_fields = (
+        "author",
+        "last_editor",
+        "date_of_creation",
+        "date_of_change",
+        "version",
+        "version_diff_display",
+    )
+    fieldsets = (
+        (None, {
+            "fields": (
+                "name",
+                "category",
+                "post",
+                "info_format",
+                "status",
+                "priority",
+                "validity_date",
+                "language",
+                "route",
+                "develop_org",
+            ),
+        }),
+        ("Документы", {
+            "fields": (
+                "subscribers",
+                "related_documents",
+                "pattern",
+                "uploaded_file",
+                "add_task_for_design_work",
+                "plan_for_design_work",
+            ),
+        }),
+        ("Системные данные", {
+            "fields": (
+                "author",
+                "current_responsible",
+                "last_editor",
+                "version",
+                "version_diff_display",
+                "date_of_creation",
+                "date_of_change",
+            ),
+        }),
+    )
 
-    def open_task_link(self, obj):
-        url = reverse('admin:blog_taskfordesignwork_changelist') + f'?technical_assignment__id__exact={obj.technical_assignment_id}'
-        return format_html('<a class="button" href="{}">Открыть ПЗ</a>', url)
-    open_task_link.short_description = 'Список ПЗ'
+    _NO_RELATED_POPUPS_FIELDS = {"post", "current_responsible"}
 
-    def add_task_link(self, obj):
-        url = reverse('admin:blog_taskfordesignwork_add') + f'?technical_assignment={obj.technical_assignment_id}'
-        return format_html('<a class="button" href="{}">Новое ПЗ</a>', url)
-    add_task_link.short_description = 'Создать ПЗ'
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
-    def get_changeform_initial_data(self, request):
-        initial = super().get_changeform_initial_data(request)
-        ta_id = request.GET.get('technical_assignment')
-        if ta_id:
-            initial['technical_assignment'] = ta_id
-        return initial
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _TaskForDesignWorkForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get("current_responsible")
+                if cr_field is None:
+                    return
+
+                if not self.is_bound:
+                    current_val = self.initial.get("current_responsible") or getattr(
+                        self.instance, "current_responsible_id", None
+                    )
+                    if not current_val:
+                        self.initial["current_responsible"] = request.user.pk
+
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list("pk", flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _TaskForDesignWorkForm
+
+    def save_model(self, request, obj, form, change):
+        if not change or not obj.author_id:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+    @admin.display(description="Разница версий")
+    def version_diff_display(self, obj):
+        if not obj:
+            return "—"
+        return mark_safe(_render_version_diff(obj.version_diff or ""))
 
     class Media:
         css = {
@@ -4145,12 +4634,110 @@ class TaskForDesignWorkAdmin(admin.ModelAdmin):
 
 @admin.register(RevisionTask)
 class RevisionTaskAdmin(admin.ModelAdmin):
-    list_display = ('name', 'category', 'author', 'post', 'date_of_creation', 'status', 'version')
-    search_fields = ('name', 'author__username', 'current_responsible__username', 'post__name')
-    list_filter = ('status', 'priority', 'language', 'post',)
-    readonly_fields = ('date_of_creation', 'date_of_change')
+    list_display = ('name', 'category', 'author', 'date_of_creation', 'status', 'version', 'post')
+    search_fields = ('name', 'author__username', 'current_responsible__username', 'post__name', 'develop_org__name')
+    list_filter = ('status', 'priority', 'language', 'post')
+    readonly_fields = (
+        "author",
+        "last_editor",
+        "date_of_creation",
+        "date_of_change",
+        "version",
+        "version_diff_display",
+    )
+    fieldsets = (
+        (None, {
+            "fields": (
+                "name",
+                "category",
+                "post",
+                "info_format",
+                "status",
+                "priority",
+                "validity_date",
+                "language",
+                "develop_org",
+            ),
+        }),
+        ("Документы", {
+            "fields": (
+                "subscribers",
+                "related_documents",
+                "pattern",
+                "uploaded_file",
+                "add_task_for_revision",
+                "plan_for_revision",
+            ),
+        }),
+        ("Системные данные", {
+            "fields": (
+                "author",
+                "current_responsible",
+                "last_editor",
+                "version",
+                "version_diff_display",
+                "date_of_creation",
+                "date_of_change",
+            ),
+        }),
+    )
 
-    autocomplete_fields = ['post']
+    _NO_RELATED_POPUPS_FIELDS = {"post", "current_responsible", "develop_org"}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        FormClass = super().get_form(request, obj, change=change, **kwargs)
+
+        class _RevisionTaskForm(FormClass):
+            def __init__(self, *args, **form_kwargs):
+                super().__init__(*args, **form_kwargs)
+                cr_field = self.fields.get("current_responsible")
+                if cr_field is None:
+                    return
+
+                if not self.is_bound:
+                    current_val = self.initial.get("current_responsible") or getattr(
+                        self.instance, "current_responsible_id", None
+                    )
+                    if not current_val:
+                        self.initial["current_responsible"] = request.user.pk
+
+                inactive_pks = set(
+                    cr_field.queryset.filter(is_active=False).values_list("pk", flat=True)
+                )
+                old_select = cr_field.widget.widget
+                new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+                new_select.inactive_pks = inactive_pks
+                cr_field.widget.widget = new_select
+
+        return _RevisionTaskForm
+
+    def save_model(self, request, obj, form, change):
+        if not change or not obj.author_id:
+            obj.author = request.user
+        obj.last_editor = request.user
+        super().save_model(request, obj, form, change)
+
+    @admin.display(description="Разница версий")
+    def version_diff_display(self, obj):
+        if not obj:
+            return "—"
+        return mark_safe(_render_version_diff(obj.version_diff or ""))
+
+    class Media:
+        css = {
+            'all': ('admin/admin_hscroll.css',)
+        }
 
 
 class DeadlineChangeInline(_ChildOfParentPermissionMixin, admin.TabularInline):
@@ -4164,6 +4751,9 @@ class DeadlineChangeInline(_ChildOfParentPermissionMixin, admin.TabularInline):
     )
     readonly_fields = fields
     show_change_link = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
@@ -4557,6 +5147,19 @@ class WorkAssignmentAdmin(admin.ModelAdmin):
                 executor_field.widget.widget = new_select
 
         return _WorkAssignmentForm
+
+    _NO_RELATED_POPUPS_FIELDS = {"executor", "post"}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
     list_display = (
         'wa_code_column',
@@ -5711,6 +6314,17 @@ class IndependentDocumentAcceptSignatureInline(_ChildOfParentPermissionMixin, ad
     readonly_fields = ['uploaded_at']
     verbose_name = "Подписи ознакомления"
 
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == 'uploaded_by':
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
 @admin.register(SharedRepository)
 class SharedRepositoryAdmin(admin.ModelAdmin):
     actions = ["send_to_approval_action", "send_to_acknowledgment_action"]
@@ -5780,7 +6394,6 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
                 #'id',
                 'category',
                 'document_title',
-                'version',
                 'uploaded_file',
                 #'display_file_info',
                 'document_purpose',
@@ -5805,23 +6418,31 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         ('Связанные документы', {
             'fields': ('related_documents','related_sharedrepository'),
         }),
-        ('Пользователи системы', {
+        ('Системные данные', {
             'fields': (
                 'author',
-                'last_editor',
                 'current_responsible',
-            )
-        }),
-        ('Системные даты', {
-            'fields': (
+                'last_editor',
+                'version',
                 'date_of_creation',
                 'date_of_change',
+                'display_file_list',
             )
         }),
-        ('Файлы документа', {
-            'fields': ('display_file_list',),
-        }),
     )
+
+    _NO_RELATED_POPUPS_FIELDS = {'approval', 'related_documents', 'related_sharedrepository', 'current_responsible'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
     def display_related_documents(self, obj):
         """Связанные документы СМК — списком, каждый с новой строки"""
@@ -6054,29 +6675,17 @@ class SharedRepositoryAdmin(admin.ModelAdmin):
         """Кастомизация формы в админке"""
         form = super().get_form(request, obj, **kwargs)
 
-        # Устанавливаем help_text для полей как в ТЗ
-        help_texts = {
-            'id': 'Уникальное поле',
-            'category': 'Значение по умолчанию "ОД"',
-            'document_title': 'Уникальное поле. Все текстовые символы - 100 символов max',
-            'approval': 'Имя пользователя системы (ссылка на User)',
-            'signature_approval': 'Возможность подгрузить только один файл ЭЦП',
-            'date_approval': 'Текст, до 20 символов. Значение по умолчанию "---"',
-            'accept': 'ЭЦП',
-            'author': 'Имя пользователя системы (ссылка на User)',
-            'date_of_creation': 'Формат: YYYY-MM-DD HH:MI:SS',
-            'last_editor': 'Имя пользователя системы (ссылка на User)',
-            'date_of_change': 'Формат: YYYY-MM-DD HH:MI:SS',
-            'current_responsible': 'Имя пользователя системы (ссылка на User)',
-            'version': 'Цифры, 3 символа max. Значение по умолчанию: 1',
-            'uploaded_file': 'Подгружаем только один файл',
-            'document_purpose': 'Все текстовые символы - 5000 символов max',
-            'note': 'Дополнительные заметки и комментарии',
-        }
-
-        for field_name, help_text in help_texts.items():
-            if field_name in form.base_fields:
-                form.base_fields[field_name].help_text = help_text
+        cr_field = form.base_fields.get('current_responsible')
+        if cr_field is not None:
+            if obj is None:
+                cr_field.initial = request.user.pk
+            inactive_pks = set(
+                cr_field.queryset.filter(is_active=False).values_list('pk', flat=True)
+            )
+            old_select = cr_field.widget.widget
+            new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+            new_select.inactive_pks = inactive_pks
+            cr_field.widget.widget = new_select
 
         return form
 
@@ -6133,6 +6742,17 @@ class KnowledgeBaseFileInline(_ChildOfParentPermissionMixin, admin.TabularInline
     extra = 1
     fields = ['file', 'description', 'uploaded_by', 'uploaded_at']
     readonly_fields = ['uploaded_at']
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == 'uploaded_by':
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
 
 @admin.register(KnowledgeBase)
@@ -6197,15 +6817,11 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
                 'note',
             )
         }),
-        ('Пользователи системы', {
+        ('Системные данные', {
             'fields': (
                 'author',
-                'last_editor',
                 'current_responsible',
-            )
-        }),
-        ('Версия и системные даты', {
-            'fields': (
+                'last_editor',
                 'version',
                 'date_of_creation',
                 'date_of_change',
@@ -6213,6 +6829,19 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
             )
         }),
     )
+
+    _NO_RELATED_POPUPS_FIELDS = {'consumer_customer', 'consumer_ticket', 'current_responsible', 'knowledge_apply'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
     def title_short(self, obj):
         """Краткое отображение названия"""
@@ -6349,6 +6978,18 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
         if 'consumer_ticket' in form.base_fields:
             form.base_fields['consumer_ticket'].required = False
 
+        cr_field = form.base_fields.get('current_responsible')
+        if cr_field is not None:
+            if obj is None:
+                form.base_fields['current_responsible'].initial = request.user.pk
+            inactive_pks = set(
+                cr_field.queryset.filter(is_active=False).values_list('pk', flat=True)
+            )
+            old_select = cr_field.widget.widget
+            new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+            new_select.inactive_pks = inactive_pks
+            cr_field.widget.widget = new_select
+
         return form
 
 
@@ -6366,6 +7007,17 @@ class QMSDocumentAcceptSignatureInline(_ChildOfParentPermissionMixin, admin.Tabu
     extra = 1
     fields = ['signature_file', 'uploaded_by', 'uploaded_at']
     readonly_fields = ['uploaded_at']
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == 'uploaded_by':
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
 
 @admin.register(QMSDocument)
@@ -6437,7 +7089,6 @@ class QMSDocumentAdmin(admin.ModelAdmin):
                 'category',
                 'document_title',
                 'change_number',
-                'version',
             )
         }),
         ('Утверждение', {
@@ -6468,26 +7119,51 @@ class QMSDocumentAdmin(admin.ModelAdmin):
                 'review_date',
             )
         }),
-        ('Пользователи системы', {
-            'fields': (
-                'author',
-                'last_editor',
-                'current_responsible',
-            )
-        }),
         ('Дополнительно', {
             'fields': (
                 'note',
             )
         }),
-        ('Системные даты', {
+        ('Системные данные', {
             'fields': (
+                'author',
+                'current_responsible',
+                'last_editor',
+                'version',
                 'date_of_creation',
                 'date_of_change',
                 'display_files_list',
             )
         }),
     )
+
+    _NO_RELATED_POPUPS_FIELDS = {'approval', 'related_documents', 'related_qms_documents', 'current_responsible'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        cr_field = form.base_fields.get('current_responsible')
+        if cr_field is not None:
+            if obj is None:
+                cr_field.initial = request.user.pk
+            inactive_pks = set(
+                cr_field.queryset.filter(is_active=False).values_list('pk', flat=True)
+            )
+            old_select = cr_field.widget.widget
+            new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+            new_select.inactive_pks = inactive_pks
+            cr_field.widget.widget = new_select
+        return form
 
     def display_related_documents(self, obj):
         """Связанные отдельные документы — списком, каждый с новой строки"""
@@ -6730,6 +7406,17 @@ class AdministrativeOrderAcceptSignatureInline(_ChildOfParentPermissionMixin, ad
     fields = ['signature_file', 'uploaded_by', 'uploaded_at']
     readonly_fields = ['uploaded_at']
 
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == 'uploaded_by':
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
 
 @admin.register(AdministrativeOrder)
 class AdministrativeOrderAdmin(admin.ModelAdmin):
@@ -6822,21 +7509,30 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
                 'note',
             )
         }),
-        ('Пользователи системы', {
+        ('Системные данные', {
             'fields': (
                 'author',
-                'last_editor',
                 'current_responsible',
-            )
-        }),
-        ('Системные даты', {
-            'fields': (
+                'last_editor',
+                'version',
                 'date_of_creation',
                 'date_of_change',
-                'version',
             )
         }),
     )
+
+    _NO_RELATED_POPUPS_FIELDS = {'approval', 'current_responsible'}
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name in self._NO_RELATED_POPUPS_FIELDS:
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
     def save_model(self, request, obj, form, change):
         """Автоматическая установка пользователей и валидация"""
@@ -6880,6 +7576,18 @@ class AdministrativeOrderAdmin(admin.ModelAdmin):
                 },
                 format='%Y-%m-%d'
             )
+
+        cr_field = form.base_fields.get('current_responsible')
+        if cr_field is not None:
+            if obj is None:
+                cr_field.initial = request.user.pk
+            inactive_pks = set(
+                cr_field.queryset.filter(is_active=False).values_list('pk', flat=True)
+            )
+            old_select = cr_field.widget.widget
+            new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+            new_select.inactive_pks = inactive_pks
+            cr_field.widget.widget = new_select
 
         return form
 
@@ -6973,6 +7681,17 @@ class DocumentTemplateAcceptSignatureInline(_ChildOfParentPermissionMixin, admin
     fields = ['signature_file', 'uploaded_by', 'uploaded_at']
     readonly_fields = ['uploaded_at']
 
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == 'uploaded_by':
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
     # Шаблоны
 @admin.register(DocumentTemplate)
 class DocumentTemplateAdmin(admin.ModelAdmin):
@@ -7011,7 +7730,6 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
         ('Основная информация', {
             'fields': (
                 'document_template',
-                'version',
             )
         }),
         ('Файлы', {
@@ -7031,20 +7749,28 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
                 'note',
             )
         }),
-        ('Пользователи системы', {
+        ('Системные данные', {
             'fields': (
                 'author',
-                'last_editor',
                 'current_responsible',
-            )
-        }),
-        ('Системные даты', {
-            'fields': (
+                'last_editor',
+                'version',
                 'date_of_creation',
                 'date_of_change',
             )
         }),
     )
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == 'current_responsible':
+            widget = formfield.widget
+            if hasattr(widget, 'can_add_related'):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
     def save_model(self, request, obj, form, change):
         """Автоматическая установка пользователей и валидация"""
@@ -7074,6 +7800,18 @@ class DocumentTemplateAdmin(admin.ModelAdmin):
             form.base_fields['validity_date'].widget = forms.DateInput(
                 attrs={'type': 'date', 'min': today}
             )
+
+        cr_field = form.base_fields.get('current_responsible')
+        if cr_field is not None:
+            if obj is None:
+                cr_field.initial = request.user.pk
+            inactive_pks = set(
+                cr_field.queryset.filter(is_active=False).values_list('pk', flat=True)
+            )
+            old_select = cr_field.widget.widget
+            new_select = _ExecutorSelect(attrs=old_select.attrs, choices=old_select.choices)
+            new_select.inactive_pks = inactive_pks
+            cr_field.widget.widget = new_select
 
         return form
 
@@ -7358,6 +8096,22 @@ class PSIDocumentForm(forms.ModelForm):
         return cleaned_data
 
 
+_PSI_FAMILY_NO_POPUP_FIELDS = {"post", "developer_org", "inspector", "workshop", "current_responsible"}
+
+
+def _strip_related_popups(formfield, db_field_name):
+    """Убирает попапы добавления/просмотра связанной сущности у формполя.
+    Общая для протоколов ПСИ/ПАК/ЩУР — см. _PSI_FAMILY_NO_POPUP_FIELDS."""
+    if formfield is not None and db_field_name in _PSI_FAMILY_NO_POPUP_FIELDS:
+        widget = formfield.widget
+        if hasattr(widget, "can_add_related"):
+            widget.can_add_related = False
+            widget.can_change_related = False
+            widget.can_view_related = False
+            widget.can_delete_related = False
+    return formfield
+
+
 @admin.register(PSIDocument)
 class PSIDocumentAdmin(admin.ModelAdmin):
     form = PSIDocumentForm
@@ -7460,6 +8214,10 @@ class PSIDocumentAdmin(admin.ModelAdmin):
                 'admin:blog_psidocument_shipments_for_post'
             )
         return form
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        return _strip_related_popups(formfield, db_field.name)
 
     def get_changeform_initial_data(self, request):
         """Для нового протокола «Представитель ОТК» и «Текущий ответственный»
@@ -7850,7 +8608,11 @@ class UserWithProfileForm(UserChangeForm):
         queryset=Department.objects.all(),
         required=False,
     )
-    is_head = forms.BooleanField(label='Руководитель отдела', required=False)
+    org_level = forms.ChoiceField(
+        label='Уровень в структуре организации',
+        choices=EmployeeProfile.ORG_LEVEL_CHOICES,
+        required=False,
+    )
     position = forms.CharField(label='Должность', max_length=100, required=False)
     supervisor = forms.ModelChoiceField(
         label='Непосредственное подчинение',
@@ -7872,7 +8634,7 @@ class UserWithProfileForm(UserChangeForm):
             self.fields['birth_date'].initial = profile.birth_date
             self.fields['avatar'].initial = profile.avatar
             self.fields['org_department'].initial = profile.org_department_id
-            self.fields['is_head'].initial = profile.is_head
+            self.fields['org_level'].initial = profile.org_level
             self.fields['position'].initial = profile.position
             self.fields['supervisor'].initial = profile.supervisor_id
             self.fields['roles_responsibilities'].initial = profile.roles_responsibilities
@@ -8132,7 +8894,7 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
 
     _PROFILE_FIELDS = (
         'patronymic', 'phone', 'birth_date', 'avatar', 'org_department',
-        'is_head', 'position', 'supervisor', 'roles_responsibilities',
+        'org_level', 'position', 'supervisor', 'roles_responsibilities',
     )
 
     fieldsets = (
@@ -8141,7 +8903,7 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
             'fields': ('first_name', 'last_name', 'patronymic', 'birth_date', 'phone', 'email', 'avatar'),
         }),
         ('Профиль сотрудника', {
-            'fields': ('org_department', 'is_head', 'position', 'supervisor', 'roles_responsibilities'),
+            'fields': ('org_department', 'org_level', 'position', 'supervisor', 'roles_responsibilities'),
         }),
         ('Права доступа', {
             'classes': ('collapse',),
@@ -8166,7 +8928,7 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
             elif avatar:
                 profile.avatar = avatar
             profile.org_department = form.cleaned_data.get('org_department')
-            profile.is_head = form.cleaned_data.get('is_head', False)
+            profile.org_level = form.cleaned_data.get('org_level') or EmployeeProfile.ORG_LEVEL_EXECUTOR
             profile.position = form.cleaned_data.get('position', '')
             profile.supervisor = form.cleaned_data.get('supervisor')
             profile.roles_responsibilities = form.cleaned_data.get('roles_responsibilities', '')
@@ -8180,7 +8942,7 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
         'email',
         'get_phone',
         'get_department',
-        'get_is_head',
+        'get_org_level',
         'get_position',
         'get_supervisor',
         'is_active',
@@ -8197,9 +8959,9 @@ class CustomUserAdmin(_PermissionWidgetMixin, BaseUserAdmin):
         name = f"{obj.last_name} {obj.first_name}".strip()
         return name or obj.username
 
-    @admin.display(description='Руководитель', boolean=True, ordering='profile__is_head')
-    def get_is_head(self, obj):
-        return obj.profile.is_head if hasattr(obj, 'profile') else False
+    @admin.display(description='Уровень в структуре организации', ordering='profile__org_level')
+    def get_org_level(self, obj):
+        return obj.profile.get_org_level_display() if hasattr(obj, 'profile') else ''
 
     def get_patronymic(self, obj):
         return obj.profile.patronymic if hasattr(obj, 'profile') else ''
@@ -8550,6 +9312,10 @@ class PAKDocumentAdmin(admin.ModelAdmin):
                 'admin:blog_pakdocument_shipments_for_post'
             )
         return form
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        return _strip_related_popups(formfield, db_field.name)
 
     def get_changeform_initial_data(self, request):
         """По умолчанию «Представитель ОТК» и «Текущий ответственный» — текущий
@@ -8968,6 +9734,10 @@ class SchurDocumentAdmin(admin.ModelAdmin):
                 'admin:blog_schurdocument_shipments_for_post'
             )
         return form
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        return _strip_related_popups(formfield, db_field.name)
 
     def get_changeform_initial_data(self, request):
         """По умолчанию «Представитель ОТК» и «Текущий ответственный» — текущий

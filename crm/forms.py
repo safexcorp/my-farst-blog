@@ -23,7 +23,7 @@ class SupportTicketForm(forms.ModelForm):
         model = SupportTicket
         fields = [
             'customer',
-            'product',
+            'post',
             'category',
             'problem',
             'description',
@@ -32,7 +32,7 @@ class SupportTicketForm(forms.ModelForm):
             'status',
             'resolution',
             'claim_type',
-            'claim_attachment',
+            'claim_letter',
             'assigned_to',
         ]
         widgets = {
@@ -64,7 +64,7 @@ class SupportTicketForm(forms.ModelForm):
         status = cleaned.get('status')
         resolution = (cleaned.get('resolution') or '').strip()
         claim_type = cleaned.get('claim_type') or ''
-        claim_attachment = cleaned.get('claim_attachment')
+        claim_letter = cleaned.get('claim_letter')
 
         if status == SupportTicket.STATUS_RESOLVED and not resolution:
             self.add_error(
@@ -73,13 +73,13 @@ class SupportTicketForm(forms.ModelForm):
             )
 
         if claim_type == SupportTicket.CLAIM_OFFICIAL:
-            has_attachment = bool(claim_attachment) or (
-                self.instance.pk and self.instance.claim_attachment
+            has_letter = bool(claim_letter) or (
+                self.instance.pk and self.instance.claim_letter_id
             )
-            if not has_attachment:
+            if not has_letter:
                 self.add_error(
-                    'claim_attachment',
-                    'Для официальной претензии приложите письмо или декларацию.',
+                    'claim_letter',
+                    'Для официальной претензии приложите письмо или рекламацию.',
                 )
 
         return cleaned

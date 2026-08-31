@@ -184,12 +184,29 @@ class Deal(models.Model):
     date_of_last_change = models.DateTimeField(auto_now=True, blank=True, null=True, verbose_name='Дата последнего изменения')
     date_of_next_activity = models.DateField(blank=True, null=True, verbose_name='Дата следующей активности')
     status = models.CharField(max_length=50, choices=SELECTION, blank=True, null=True, verbose_name='Состояние')
-    name_of_product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Продукт')
+    post = models.ForeignKey(
+        'blog.Post',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='Разработка (модификация/проект)',
+        related_name='deals',
+    )
     deal_amount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, null=True, verbose_name='Сумма сделки')
     quantity_of_all_product = models.PositiveIntegerField(default=1, blank=True, null=True, verbose_name='Количество всех продуктов, шт')
     description = models.TextField(blank=True, null=True, verbose_name='Описание')
     shipping_address = models.TextField(verbose_name='Адрес отгрузки', blank=True, null=True)
     responsible_manager = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Ответственный менеджер')
+
+    author = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='deal_author', verbose_name='Автор',
+    )
+    last_editor = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='deal_last_editor', verbose_name='Последний редактор',
+    )
+    date_of_creation = models.DateTimeField('Дата и время создания', default=timezone.now)
 
     def __str__(self):
         return f"Сделка #{self.id} - {self.customer.name_of_company}"
@@ -211,6 +228,21 @@ class Deal_stage(models.Model):
     description_of_what_has_been_achieved_at_a_stage = models.TextField(blank=True, null=True, verbose_name='Описание достигнутого на этапе')
     description_of_tasks_for_our_specialists = models.TextField(blank=True, null=True, verbose_name='Описание задач для наших специалистов')
     our_specialists_involved = models.ManyToManyField(User, related_name='этапы_сделки', blank=True, default=0, verbose_name='Привлекаемые наши специалисты')
+
+    author = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='deal_stage_author', verbose_name='Автор',
+    )
+    current_responsible = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='deal_stage_responsible', verbose_name='Текущий ответственный',
+    )
+    last_editor = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='deal_stage_last_editor', verbose_name='Последний редактор',
+    )
+    date_of_creation = models.DateTimeField('Дата и время создания', default=timezone.now)
+    date_of_change = models.DateTimeField('Дата и время последнего изменения', auto_now=True)
 
     def __str__(self):
         return f"Этап {self.get_status_display()} для сделки #{self.deal.id}"
@@ -313,7 +345,6 @@ class IncomingLetter(models.Model):
         on_delete=models.PROTECT,
         related_name='incoming_letter_author',
         verbose_name='Создатель (автор)',
-        default=1,
     )
     date_of_creation = models.DateTimeField('Дата и время создания', default=timezone.now)
     last_editor = models.ForeignKey(
@@ -321,7 +352,6 @@ class IncomingLetter(models.Model):
         on_delete=models.PROTECT,
         related_name='incoming_letter_last_editor',
         verbose_name='Последний редактор',
-        default=1,
     )
     date_of_change = models.DateTimeField('Дата и время последнего изменения', auto_now=True)
     current_responsible = models.ForeignKey(
@@ -329,7 +359,6 @@ class IncomingLetter(models.Model):
         on_delete=models.PROTECT,
         related_name='incoming_letter_responsible',
         verbose_name='Текущий ответственный',
-        default=1,
     )
     version = models.CharField('Версия', max_length=3, default='1', blank=True)
     document_uploaded_file = models.FileField(
@@ -438,7 +467,6 @@ class OutgoingLetter(models.Model):
         on_delete=models.PROTECT,
         related_name='outgoing_letter_author',
         verbose_name='Создатель (автор)',
-        default=1,
     )
     date_of_creation = models.DateTimeField('Дата и время создания', default=timezone.now)
     last_editor = models.ForeignKey(
@@ -446,7 +474,6 @@ class OutgoingLetter(models.Model):
         on_delete=models.PROTECT,
         related_name='outgoing_letter_last_editor',
         verbose_name='Последний редактор',
-        default=1,
     )
     date_of_change = models.DateTimeField('Дата и время последнего изменения', auto_now=True)
     current_responsible = models.ForeignKey(
@@ -454,7 +481,6 @@ class OutgoingLetter(models.Model):
         on_delete=models.PROTECT,
         related_name='outgoing_letter_responsible',
         verbose_name='Текущий ответственный',
-        default=1,
     )
     version = models.CharField('Версия', max_length=3, default='1', blank=True)
     document_uploaded_file = models.FileField(
@@ -533,6 +559,17 @@ class Meeting(models.Model):
     )
     goal_description = models.TextField(max_length=3500, verbose_name='Описание цели', blank=True, null=True)
     result_description = models.TextField(max_length=3500, verbose_name='Описание результата', blank=True, null=True)
+
+    author = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='meeting_author', verbose_name='Автор',
+    )
+    last_editor = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='meeting_last_editor', verbose_name='Последний редактор',
+    )
+    date_of_creation = models.DateTimeField('Дата и время создания', default=timezone.now)
+    date_of_change = models.DateTimeField('Дата и время последнего изменения', auto_now=True)
 
     def save(self, *args, **kwargs):
         # Автоподстановка ЛПР по контрагенту
@@ -644,12 +681,13 @@ class SupportTicket(models.Model):
         verbose_name='Контрагент',
         related_name='support_tickets',
     )
-    product = models.ForeignKey(
-        'Product',
+    post = models.ForeignKey(
+        'blog.Post',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        verbose_name='Продукт',
+        verbose_name='Разработка (модификация/проект)',
+        related_name='support_tickets',
     )
     category = models.CharField(
         max_length=20,
@@ -683,21 +721,22 @@ class SupportTicket(models.Model):
         default='',
         verbose_name='Претензия',
     )
-    claim_attachment = models.FileField(
-        upload_to='support_tickets/claims/%Y/%m/',
-        blank=True,
+    claim_letter = models.ForeignKey(
+        'IncomingLetter',
+        on_delete=models.SET_NULL,
         null=True,
-        verbose_name='Письмо / декларация (претензия)',
-        validators=[validate_file_size],
+        blank=True,
+        verbose_name='Письмо / рекламация (претензия)',
+        related_name='support_tickets',
     )
     status_changed_date = models.DateTimeField(auto_now=True, verbose_name='Дата изменения статуса')
 
-    created_by = models.ForeignKey(
+    author = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
         null=True,
         related_name='created_tickets',
-        verbose_name='Создал',
+        verbose_name='Автор',
     )
     assigned_to = models.ForeignKey(
         User,
@@ -714,9 +753,9 @@ class SupportTicket(models.Model):
             raise ValidationError({
                 'resolution': 'Заполните решение проблемы при статусе «Решена/Закрыта».',
             })
-        if self.claim_type == self.CLAIM_OFFICIAL and not self.claim_attachment:
+        if self.claim_type == self.CLAIM_OFFICIAL and not self.claim_letter:
             raise ValidationError({
-                'claim_attachment': 'Для официальной претензии приложите письмо или декларацию.',
+                'claim_letter': 'Для официальной претензии приложите письмо или рекламацию.',
             })
 
     def save(self, *args, **kwargs):

@@ -288,7 +288,6 @@ class TransportVehicle(models.Model):
         on_delete=models.PROTECT,
         related_name="transport_vehicle_author",
         verbose_name="Создатель (автор)",
-        default=1,
     )
 
     date_of_creation = models.DateTimeField(
@@ -301,7 +300,6 @@ class TransportVehicle(models.Model):
         on_delete=models.PROTECT,
         related_name="transport_vehicle_last_editor",
         verbose_name="Последний редактор",
-        default=1,
     )
 
     date_of_change = models.DateTimeField(
@@ -314,7 +312,6 @@ class TransportVehicle(models.Model):
         on_delete=models.PROTECT,
         related_name="transport_vehicle_current_responsible",
         verbose_name="Текущий ответственный",
-        default=1,
     )
 
     version = models.CharField(
@@ -400,9 +397,22 @@ class TransportRepair(models.Model):
         verbose_name="Создатель (автор)",
     )
 
+    last_editor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="transport_repair_last_editor",
+        verbose_name="Последний редактор",
+        null=True,
+        blank=True,
+    )
+
     date_of_creation = models.DateTimeField(
         "Дата и время создания",
         default=timezone.now,
+    )
+    date_of_change = models.DateTimeField(
+        "Дата и время последнего изменения",
+        auto_now=True,
     )
 
     class Meta:
