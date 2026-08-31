@@ -10,6 +10,8 @@ from django.utils.html import escape, format_html, format_html_join, strip_tags
 from django.template.defaultfilters import linebreaksbr
 from django.utils.safestring import mark_safe
 import re
+from django.core.exceptions import PermissionDenied
+from django.db import IntegrityError, transaction
 from django.db.models import Q, F, Value , TextField, DateField, BooleanField, Case, When, IntegerField
 from django.db.models.functions import Cast
 from functools import reduce
@@ -65,6 +67,7 @@ from .admin_forms import (
     WorkAssignmentSubmitReviewForm,
 )
 from .forms import WorkAssignmentForm, UniversalRKDForm, TechnicalProposalForm
+from .shipment_bulk import ShipmentBulkAddForm
 from .helpers import (
     first_incomplete_step_code,
     next_step_code_after,
@@ -2207,6 +2210,68 @@ class ShipmentAdmin(admin.ModelAdmin):
             extra_context["shipment_breadcrumb_post"] = Post.objects.filter(pk=post_id).first()
         return super().changelist_view(request, extra_context)
 
+    def get_urls(self):
+        """Страница массового ввода списком — см. blog/shipment_bulk.py."""
+        custom = [
+            path(
+                "bulk-add/",
+                self.admin_site.admin_view(self.bulk_add_view),
+                name="blog_shipment_bulk_add",
+            ),
+        ]
+        return custom + super().get_urls()
+
+    def bulk_add_view(self, request):
+        """Создание пачки изделий по списку «номер SN», как он ведётся в заметке.
+
+        Шаг «Проверить» показывает разбор списка таблицей, шаг «Создать»
+        записывает всё одной транзакцией. Строки с уже занятыми заводскими
+        номерами пропускаются, ошибочные — блокируют создание.
+        """
+        if not self.has_add_permission(request):
+            raise PermissionDenied
+
+        form = ShipmentBulkAddForm(request.POST or None, admin_site=self.admin_site)
+        ready = form.is_bound and form.is_valid()
+
+        if ready and request.POST.get("step") == "create":
+            shipments = form.build_shipments(request.user)
+            skipped = len(form.rows) - len(shipments)
+            try:
+                with transaction.atomic():
+                    Shipment.objects.bulk_create(shipments, batch_size=200)
+                    for shipment in shipments:
+                        self.log_addition(request, shipment, [{"added": {}}])
+            except IntegrityError:
+                self.message_user(
+                    request,
+                    "Ничего не создано: часть заводских номеров уже занята. "
+                    "Проверьте список и повторите.",
+                    messages.ERROR,
+                )
+            else:
+                report = "Создано изделий: {}.".format(len(shipments))
+                if skipped:
+                    report += " Пропущено (уже были заведены): {}.".format(skipped)
+                self.message_user(request, report, messages.SUCCESS)
+                changelist_url = reverse("admin:blog_shipment_changelist")
+                return redirect(
+                    "{}?post__id__exact={}".format(
+                        changelist_url, form.cleaned_data["post"].pk
+                    )
+                )
+
+        context = dict(
+            self.admin_site.each_context(request),
+            title="Добавить изделия списком",
+            opts=self.opts,
+            form=form,
+            rows=form.rows,
+            to_create=len(form.rows_to_create()),
+            ready=ready,
+        )
+        return render(request, "admin/blog/shipment/bulk_add.html", context)
+
     @admin.display(description="Изготовитель", ordering="manufacturer_org__name")
     def manufacturer_column(self, obj):
         return obj.manufacturer_org or "—"
@@ -2244,32 +2309,22 @@ class ShipmentAdmin(admin.ModelAdmin):
     def shipment_post_column(self, obj):
         return obj.post or "—"
 
-    @admin.display(description="Заключение")
+    @admin.display(description="Заключение ПСИ")
     def psi_conclusion_status(self, obj):
         """Итоговое заключение по протоколу ПСИ для этого изделия.
         готов / не готов — по заключению протокола (у которого есть готовый PDF);
-        нет ПСИ (синим) — если протокол ПСИ на изделие ещё не заведён;
-        — (прочерк) — протокол есть, но готовый PDF ещё не сформирован."""
+        — (прочерк) — если готовый PDF на изделие ещё не сформирован."""
         doc = (
                 PSIDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
                 or PAKDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
                 or SchurDocument.objects.filter(shipment=obj, pdfs__isnull=False).distinct().first()
         )
-        if doc:
-            if doc.conclusion == 'готов к отгрузке':
-                return format_html('<b style="color:#28a745;">готов</b>')
-            if doc.conclusion == 'не готов':
-                return format_html('<b style="color:#dc3545;">не готов</b>')
+        if not doc:
             return "—"
-        # Готового протокола (с PDF) нет. Если ПСИ вообще не заведён на это изделие —
-        # подсвечиваем синим, чтобы сразу видеть, на что ещё нужен ПСИ.
-        has_any_psi = (
-            PSIDocument.objects.filter(shipment=obj).exists()
-            or PAKDocument.objects.filter(shipment=obj).exists()
-            or SchurDocument.objects.filter(shipment=obj).exists()
-        )
-        if not has_any_psi:
-            return format_html('<b style="color:#0d6efd;">нет ПСИ</b>')
+        if doc.conclusion == 'готов к отгрузке':
+            return format_html('<b style="color:#28a745;">готов</b>')
+        if doc.conclusion == 'не готов':
+            return format_html('<b style="color:#dc3545;">не готов</b>')
         return "—"
 
 
@@ -9035,6 +9090,8 @@ class PAKDocumentForm(forms.ModelForm):
     PRODUCT_GROUP_NAME = "ПАК СПМ"
 
     # Три допустимых варианта для полей проверок (п. 8): «нет данных» по умолчанию.
+    # Значения обязаны совпадать с PAKDocument.STATUS_CHOICES, иначе валидация
+    # модели отбрасывает их с ошибкой «Выберите корректный вариант».
     CHECK_CHOICES = [
         ('нет данных', 'Нет данных'),
         ('соответствует', 'Соответствует'),
@@ -9064,9 +9121,11 @@ class PAKDocumentForm(forms.ModelForm):
             self.fields['alarm_note'].required = False
 
         # --- Поля проверок: только 3 варианта, без пустого «---------» (п. 8) ---
-        # По умолчанию «нет данных» — для новых протоколов.
+        # По умолчанию «Нет данных» — для новых протоколов.
+        # Поля необязательные: протокол можно сохранить, не заполнив проверки.
         for name in self.CHECK_FIELDS:
             if name in self.fields:
+                self.fields[name].required = False
                 self.fields[name].choices = self.CHECK_CHOICES
                 if not (self.instance and self.instance.pk) and not self.initial.get(name):
                     self.initial[name] = 'нет данных'
@@ -9152,7 +9211,7 @@ class PAKDocumentForm(forms.ModelForm):
         alarm_note = cleaned_data.get('alarm_note')
 
         if not alarm_log_file:
-            # если файл с логами не прикреплён — статус п. 4 автоматически "нет данных"
+            # если файл с логами не прикреплён — статус п. 4 автоматически "Не соответствует"
             cleaned_data['check_alarm'] = 'не соответствует'
         elif check_alarm == 'не соответствует' and not (alarm_note and alarm_note.strip()):
             # Файл прикреплён, выбрано "Не соответствует" — примечание обязательно
@@ -9503,6 +9562,8 @@ class SchurDocumentForm(forms.ModelForm):
     PRODUCT_GROUP_NAME = "ЩИТ УЧЕТА РАСПРЕДЕЛИТЕЛЬНЫЙ"
 
     # Три допустимых варианта для полей проверок, «нет данных» по умолчанию.
+    # Значения обязаны совпадать с SchurDocument.STATUS_CHOICES, иначе валидация
+    # модели отбрасывает их с ошибкой «Выберите корректный вариант».
     CHECK_CHOICES = [
         ('нет данных', 'Нет данных'),
         ('соответствует', 'Соответствует'),
@@ -9521,8 +9582,10 @@ class SchurDocumentForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         # --- Поля проверок: только 3 варианта, без пустого «---------» ---
+        # Поля необязательные: протокол можно сохранить, не заполнив проверки.
         for name in self.CHECK_FIELDS:
             if name in self.fields:
+                self.fields[name].required = False
                 self.fields[name].choices = self.CHECK_CHOICES
                 if not (self.instance and self.instance.pk) and not self.initial.get(name):
                     self.initial[name] = 'нет данных'

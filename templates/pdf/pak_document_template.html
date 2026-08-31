@@ -109,6 +109,15 @@
         table.results th { font-weight: bold; }
         table.results td.name { text-align: left; }
         .result-cell { text-align: center; }
+        /* «Примечание»: имя загруженного файла — длинная неразрывная строка,
+           переносим её по любым символам, чтобы не растягивать столбец. */
+        .note-cell { overflow-wrap: anywhere; }
+        /* Заключение и подписи — единый блок: подпись не должна уезжать
+           на отдельную страницу без заключения. */
+        .closing-block {
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
         .conclusion-block { margin-top: 18px; }
         .conclusion-text { margin: 8px 0; text-align: justify; }
         .sig-wrap {
@@ -117,14 +126,19 @@
             break-inside: avoid;
         }
         .sig-table { width: 100%; border-collapse: collapse; }
-        /* vertical-align: top — «Представитель ОТК» встаёт на одну линию
-           с полями ЭЦП / Дата / ФИО. */
-        .sig-table td { text-align: center; padding: 4px 8px; vertical-align: top; }
-        .sig-role {
+        /* «Представитель ОТК» вынесен в верхний ряд, под ним — ЭЦП / Дата / ФИО
+           по центру своих колонок, с отступами по бокам. */
+        .sig-table td { text-align: center; padding: 4px 10px; vertical-align: top; }
+        /* td.sig-role — специфичность выше, чем у «.sig-table td»,
+           иначе выравнивание перебивается на center. */
+        .sig-table td.sig-role {
             text-align: left;
             white-space: nowrap;
-            padding-left: 0;
+            /* 10px — тот же отступ, что у ячеек ниже, чтобы надпись начиналась
+               ровно на левом крае подчёркивания «ЭЦП». */
+            padding-left: 10px;
             padding-right: 12px;
+            padding-bottom: 10px;
         }
         .sig-underline {
             display: block;
@@ -132,6 +146,8 @@
             min-height: 18px;
             font-weight: bold;
         }
+        /* ФИО не переносим на вторую строку, даже если оно длинное. */
+        .sig-underline.sig-name { white-space: nowrap; }
         .sig-caption { font-size: 10pt; font-style: italic; }
     </style>
 </head>
@@ -219,7 +235,7 @@
                 <td class="name">4 Проверка обнаружения и регистрации аварии (1.1.2, 1.1.4 ТУ, 3.4 ПМ)</td>
                 <td>Соответствует ТУ</td>
                 <td class="result-cell">{{ pak.get_check_alarm_display }}</td>
-                <td>{% if not pak.alarm_log_file %}нет данных{% elif pak.check_alarm == 'соответствует' %}Файл с логами от прибора{% else %}{{ pak.alarm_note }}{% endif %}</td>
+                <td class="note-cell">{% if not pak.alarm_log_file %}нет данных{% elif pak.check_alarm == 'соответствует' %}{{ pak.alarm_log_filename }}{% else %}{{ pak.alarm_note }}{% endif %}</td>
             </tr>
             <tr>
                 <td class="name">5 Проверка контроля и передачи статуса батареи (1.1.7 ТУ, 3.5 ПМ)</td>
@@ -241,18 +257,19 @@
             </tr>
         </tbody>
     </table>
-<!-- ЗАКЛЮЧЕНИЕ -->
+<!-- ЗАКЛЮЧЕНИЕ И ПОДПИСИ (единым блоком, чтобы подпись не осталась одна на странице) -->
+    <div class="closing-block">
     <div class="conclusion-block">
         <p style="text-align: center; font-weight: bold;">Заключение</p>
         <div class="conclusion-text">
             {% if pak.conclusion == 'готов к отгрузке' %}
-                Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
-                Зав. № <strong>{{ serial_number }}</strong>
+                Изделие Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
+                <span style="white-space:nowrap">Зав. № <strong>{{ serial_number }}</strong></span>
                 соответствует требованиям <span style="white-space:nowrap">СИ.40522001.000ТУ</span> и годно для
                 использования по назначению (эксплуатации).
             {% else %}
-                Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
-                Зав. № <strong>{{ serial_number }}</strong>
+                Изделие Программно-аппаратный комплекс <strong>{{ model_name }}</strong>
+                <span style="white-space:nowrap">Зав. № <strong>{{ serial_number }}</strong></span>
                 не соответствует требованиям <span style="white-space:nowrap">СИ.40522001.000ТУ</span> и подлежит
                 возврату на устранение дефектов и доработку.
             {% endif %}
@@ -262,12 +279,15 @@
     <div class="sig-wrap">
         <table class="sig-table">
             <tr>
-                <td class="sig-role" style="width: 26%;">Представитель ОТК</td>
-                <td style="width: 24%;"><span class="sig-underline" style="letter-spacing: 2px;">ЭЦП</span><span class="sig-caption">Подпись</span></td>
-                <td style="width: 24%;"><span class="sig-underline">{{ pak.test_date_end|date:"d.m.Y" }}</span><span class="sig-caption">Дата</span></td>
-                <td style="width: 26%;"><span class="sig-underline">{{ pak.get_inspector_display }}</span><span class="sig-caption">ФИО</span></td>
+                <td class="sig-role" colspan="3">Представитель ОТК</td>
+            </tr>
+            <tr>
+                <td style="width: 26%;"><span class="sig-underline" style="letter-spacing: 2px;">ЭЦП</span><span class="sig-caption">Подпись</span></td>
+                <td style="width: 26%;"><span class="sig-underline">{{ pak.test_date_end|date:"d.m.Y" }}</span><span class="sig-caption">Дата</span></td>
+                <td style="width: 48%;"><span class="sig-underline sig-name">{{ pak.get_inspector_display }}</span><span class="sig-caption">ФИО</span></td>
             </tr>
         </table>
+    </div>
     </div>
 
 </body>
