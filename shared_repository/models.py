@@ -356,14 +356,12 @@ class KnowledgeBase(models.Model):
         on_delete=models.PROTECT,
         related_name='created_knowledge_base',
         verbose_name='Создатель (автор)',
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 8. Дата и время создания
     date_of_creation = models.DateTimeField(
         verbose_name='Дата и время создания',
         default=timezone.now,
-        help_text='YYYY-MM-DD HH:MI:SS'
     )
 
     # 9. Последний редактор
@@ -372,14 +370,12 @@ class KnowledgeBase(models.Model):
         on_delete=models.PROTECT,
         related_name='edited_knowledge_base',
         verbose_name='Последний редактор',
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 10. Дата и время последнего изменения
     date_of_change = models.DateTimeField(
         verbose_name='Дата и время последнего изменения',
         auto_now=True,
-        help_text='YYYY-MM-DD HH:MI:SS'
     )
 
     # 11. Текущий ответственный
@@ -388,7 +384,6 @@ class KnowledgeBase(models.Model):
         on_delete=models.PROTECT,
         related_name='responsible_knowledge_base',
         verbose_name='Текущий ответственный',
-        help_text='Имя пользователя системы (ссылка на User)'
     )
 
     # 12. Версия
@@ -396,7 +391,6 @@ class KnowledgeBase(models.Model):
         max_length=3,
         verbose_name='Версия',
         default='1',
-        help_text='Цифры, 3 символа max. Значение по умолчанию: 1'
     )
 
     # 13. Содержание документа

@@ -419,7 +419,7 @@ class Post(models.Model):
 
     class Meta:
         verbose_name = "Разработка"
-        verbose_name_plural = "Разработки (модификации)"
+        verbose_name_plural = "Разработки (модификации/проекты)"
 
     def __str__(self):
         return self.name
@@ -1585,6 +1585,11 @@ class RevisionTask(models.Model):
         ('Низкий', 'Низкий'),
     ]
 
+    LANGUAGE_CHOICES = [
+        ('rus', 'rus'),
+        ('eng', 'eng'),
+    ]
+
     name = models.CharField(max_length=100, unique=True, blank=True, null=True, verbose_name="наименование")
     category = models.CharField(max_length=100, default="ТЗ Д", verbose_name="категория")
     post = models.ForeignKey('Post', on_delete=models.CASCADE, null=True, blank=True, related_name='revision_tasks', verbose_name="Связанная разработка/проект")
@@ -1604,14 +1609,19 @@ class RevisionTask(models.Model):
     subscribers = models.TextField(blank=True, null=True, verbose_name="внешние и внутренние получатели")
     related_documents = models.TextField(blank=True, null=True, verbose_name="связанный сопроводительные документы")
     pattern = models.FileField(upload_to='uploads/', blank = True, null=True, verbose_name="Шаблон")
-    develop_org = models.CharField(max_length=100, blank=True, null=True, verbose_name="организация - разработчик")
-    language = models.CharField(max_length=7, blank=True, null=True, verbose_name="язык")
+    develop_org = models.ForeignKey(
+        'RKDDeveloper',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        verbose_name="Организация-разработчик",
+    )
+    language = models.CharField(max_length=7, choices=LANGUAGE_CHOICES, blank=True, null=True, verbose_name="язык")
     uploaded_file = models.FileField(upload_to='revision_tasks/', blank=True, null=True, verbose_name="файл")
     add_task_for_revision = models.FileField(upload_to='revision_tasks/add/', blank=True, null=True,
                                              verbose_name="приложение к ТЗ")
     plan_for_revision = models.FileField(upload_to='revision_tasks/plan/', blank=True, null=True,
                                          verbose_name="план работ по ТЗ")
-    route = models.CharField(max_length=255, blank=True, null=True, verbose_name="Маршрут")
 
     class Meta:
         verbose_name = 'Техническое задание на доработку'
@@ -2283,8 +2293,8 @@ class RKDDeveloper(models.Model):
     )
 
     class Meta:
-        verbose_name = "Организация-разработчик/изготовитель"
-        verbose_name_plural = "Организации-разработчики/изготовители"
+        verbose_name = "Организация-Разработчик/Изготовитель/Поставщик"
+        verbose_name_plural = "Организации-Разработчики/Изготовители/Поставщики"
 
     def __str__(self):
         return self.name
@@ -2958,7 +2968,7 @@ class Shipment(models.Model):
         null=True,
         blank=True,
         related_name="shipments_created",
-        verbose_name="Создатель",
+        verbose_name="Автор",
     )
     date_of_creation = models.DateTimeField(
         default=timezone.now,

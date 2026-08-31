@@ -151,6 +151,17 @@ class DepartmentMemberInline(_ChildOfParentPermissionMixin, admin.TabularInline)
     class Media:
         js = ("approvals/js/inline_order.js",)
 
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == "user":
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
+
 
 @admin.register(Department)
 class DepartmentAdmin(_AdminOrPermissionMixin, admin.ModelAdmin):
@@ -179,6 +190,17 @@ class VacationAdmin(_AdminOrPermissionMixin, admin.ModelAdmin):
     autocomplete_fields = ("user",)
     date_hierarchy = "start_date"
     fields = ("user", "absence_type", ("start_date", "end_date"), "reason")
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if formfield is not None and db_field.name == "user":
+            widget = formfield.widget
+            if hasattr(widget, "can_add_related"):
+                widget.can_add_related = False
+                widget.can_change_related = False
+                widget.can_view_related = False
+                widget.can_delete_related = False
+        return formfield
 
     @admin.display(description="Дней", ordering="start_date")
     def days_display(self, obj):

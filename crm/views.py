@@ -68,7 +68,7 @@ def ticket_create(request):
         if form.is_valid():
             ticket = form.save(commit=False)
             ticket._created_by = request.user  # будет учтено в save()
-            ticket.created_by = request.user
+            ticket.author = request.user
             ticket.save()
             messages.success(request, "Заявка создана.")
             return redirect("crm:tickets_list")
